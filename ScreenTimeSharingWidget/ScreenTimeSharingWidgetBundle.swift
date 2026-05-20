@@ -5,5 +5,6 @@ import SwiftUI
 struct ScreenTimeSharingWidgetBundle: WidgetBundle {
     var body: some Widget {
         FriendUsageWidget()
+        LeaderboardWidget()
     }
 }

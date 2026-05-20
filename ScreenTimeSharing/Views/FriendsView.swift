@@ -5,29 +5,40 @@ struct FriendsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            AppScreenScroll {
                 if model.friendSummaries.isEmpty {
-                    ContentUnavailableView(
-                        "No Friends Yet",
-                        systemImage: "person.2.slash",
-                        description: Text("Accept a CloudKit share or invite a friend from Settings.")
-                    )
+                    AppCard {
+                        ContentUnavailableView(
+                            "No Friends Yet",
+                            systemImage: "person.2.slash",
+                            description: Text("Accept a CloudKit share or invite a friend from Settings.")
+                        )
+                        .appCardRow(verticalPadding: 16)
+                    }
                 } else {
-                    Section {
-                        ForEach(model.friendSummaries) { friend in
+                    AppCard {
+                        ForEach(Array(model.friendSummaries.enumerated()), id: \.element.id) { index, friend in
                             FriendSummaryRow(friend: friend)
+                                .appCardRow(verticalPadding: 8)
+
+                            if index < model.friendSummaries.count - 1 {
+                                AppCardDivider()
+                            }
                         }
                     }
                 }
 
-                Section {
+                AppCard {
                     Button {
                         Task {
                             await model.reloadFriends()
                         }
                     } label: {
                         Label("Refresh Friends", systemImage: "arrow.clockwise")
+                            .appCardRow()
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
                 }
             }
             .navigationTitle("Friends")

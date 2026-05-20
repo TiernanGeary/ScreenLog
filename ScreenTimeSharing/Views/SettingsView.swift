@@ -9,72 +9,104 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Profile") {
-                    TextField(
-                        "Display name",
-                        text: Binding(
-                            get: { model.profile.displayName },
-                            set: { model.updateProfile(displayName: $0) }
+            AppScreenScroll {
+                AppSection("Profile") {
+                    AppCard {
+                        TextField(
+                            "Display name",
+                            text: Binding(
+                                get: { model.profile.displayName },
+                                set: { model.updateProfile(displayName: $0) }
+                            )
                         )
-                    )
+                        .appCardRow()
 
-                    HStack {
-                        Text("Avatar color")
-                        Spacer()
-                        ForEach(avatarColors, id: \.self) { color in
-                            Button {
-                                model.updateProfile(avatarColorHex: color)
-                            } label: {
-                                Circle()
-                                    .fill(Color(hex: color))
-                                    .frame(width: 28, height: 28)
-                                    .overlay {
-                                        if color == model.profile.avatarColorHex {
-                                            Image(systemName: "checkmark")
-                                                .font(.caption.bold())
-                                                .foregroundStyle(.white)
+                        AppCardDivider()
+
+                        HStack {
+                            Text("Avatar color")
+                            Spacer()
+                            ForEach(avatarColors, id: \.self) { color in
+                                Button {
+                                    model.updateProfile(avatarColorHex: color)
+                                } label: {
+                                    Circle()
+                                        .fill(Color(hex: color))
+                                        .frame(width: 28, height: 28)
+                                        .overlay {
+                                            if color == model.profile.avatarColorHex {
+                                                Image(systemName: "checkmark")
+                                                    .font(.caption.bold())
+                                                    .foregroundStyle(.white)
+                                            }
                                         }
-                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Use color \(color)")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Use color \(color)")
                         }
+                        .appCardRow()
                     }
                 }
 
-                Section("Sharing") {
-                    Button {
-                        isShowingShareSheet = true
-                    } label: {
-                        Label("Invite Friends", systemImage: "square.and.arrow.up")
-                    }
+                AppSection("Sharing") {
+                    AppCard {
+                        Button {
+                            isShowingShareSheet = true
+                        } label: {
+                            Label("Invite Friends", systemImage: "square.and.arrow.up")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
 
-                    Button {
-                        isShowingActivityPicker = true
-                    } label: {
-                        Label("Change Selected Apps", systemImage: "app.badge")
+                        AppCardDivider()
+
+                        Button {
+                            isShowingActivityPicker = true
+                        } label: {
+                            Label("Change Selected Apps", systemImage: "app.badge")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
                     }
                 }
 
-                Section("Readiness") {
-                    LabeledContent("Screen Time", value: model.screenTimeAuthorization)
-                    LabeledContent("iCloud", value: model.cloudAvailability.label)
-                    LabeledContent("Widget cache", value: "\(model.friendSummaries.count) friends")
+                AppSection("Readiness") {
+                    AppCard {
+                        LabeledContent("Screen Time", value: model.screenTimeAuthorization)
+                            .appCardRow()
+                        AppCardDivider()
+                        LabeledContent("iCloud", value: model.cloudAvailability.label)
+                            .appCardRow()
+                        AppCardDivider()
+                        LabeledContent("Widget cache", value: "\(model.friendSummaries.count) friends")
+                            .appCardRow()
+                    }
                 }
 
                 #if DEBUG
-                Section("Simulator Demo") {
-                    Button {
-                        model.seedDemoFriends()
-                    } label: {
-                        Label("Add Demo Friends", systemImage: "person.2.badge.plus")
-                    }
+                AppSection("Simulator Demo") {
+                    AppCard {
+                        Button {
+                            model.seedDemoFriends()
+                        } label: {
+                            Label("Add Demo Friends", systemImage: "person.2.badge.plus")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
 
-                    Button(role: .destructive) {
-                        model.clearDemoFriends()
-                    } label: {
-                        Label("Clear Demo Friends", systemImage: "trash")
+                        AppCardDivider()
+
+                        Button(role: .destructive) {
+                            model.clearDemoFriends()
+                        } label: {
+                            Label("Clear Demo Friends", systemImage: "trash")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 #endif

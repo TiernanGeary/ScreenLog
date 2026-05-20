@@ -13,6 +13,7 @@
 		B10000000000000000000004 /* UsageFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* UsageFormatting.swift */; };
 		B10000000000000000000005 /* WidgetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000005 /* WidgetCache.swift */; };
 		B10000000000000000000006 /* SnapshotRecordPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* SnapshotRecordPayload.swift */; };
+		B10000000000000000000024 /* AccountabilityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000007 /* AccountabilityModels.swift */; };
 		B10000000000000000000007 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000001 /* AppConfiguration.swift */; };
 		B10000000000000000000008 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000002 /* AppModel.swift */; };
 		B10000000000000000000009 /* ScreenTimeSharingApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000003 /* ScreenTimeSharingApp.swift */; };
@@ -30,16 +31,19 @@
 		B10000000000000000000021 /* FriendsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000018 /* FriendsView.swift */; };
 		B10000000000000000000022 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000019 /* SettingsView.swift */; };
 		B10000000000000000000023 /* SharedViewBits.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000020 /* SharedViewBits.swift */; };
+		B10000000000000000000025 /* LeaderboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000021 /* LeaderboardView.swift */; };
 		B20000000000000000000001 /* CapabilityStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* CapabilityStatus.swift */; };
 		B20000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* Models.swift */; };
 		B20000000000000000000003 /* DateBoundaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* DateBoundaries.swift */; };
 		B20000000000000000000004 /* UsageFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* UsageFormatting.swift */; };
 		B20000000000000000000005 /* WidgetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000005 /* WidgetCache.swift */; };
 		B20000000000000000000006 /* SnapshotRecordPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* SnapshotRecordPayload.swift */; };
+		B20000000000000000000011 /* AccountabilityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000007 /* AccountabilityModels.swift */; };
 		B20000000000000000000007 /* WidgetCacheReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000001 /* WidgetCacheReader.swift */; };
 		B20000000000000000000008 /* WidgetFriendConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000002 /* WidgetFriendConfiguration.swift */; };
 		B20000000000000000000009 /* FriendUsageWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000003 /* FriendUsageWidget.swift */; };
 		B20000000000000000000010 /* ScreenTimeSharingWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000004 /* ScreenTimeSharingWidgetBundle.swift */; };
+		B20000000000000000000012 /* LeaderboardWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000007 /* LeaderboardWidget.swift */; };
 		B30000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000006 /* Assets.xcassets */; };
 		B40000000000000000000001 /* ScreenTimeSharingWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* ScreenTimeSharingWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
@@ -77,6 +81,7 @@
 		C00000000000000000000004 /* UsageFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageFormatting.swift; sourceTree = "<group>"; };
 		C00000000000000000000005 /* WidgetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetCache.swift; sourceTree = "<group>"; };
 		C00000000000000000000006 /* SnapshotRecordPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotRecordPayload.swift; sourceTree = "<group>"; };
+		C00000000000000000000007 /* AccountabilityModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountabilityModels.swift; sourceTree = "<group>"; };
 		D00000000000000000000001 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
 		D00000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		D00000000000000000000003 /* ScreenTimeSharingApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeSharingApp.swift; sourceTree = "<group>"; };
@@ -97,12 +102,14 @@
 		D00000000000000000000018 /* FriendsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendsView.swift; sourceTree = "<group>"; };
 		D00000000000000000000019 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		D00000000000000000000020 /* SharedViewBits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedViewBits.swift; sourceTree = "<group>"; };
+		D00000000000000000000021 /* LeaderboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeaderboardView.swift; sourceTree = "<group>"; };
 		E00000000000000000000001 /* WidgetCacheReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetCacheReader.swift; sourceTree = "<group>"; };
 		E00000000000000000000002 /* WidgetFriendConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetFriendConfiguration.swift; sourceTree = "<group>"; };
 		E00000000000000000000003 /* FriendUsageWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendUsageWidget.swift; sourceTree = "<group>"; };
 		E00000000000000000000004 /* ScreenTimeSharingWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeSharingWidgetBundle.swift; sourceTree = "<group>"; };
 		E00000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E00000000000000000000006 /* ScreenTimeSharingWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ScreenTimeSharingWidget.entitlements; sourceTree = "<group>"; };
+		E00000000000000000000007 /* LeaderboardWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeaderboardWidget.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -163,6 +170,7 @@
 				E00000000000000000000001 /* WidgetCacheReader.swift */,
 				E00000000000000000000002 /* WidgetFriendConfiguration.swift */,
 				E00000000000000000000003 /* FriendUsageWidget.swift */,
+				E00000000000000000000007 /* LeaderboardWidget.swift */,
 				E00000000000000000000004 /* ScreenTimeSharingWidgetBundle.swift */,
 				E00000000000000000000005 /* Info.plist */,
 				E00000000000000000000006 /* ScreenTimeSharingWidget.entitlements */,
@@ -179,6 +187,7 @@
 				C00000000000000000000004 /* UsageFormatting.swift */,
 				C00000000000000000000005 /* WidgetCache.swift */,
 				C00000000000000000000006 /* SnapshotRecordPayload.swift */,
+				C00000000000000000000007 /* AccountabilityModels.swift */,
 			);
 			path = Sources/ScreenTimeSharingCore;
 			sourceTree = "<group>";
@@ -205,6 +214,7 @@
 				D00000000000000000000016 /* OnboardingView.swift */,
 				D00000000000000000000017 /* DashboardView.swift */,
 				D00000000000000000000018 /* FriendsView.swift */,
+				D00000000000000000000021 /* LeaderboardView.swift */,
 				D00000000000000000000019 /* SettingsView.swift */,
 				D00000000000000000000020 /* SharedViewBits.swift */,
 			);
@@ -316,6 +326,7 @@
 				B10000000000000000000004 /* UsageFormatting.swift in Sources */,
 				B10000000000000000000005 /* WidgetCache.swift in Sources */,
 				B10000000000000000000006 /* SnapshotRecordPayload.swift in Sources */,
+				B10000000000000000000024 /* AccountabilityModels.swift in Sources */,
 				B10000000000000000000007 /* AppConfiguration.swift in Sources */,
 				B10000000000000000000008 /* AppModel.swift in Sources */,
 				B10000000000000000000009 /* ScreenTimeSharingApp.swift in Sources */,
@@ -331,6 +342,7 @@
 				B10000000000000000000019 /* OnboardingView.swift in Sources */,
 				B10000000000000000000020 /* DashboardView.swift in Sources */,
 				B10000000000000000000021 /* FriendsView.swift in Sources */,
+				B10000000000000000000025 /* LeaderboardView.swift in Sources */,
 				B10000000000000000000022 /* SettingsView.swift in Sources */,
 				B10000000000000000000023 /* SharedViewBits.swift in Sources */,
 			);
@@ -346,9 +358,11 @@
 				B20000000000000000000004 /* UsageFormatting.swift in Sources */,
 				B20000000000000000000005 /* WidgetCache.swift in Sources */,
 				B20000000000000000000006 /* SnapshotRecordPayload.swift in Sources */,
+				B20000000000000000000011 /* AccountabilityModels.swift in Sources */,
 				B20000000000000000000007 /* WidgetCacheReader.swift in Sources */,
 				B20000000000000000000008 /* WidgetFriendConfiguration.swift in Sources */,
 				B20000000000000000000009 /* FriendUsageWidget.swift in Sources */,
+				B20000000000000000000012 /* LeaderboardWidget.swift in Sources */,
 				B20000000000000000000010 /* ScreenTimeSharingWidgetBundle.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

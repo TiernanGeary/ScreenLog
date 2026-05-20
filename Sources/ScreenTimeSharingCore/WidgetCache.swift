@@ -34,10 +34,29 @@ public struct FriendUsageSummary: Codable, Equatable, Identifiable, Sendable {
 public struct WidgetCachePayload: Codable, Equatable, Sendable {
     public var generatedAt: Date
     public var friends: [FriendUsageSummary]
+    public var leaderboardEntries: [LeaderboardEntry]
 
-    public init(generatedAt: Date, friends: [FriendUsageSummary]) {
+    public init(
+        generatedAt: Date,
+        friends: [FriendUsageSummary],
+        leaderboardEntries: [LeaderboardEntry] = []
+    ) {
         self.generatedAt = generatedAt
         self.friends = friends
+        self.leaderboardEntries = leaderboardEntries
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generatedAt
+        case friends
+        case leaderboardEntries
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+        friends = try container.decode([FriendUsageSummary].self, forKey: .friends)
+        leaderboardEntries = try container.decodeIfPresent([LeaderboardEntry].self, forKey: .leaderboardEntries) ?? []
     }
 }
 

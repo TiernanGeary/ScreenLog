@@ -13,4 +13,8 @@ enum WidgetCacheReader {
     static func friends() -> [FriendUsageSummary] {
         payload()?.friends ?? []
     }
+
+    static func leaderboardEntries() -> [LeaderboardEntry] {
+        payload()?.leaderboardEntries ?? []
+    }
 }

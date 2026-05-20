@@ -8,6 +8,8 @@ final class AppModel: ObservableObject {
     @Published var selection: FamilyActivitySelection
     @Published var localSnapshot: DailyUsageSnapshot?
     @Published var friendSummaries: [FriendUsageSummary] = []
+    @Published var leaderboardEntries: [LeaderboardEntry] = []
+    @Published var leaderboardWindow: LeaderboardWindow = .week
     @Published var cloudAvailability: CloudAvailability = .checking
     @Published var screenTimeAuthorization = "Not requested"
     @Published var message: String?
@@ -140,20 +142,34 @@ final class AppModel: ObservableObject {
         do {
             let friends = try await snapshotStore.fetchFriendSummaries()
             friendSummaries = friends
-            try widgetCacheWriter.write(friends)
+            leaderboardEntries = []
+            try widgetCacheWriter.write(friends: friends, leaderboardEntries: leaderboardEntries)
         } catch {
             message = "Could not refresh friends: \(error.localizedDescription)"
         }
     }
 
+    func setLeaderboardWindow(_ window: LeaderboardWindow) {
+        leaderboardWindow = window
+
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: demoFriendsKey) {
+            seedDemoFriends()
+        }
+        #endif
+    }
+
     #if DEBUG
     func seedDemoFriends() {
-        let friends = makeDemoFriends(now: Date())
+        let now = Date()
+        let friends = makeDemoFriends(now: now)
+        let demo = makeDemoLeaderboard(now: now)
         friendSummaries = friends
+        leaderboardEntries = demo.entries
         UserDefaults.standard.set(true, forKey: demoFriendsKey)
 
         do {
-            try widgetCacheWriter.write(friends)
+            try widgetCacheWriter.write(friends: friends, leaderboardEntries: leaderboardEntries)
             message = "Demo friends added for simulator testing."
         } catch {
             message = "Could not write demo widget cache: \(error.localizedDescription)"
@@ -162,10 +178,11 @@ final class AppModel: ObservableObject {
 
     func clearDemoFriends() {
         friendSummaries = []
+        leaderboardEntries = []
         UserDefaults.standard.set(false, forKey: demoFriendsKey)
 
         do {
-            try widgetCacheWriter.write([])
+            try widgetCacheWriter.write(friends: [], leaderboardEntries: [])
             message = "Demo friends cleared."
         } catch {
             message = "Could not clear demo widget cache: \(error.localizedDescription)"
@@ -215,6 +232,128 @@ final class AppModel: ObservableObject {
                 isStale: true
             )
         ]
+    }
+
+    private func makeDemoLeaderboard(now: Date) -> (participants: [AccountabilityParticipant], events: [AccountabilityEvent], entries: [LeaderboardEntry]) {
+        let me = AccountabilityParticipant(
+            id: profile.id,
+            displayName: profile.displayName == "Me" ? "You" : profile.displayName,
+            avatarColorHex: profile.avatarColorHex
+        )
+        let participants = [
+            AccountabilityParticipant(id: "demo-maya", displayName: "Maya Chen", avatarColorHex: "#E84855"),
+            AccountabilityParticipant(id: "demo-sam", displayName: "Sam Lee", avatarColorHex: "#1B998B"),
+            me,
+            AccountabilityParticipant(id: "demo-riley", displayName: "Riley Park", avatarColorHex: "#F18F01")
+        ]
+        let events = demoAccountabilityEvents(now: now, meID: profile.id)
+        let entries = LeaderboardBuilder.entries(
+            participants: participants,
+            events: events,
+            window: leaderboardWindow,
+            now: now
+        )
+        return (participants, events, entries)
+    }
+
+    private func demoAccountabilityEvents(now: Date, meID: String) -> [AccountabilityEvent] {
+        var events: [AccountabilityEvent] = [
+            AccountabilityEvent(
+                id: "sam-request-1",
+                userID: "demo-sam",
+                kind: .extraTimeRequested,
+                occurredAt: now.addingTimeInterval(-45 * 60),
+                seconds: 10 * 60,
+                requestID: "sam-req-1"
+            ),
+            AccountabilityEvent(
+                id: "sam-approved-1",
+                userID: "demo-sam",
+                kind: .extraTimeApproved,
+                occurredAt: now.addingTimeInterval(-40 * 60),
+                seconds: 10 * 60,
+                requestID: "sam-req-1",
+                actorUserID: "demo-maya"
+            ),
+            AccountabilityEvent(
+                id: "me-request-1",
+                userID: meID,
+                kind: .extraTimeRequested,
+                occurredAt: now.addingTimeInterval(-80 * 60),
+                seconds: 15 * 60,
+                requestID: "me-req-1"
+            ),
+            AccountabilityEvent(
+                id: "me-request-2",
+                userID: meID,
+                kind: .extraTimeRequested,
+                occurredAt: now.addingTimeInterval(-20 * 60),
+                seconds: 30 * 60,
+                requestID: "me-req-2"
+            ),
+            AccountabilityEvent(
+                id: "me-approved-1",
+                userID: meID,
+                kind: .extraTimeApproved,
+                occurredAt: now.addingTimeInterval(-74 * 60),
+                seconds: 15 * 60,
+                requestID: "me-req-1",
+                actorUserID: "demo-sam"
+            ),
+            AccountabilityEvent(
+                id: "me-denied-2",
+                userID: meID,
+                kind: .extraTimeDenied,
+                occurredAt: now.addingTimeInterval(-16 * 60),
+                requestID: "me-req-2",
+                actorUserID: "demo-maya"
+            ),
+            AccountabilityEvent(
+                id: "riley-request-1",
+                userID: "demo-riley",
+                kind: .extraTimeRequested,
+                occurredAt: now.addingTimeInterval(-130 * 60),
+                seconds: 45 * 60,
+                requestID: "riley-req-1"
+            ),
+            AccountabilityEvent(
+                id: "riley-request-2",
+                userID: "demo-riley",
+                kind: .extraTimeRequested,
+                occurredAt: now.addingTimeInterval(-2 * 3_600),
+                seconds: 35 * 60,
+                requestID: "riley-req-2"
+            ),
+            AccountabilityEvent(
+                id: "riley-emergency-1",
+                userID: "demo-riley",
+                kind: .emergencyUnlockUsed,
+                occurredAt: now.addingTimeInterval(-90 * 60)
+            )
+        ]
+
+        let streaks: [(String, Int)] = [
+            ("demo-maya", 5),
+            ("demo-sam", 3),
+            (meID, 1)
+        ]
+
+        for (userID, dayCount) in streaks {
+            for offset in 0..<dayCount {
+                if let date = Calendar.current.date(byAdding: .day, value: -offset, to: now) {
+                    events.append(
+                        AccountabilityEvent(
+                            id: "\(userID)-streak-\(offset)",
+                            userID: userID,
+                            kind: .underLimitDayCompleted,
+                            occurredAt: date
+                        )
+                    )
+                }
+            }
+        }
+
+        return events
     }
     #endif
 }

@@ -6,8 +6,8 @@ struct DashboardView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
+            AppScreenScroll {
+                AppCard(cornerRadius: 24, opacity: 0.74) {
                     VStack(alignment: .leading, spacing: 18) {
                         HStack(alignment: .center) {
                             Avatar(colorHex: model.profile.avatarColorHex, initials: model.profile.initials)
@@ -25,24 +25,36 @@ struct DashboardView: View {
 
                         SnapshotMetrics(snapshot: model.localSnapshot)
                     }
-                    .padding(.vertical, 6)
+                    .appCardRow(verticalPadding: 16)
                 }
 
-                Section("Setup") {
-                    StatusLine(title: "Selected activities", value: "\(model.selectedActivityCount)")
-                    StatusLine(title: "iCloud", value: model.cloudAvailability.label)
-                    StatusLine(
-                        title: "Capability",
-                        value: model.localSnapshot.map { UsageFormatting.capabilityLabel($0.capability) } ?? "No snapshot yet"
-                    )
+                AppSection("Setup") {
+                    AppCard {
+                        StatusLine(title: "Selected activities", value: "\(model.selectedActivityCount)")
+                            .appCardRow()
+                        AppCardDivider()
+                        StatusLine(title: "iCloud", value: model.cloudAvailability.label)
+                            .appCardRow()
+                        AppCardDivider()
+                        StatusLine(
+                            title: "Capability",
+                            value: model.localSnapshot.map { UsageFormatting.capabilityLabel($0.capability) } ?? "No snapshot yet"
+                        )
+                        .appCardRow()
+                    }
                 }
 
-                Section {
+                AppCard {
                     Button {
                         isShowingActivityPicker = true
                     } label: {
                         Label("Choose Apps", systemImage: "app.badge")
+                            .appCardRow()
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+
+                    AppCardDivider()
 
                     Button {
                         Task {
@@ -50,7 +62,12 @@ struct DashboardView: View {
                         }
                     } label: {
                         Label("Authorize Screen Time", systemImage: "hourglass")
+                            .appCardRow()
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+
+                    AppCardDivider()
 
                     Button {
                         Task {
@@ -58,15 +75,19 @@ struct DashboardView: View {
                         }
                     } label: {
                         Label("Refresh and Upload", systemImage: "arrow.clockwise")
+                            .appCardRow()
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
                     .disabled(model.isWorking)
                 }
 
                 if let message = model.message {
-                    Section {
+                    AppCard {
                         Text(message)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .appCardRow(verticalPadding: 10)
                     }
                 }
             }
@@ -112,7 +133,14 @@ private struct MetricTile: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.58))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.82), lineWidth: 0.7)
+        }
     }
 }
 

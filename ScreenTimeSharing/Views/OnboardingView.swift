@@ -77,6 +77,7 @@ struct OnboardingView: View {
                 }
                 .padding(20)
             }
+            .background(AppBackground())
         }
     }
 }
@@ -102,6 +103,8 @@ private struct ConsentRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .appSurface(cornerRadius: 16, opacity: 0.72)
     }
 }
 
@@ -133,6 +136,6 @@ private struct OnboardingActionRow: View {
                 .buttonStyle(.bordered)
         }
         .padding(14)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        .appSurface(cornerRadius: 16, opacity: 0.74)
     }
 }
