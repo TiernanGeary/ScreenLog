@@ -304,3 +304,58 @@ public enum LeaderboardBuilder {
         return count
     }
 }
+
+public enum StatsBoardBuilder {
+    public static func bestControl(entries: [LeaderboardEntry]) -> [LeaderboardEntry] {
+        entries.sorted { lhs, rhs in
+            if lhs.requestedExtraSeconds != rhs.requestedExtraSeconds {
+                return lhs.requestedExtraSeconds < rhs.requestedExtraSeconds
+            }
+
+            if lhs.emergencyUnlockCount != rhs.emergencyUnlockCount {
+                return lhs.emergencyUnlockCount < rhs.emergencyUnlockCount
+            }
+
+            if lhs.currentStreakDays != rhs.currentStreakDays {
+                return lhs.currentStreakDays > rhs.currentStreakDays
+            }
+
+            if lhs.requestCount != rhs.requestCount {
+                return lhs.requestCount < rhs.requestCount
+            }
+
+            return stableNameSort(lhs, rhs)
+        }
+    }
+
+    public static func mostExtraRequested(entries: [LeaderboardEntry]) -> [LeaderboardEntry] {
+        entries.sorted { lhs, rhs in
+            if lhs.requestedExtraSeconds != rhs.requestedExtraSeconds {
+                return lhs.requestedExtraSeconds > rhs.requestedExtraSeconds
+            }
+
+            if lhs.requestCount != rhs.requestCount {
+                return lhs.requestCount > rhs.requestCount
+            }
+
+            if lhs.emergencyUnlockCount != rhs.emergencyUnlockCount {
+                return lhs.emergencyUnlockCount > rhs.emergencyUnlockCount
+            }
+
+            return stableNameSort(lhs, rhs)
+        }
+    }
+
+    public static func entry(for userID: String, in entries: [LeaderboardEntry]) -> LeaderboardEntry? {
+        entries.first { $0.userID == userID }
+    }
+
+    private static func stableNameSort(_ lhs: LeaderboardEntry, _ rhs: LeaderboardEntry) -> Bool {
+        let nameOrder = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+        if nameOrder != .orderedSame {
+            return nameOrder == .orderedAscending
+        }
+
+        return lhs.userID < rhs.userID
+    }
+}

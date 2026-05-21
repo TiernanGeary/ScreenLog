@@ -11,6 +11,7 @@ import Foundation
         timeZoneIdentifier: "America/New_York",
         totalDuration: 10_800,
         selectedAppDuration: 3_600,
+        pickupCount: 22,
         appRows: [
             SharedAppUsage(
                 id: "app-1",
@@ -26,6 +27,7 @@ import Foundation
     let payload = try #require(try SnapshotRecordPayloadMapper.payload(from: snapshot))
 
     #expect(payload.selectedAppDuration == 3_600)
+    #expect(payload.pickupCount == 22)
     #expect(payload.appRowsJSON == nil)
     #expect(payload.capabilityStatus == ScreenTimeCapabilityStatus.aggregateOnly.rawValue)
 }
@@ -56,6 +58,7 @@ import Foundation
         timeZoneIdentifier: "America/New_York",
         totalDuration: 10_800,
         selectedAppDuration: 3_600,
+        pickupCount: 22,
         appRows: [
             SharedAppUsage(
                 id: "app-1",

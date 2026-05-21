@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FriendsView: View {
     @EnvironmentObject private var model: AppModel
+    @Binding var isShowingSettings: Bool
 
     var body: some View {
         NavigationStack {
@@ -42,6 +43,7 @@ struct FriendsView: View {
                 }
             }
             .navigationTitle("Friends")
+            .settingsToolbar(isShowingSettings: $isShowingSettings)
         }
     }
 }

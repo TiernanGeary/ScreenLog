@@ -4,11 +4,15 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var isShowingActivityPicker = false
+    @State private var isShowingBlockingActivityPicker = false
 
     var body: some View {
         Group {
             if model.hasCompletedOnboarding {
-                AppTabs(isShowingActivityPicker: $isShowingActivityPicker)
+                AppTabs(
+                    isShowingActivityPicker: $isShowingActivityPicker,
+                    isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
+                )
             } else {
                 OnboardingView(isShowingActivityPicker: $isShowingActivityPicker)
             }
@@ -24,6 +28,20 @@ struct RootView: View {
                                 isShowingActivityPicker = false
                             }
                         }
+                }
+            }
+        }
+        .sheet(isPresented: $isShowingBlockingActivityPicker, onDismiss: model.saveSuggestedSocialBlockGroup) {
+            NavigationStack {
+                FamilyActivityPicker(selection: $model.blockingSelection)
+                    .navigationTitle("Social Block Group")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") {
+                                model.saveSuggestedSocialBlockGroup()
+                                isShowingBlockingActivityPicker = false
+                            }
+                        }
                     }
             }
         }
@@ -32,7 +50,9 @@ struct RootView: View {
 
 private struct AppTabs: View {
     @Binding var isShowingActivityPicker: Bool
+    @Binding var isShowingBlockingActivityPicker: Bool
     @State private var selection: AppTab = .today
+    @State private var isShowingSettings = false
 
     var body: some View {
         ZStack {
@@ -44,54 +64,68 @@ private struct AppTabs: View {
         .safeAreaInset(edge: .bottom) {
             GlassTabBar(selection: $selection)
         }
+        .sheet(isPresented: $isShowingSettings) {
+            SettingsView(
+                isShowingActivityPicker: $isShowingActivityPicker,
+                onShowActivityPicker: {
+                    isShowingSettings = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        isShowingActivityPicker = true
+                    }
+                },
+                onShowBlockingActivityPicker: {
+                    isShowingSettings = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        isShowingBlockingActivityPicker = true
+                    }
+                }
+            )
+        }
     }
 
     @ViewBuilder
     private var selectedView: some View {
         switch selection {
         case .today:
-            DashboardView(isShowingActivityPicker: $isShowingActivityPicker)
+            DashboardView(
+                isShowingActivityPicker: $isShowingActivityPicker,
+                isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker,
+                isShowingSettings: $isShowingSettings
+            )
+        case .stats:
+            StatsView(isShowingSettings: $isShowingSettings)
         case .friends:
-            FriendsView()
-        case .leaders:
-            LeaderboardView()
-        case .settings:
-            SettingsView(isShowingActivityPicker: $isShowingActivityPicker)
+            FriendsView(isShowingSettings: $isShowingSettings)
         }
     }
 }
 
 private enum AppTab: String, CaseIterable, Identifiable {
     case today
+    case stats
     case friends
-    case leaders
-    case settings
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .today:
-            return "Today"
+            return "Home"
+        case .stats:
+            return "Stats"
         case .friends:
             return "Friends"
-        case .leaders:
-            return "Leaders"
-        case .settings:
-            return "Settings"
         }
     }
 
     var systemImage: String {
         switch self {
         case .today:
-            return "clock"
+            return "house"
+        case .stats:
+            return "chart.bar.fill"
         case .friends:
             return "person.2"
-        case .leaders:
-            return "trophy"
-        case .settings:
-            return "gearshape"
         }
     }
 }
@@ -133,9 +167,7 @@ private struct GlassTabButton: View {
     var body: some View {
         Button(action: action) {
             VStack(spacing: 3) {
-                Image(systemName: tab.systemImage)
-                    .symbolVariant(isSelected ? .fill : .none)
-                    .font(.system(size: 16, weight: isSelected ? .bold : .semibold))
+                icon
                     .frame(width: 20, height: 19)
 
                 Text(tab.title)
@@ -156,6 +188,45 @@ private struct GlassTabButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(tab.title)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        if tab == .stats {
+            IncreasingBarsIcon(isSelected: isSelected)
+        } else {
+            Image(systemName: tab.systemImage)
+                .symbolVariant(isSelected ? .fill : .none)
+                .font(.system(size: 16, weight: isSelected ? .bold : .semibold))
+        }
+    }
+}
+
+private struct IncreasingBarsIcon: View {
+    let isSelected: Bool
+    private let heights: [CGFloat] = [7, 10, 13, 16]
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 2.4) {
+            ForEach(Array(heights.enumerated()), id: \.offset) { _, height in
+                bar(height: height)
+            }
+        }
+        .frame(width: 20, height: 19, alignment: .bottom)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func bar(height: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 1.4, style: .continuous)
+        if isSelected {
+            shape
+                .frame(width: 3.4, height: height)
+        } else {
+            shape
+                .stroke(lineWidth: 1.35)
+                .frame(width: 3.4, height: height)
+        }
     }
 }
 

@@ -4,12 +4,14 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var isShowingActivityPicker: Bool
     @State private var isShowingShareSheet = false
+    var onShowActivityPicker: (() -> Void)?
+    var onShowBlockingActivityPicker: (() -> Void)?
 
     private let avatarColors = ["#1B998B", "#2E86AB", "#E84855", "#6A4C93", "#F18F01", "#2F4858"]
 
     var body: some View {
         NavigationStack {
-            AppScreenScroll {
+            AppScreenScroll(backgroundStyle: .white) {
                 AppSection("Profile") {
                     AppCard {
                         TextField(
@@ -63,9 +65,26 @@ struct SettingsView: View {
                         AppCardDivider()
 
                         Button {
-                            isShowingActivityPicker = true
+                            if let onShowActivityPicker {
+                                onShowActivityPicker()
+                            } else {
+                                isShowingActivityPicker = true
+                            }
                         } label: {
                             Label("Change Selected Apps", systemImage: "app.badge")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+                    }
+                }
+
+                AppSection("Blocking") {
+                    AppCard {
+                        NavigationLink {
+                            BlockingSettingsView(onShowBlockingActivityPicker: onShowBlockingActivityPicker)
+                        } label: {
+                            Label("Manage Block Groups", systemImage: "lock.shield")
                                 .appCardRow()
                         }
                         .buttonStyle(.plain)
@@ -89,6 +108,17 @@ struct SettingsView: View {
                 #if DEBUG
                 AppSection("Simulator Demo") {
                     AppCard {
+                        Button {
+                            model.seedDemoScreenTime()
+                        } label: {
+                            Label("Add Demo Screen Time", systemImage: "iphone.gen3")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+
+                        AppCardDivider()
+
                         Button {
                             model.seedDemoFriends()
                         } label: {

@@ -10,12 +10,14 @@ final class AppGroupWidgetCacheWriter {
 
     func write(
         friends: [FriendUsageSummary],
-        leaderboardEntries: [LeaderboardEntry] = []
+        leaderboardEntries: [LeaderboardEntry] = [],
+        currentUserID: String? = nil
     ) throws {
         let payload = WidgetCachePayload(
             generatedAt: Date(),
             friends: friends,
-            leaderboardEntries: leaderboardEntries
+            leaderboardEntries: leaderboardEntries,
+            currentUserID: currentUserID
         )
         let data = try WidgetCacheCodec.encode(payload)
         defaults?.set(data, forKey: WidgetCacheCodec.storageKey)

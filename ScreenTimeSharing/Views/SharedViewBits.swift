@@ -105,23 +105,78 @@ struct AppSection<Content: View>: View {
     }
 }
 
+enum AppScreenBackgroundStyle {
+    case gradient
+    case white
+}
+
 struct AppScreenScroll<Content: View>: View {
+    var backgroundStyle: AppScreenBackgroundStyle
     let content: Content
 
-    init(@ViewBuilder content: () -> Content) {
+    init(
+        backgroundStyle: AppScreenBackgroundStyle = .gradient,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.backgroundStyle = backgroundStyle
         self.content = content()
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                content
+        ZStack {
+            background
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    content
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 128)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 128)
+            .mask(alignment: .top) {
+                VStack(spacing: 0) {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black, location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 70)
+
+                    Color.black
+                }
+                .ignoresSafeArea()
+            }
+            .overlay(alignment: .top) {
+                LinearGradient(
+                    stops: [
+                        .init(color: .white, location: 0.0),
+                        .init(color: .white.opacity(0.96), location: 0.32),
+                        .init(color: .white.opacity(0.72), location: 0.58),
+                        .init(color: .white.opacity(0.0), location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 96)
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+            }
         }
-        .background(AppBackground())
+        .toolbarBackground(.hidden, for: .navigationBar)
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        switch backgroundStyle {
+        case .gradient:
+            AppBackground()
+        case .white:
+            Color.white.ignoresSafeArea()
+        }
     }
 }
 
@@ -133,6 +188,19 @@ extension View {
     func appCardRow(verticalPadding: CGFloat = 14) -> some View {
         frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, verticalPadding)
+    }
+
+    func settingsToolbar(isShowingSettings: Binding<Bool>) -> some View {
+        toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    isShowingSettings.wrappedValue = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Settings")
+            }
+        }
     }
 }
 

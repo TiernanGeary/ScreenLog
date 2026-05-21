@@ -35,21 +35,25 @@ public struct WidgetCachePayload: Codable, Equatable, Sendable {
     public var generatedAt: Date
     public var friends: [FriendUsageSummary]
     public var leaderboardEntries: [LeaderboardEntry]
+    public var currentUserID: String?
 
     public init(
         generatedAt: Date,
         friends: [FriendUsageSummary],
-        leaderboardEntries: [LeaderboardEntry] = []
+        leaderboardEntries: [LeaderboardEntry] = [],
+        currentUserID: String? = nil
     ) {
         self.generatedAt = generatedAt
         self.friends = friends
         self.leaderboardEntries = leaderboardEntries
+        self.currentUserID = currentUserID
     }
 
     private enum CodingKeys: String, CodingKey {
         case generatedAt
         case friends
         case leaderboardEntries
+        case currentUserID
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,6 +61,7 @@ public struct WidgetCachePayload: Codable, Equatable, Sendable {
         generatedAt = try container.decode(Date.self, forKey: .generatedAt)
         friends = try container.decode([FriendUsageSummary].self, forKey: .friends)
         leaderboardEntries = try container.decodeIfPresent([LeaderboardEntry].self, forKey: .leaderboardEntries) ?? []
+        currentUserID = try container.decodeIfPresent(String.self, forKey: .currentUserID)
     }
 }
 

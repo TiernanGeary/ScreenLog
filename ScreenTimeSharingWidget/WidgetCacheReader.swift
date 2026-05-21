@@ -17,4 +17,8 @@ enum WidgetCacheReader {
     static func leaderboardEntries() -> [LeaderboardEntry] {
         payload()?.leaderboardEntries ?? []
     }
+
+    static func currentUserID() -> String? {
+        payload()?.currentUserID
+    }
 }
