@@ -470,6 +470,10 @@ private struct UsageBarChart: View {
     let range: StatsRange
     let buckets: [UsageChartBucket]
     @Binding var selectedBucketID: String?
+    @State private var isPressSelectionActive = false
+    @State private var pendingGestureLocation: CGPoint?
+
+    private let chartHoldDuration = 0.18
 
     private var maxDuration: TimeInterval {
         let observed = buckets.map(\.duration).max() ?? 0
@@ -535,7 +539,24 @@ private struct UsageBarChart: View {
                     .gesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { value in
+                                pendingGestureLocation = value.location
+                                guard isPressSelectionActive else {
+                                    return
+                                }
+
                                 selectBucket(at: value.location, proxy: proxy, geometry: geometry)
+                            }
+                            .onEnded { _ in
+                                clearPressSelection()
+                            }
+                    )
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: chartHoldDuration, maximumDistance: .infinity)
+                            .onEnded { _ in
+                                isPressSelectionActive = true
+                                if let pendingGestureLocation {
+                                    selectBucket(at: pendingGestureLocation, proxy: proxy, geometry: geometry)
+                                }
                             }
                     )
             }
@@ -597,15 +618,23 @@ private struct UsageBarChart: View {
         let plotFrame = geometry[plotFrameAnchor]
         let xPosition = location.x - plotFrame.origin.x
         guard xPosition >= 0, xPosition <= plotFrame.width else {
+            selectedBucketID = nil
             return
         }
 
         guard let bucketID = proxy.value(atX: xPosition, as: String.self),
               buckets.contains(where: { $0.id == bucketID }) else {
+            selectedBucketID = nil
             return
         }
 
         selectedBucketID = bucketID
+    }
+
+    private func clearPressSelection() {
+        isPressSelectionActive = false
+        pendingGestureLocation = nil
+        selectedBucketID = nil
     }
 }
 

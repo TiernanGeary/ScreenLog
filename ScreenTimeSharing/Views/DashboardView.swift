@@ -9,6 +9,8 @@ struct DashboardView: View {
     var body: some View {
         NavigationStack {
             AppScreenScroll {
+                TodayScreenTimeCard(snapshot: model.localSnapshot)
+
                 HomeROICard(
                     summary: HomeEngagementBuilder.summary(history: model.usageHistory),
                     snapshot: model.localSnapshot
@@ -42,12 +44,95 @@ struct DashboardView: View {
     }
 }
 
+private struct TodayScreenTimeCard: View {
+    let snapshot: DailyUsageSnapshot?
+
+    var body: some View {
+        TintedHomeCard(
+            cornerRadius: 24,
+            colors: [
+                Color(red: 0.91, green: 0.97, blue: 1.0),
+                Color(red: 0.98, green: 0.99, blue: 1.0),
+                Color.white.opacity(0.90)
+            ],
+            shadowColor: Color(red: 0.12, green: 0.46, blue: 0.86).opacity(0.08)
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Today")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+
+                HStack(alignment: .top, spacing: 14) {
+                    TodayMetricColumn(
+                        title: "Screen time",
+                        value: UsageFormatting.duration(snapshot?.totalDuration),
+                        systemImage: "iphone",
+                        accentColor: Color.blue
+                    )
+
+                    TodayMetricColumn(
+                        title: "Pickups",
+                        value: pickupLabel,
+                        systemImage: "hand.tap",
+                        accentColor: Color(red: 0.08, green: 0.58, blue: 0.50)
+                    )
+                }
+            }
+            .appCardRow(verticalPadding: 14)
+        }
+    }
+
+    private var pickupLabel: String {
+        guard let pickupCount = snapshot?.pickupCount else {
+            return "--"
+        }
+
+        return "\(pickupCount)"
+    }
+}
+
+private struct TodayMetricColumn: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    let accentColor: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+            } icon: {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(accentColor)
+            .lineLimit(1)
+
+            Text(value)
+                .font(.system(size: 44, weight: .black, design: .default).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.56)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct HomeROICard: View {
     let summary: HomeEngagementSummary
     let snapshot: DailyUsageSnapshot?
 
     var body: some View {
-        AppCard(cornerRadius: 26, opacity: 0.78) {
+        TintedHomeCard(
+            cornerRadius: 26,
+            colors: [
+                Color(red: 0.94, green: 1.0, blue: 0.98),
+                Color(red: 0.95, green: 0.98, blue: 1.0),
+                Color.white.opacity(0.90)
+            ],
+            shadowColor: Color(red: 0.08, green: 0.52, blue: 0.48).opacity(0.075)
+        ) {
             VStack(alignment: .leading, spacing: 18) {
                 switch summary.baselineStatus {
                 case .ready:
@@ -65,22 +150,14 @@ private struct HomeROICard: View {
     private var readyContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 7) {
-                Text("Time won back")
+                Text(summary.netSavedDuration >= 0 ? "Time won back" : "Over baseline")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                HStack(alignment: .lastTextBaseline, spacing: 9) {
-                    Text(UsageFormatting.duration(abs(summary.netSavedDuration)))
-                        .font(.system(size: 46, weight: .black, design: .default).monospacedDigit())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.58)
-
-                    Text(summary.netSavedDuration >= 0 ? "won back" : "over baseline")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(summary.netSavedDuration >= 0 ? Color.accentColor : Color(red: 0.86, green: 0.24, blue: 0.22))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                }
+                Text(UsageFormatting.duration(abs(summary.netSavedDuration)))
+                    .font(.system(size: 46, weight: .black, design: .default).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.58)
 
                 Text(readySubtitle)
                     .font(.footnote)
@@ -121,18 +198,11 @@ private struct HomeROICard: View {
                     .lineLimit(2)
             }
 
-            HStack(alignment: .top, spacing: 12) {
-                HomeProofMetric(
-                    title: "Today",
-                    value: UsageFormatting.duration(snapshot?.totalDuration),
-                    systemImage: "iphone"
-                )
-                HomeProofMetric(
-                    title: "Pickups",
-                    value: pickupLabel,
-                    systemImage: "hand.tap"
-                )
-            }
+            HomeProofMetric(
+                title: "Pickups",
+                value: pickupLabel,
+                systemImage: "hand.tap"
+            )
         }
     }
 
@@ -171,6 +241,50 @@ private struct HomeROICard: View {
     }
 }
 
+private struct TintedHomeCard<Content: View>: View {
+    let cornerRadius: CGFloat
+    let colors: [Color]
+    let shadowColor: Color
+    let content: Content
+
+    init(
+        cornerRadius: CGFloat,
+        colors: [Color],
+        shadowColor: Color,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.cornerRadius = cornerRadius
+        self.colors = colors
+        self.shadowColor = shadowColor
+        self.content = content()
+    }
+
+    var body: some View {
+        AppCardRows {
+            content
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: colors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.86), lineWidth: 0.8)
+                }
+                .shadow(color: shadowColor, radius: 22, x: 0, y: 10)
+                .shadow(color: Color.black.opacity(0.035), radius: 14, x: 0, y: 7)
+        }
+    }
+}
+
 private struct HomeProofRow: View {
     let summary: HomeEngagementSummary
 
@@ -179,17 +293,15 @@ private struct HomeProofRow: View {
             HomeProofMetric(
                 title: "Screen time",
                 value: percentLabel(summary.screenTimePercentChange),
-                systemImage: "iphone"
-            )
-            HomeProofMetric(
-                title: "Pickups",
-                value: percentLabel(summary.pickupPercentChange),
-                systemImage: "hand.tap"
+                systemImage: "iphone",
+                valueSystemImage: percentTrendIcon(summary.screenTimePercentChange),
+                accentColor: percentColor(summary.screenTimePercentChange)
             )
             HomeProofMetric(
                 title: "Streak",
                 value: dayLabel(summary.beatBaselineStreakDays),
-                systemImage: "flame"
+                systemImage: "flame",
+                accentColor: Color(red: 0.96, green: 0.48, blue: 0.10)
             )
         }
     }
@@ -200,15 +312,31 @@ private struct HomeProofRow: View {
         }
 
         let rounded = Int(abs(percent).rounded())
-        if percent >= 0 {
-            return "\(rounded)% down"
-        }
-
-        return "\(rounded)% up"
+        return "\(rounded)%"
     }
 
     private func dayLabel(_ days: Int) -> String {
         days == 1 ? "1 day" : "\(days) days"
+    }
+
+    private func percentTrendIcon(_ percent: Double?) -> String? {
+        guard let percent else {
+            return nil
+        }
+
+        return percent >= 0 ? "arrow.down.right" : "arrow.up.right"
+    }
+
+    private func percentColor(_ percent: Double?) -> Color {
+        guard let percent else {
+            return .primary
+        }
+
+        if percent >= 0 {
+            return Color(red: 0.08, green: 0.58, blue: 0.32)
+        }
+
+        return Color(red: 0.86, green: 0.24, blue: 0.22)
     }
 }
 
@@ -216,14 +344,24 @@ private struct HomeProofMetric: View {
     let title: String
     let value: String
     let systemImage: String
+    var valueSystemImage: String?
+    var accentColor: Color = .primary
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(value)
-                .font(.headline.weight(.bold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.66)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(value)
+                    .font(.headline.weight(.bold))
+                    .monospacedDigit()
+
+                if let valueSystemImage {
+                    Image(systemName: valueSystemImage)
+                        .font(.subheadline.weight(.black))
+                }
+            }
+            .foregroundStyle(accentColor)
+            .lineLimit(1)
+            .minimumScaleFactor(0.66)
 
             HStack(spacing: 5) {
                 Image(systemName: systemImage)
@@ -233,7 +371,7 @@ private struct HomeProofMetric: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(accentColor.opacity(0.78))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -492,6 +630,7 @@ private struct BlockingOverviewCard: View {
     @Binding var isShowingSettings: Bool
     @State private var friendRequestGroup: BlockGroup?
     @State private var newGroupDraft: BlockGroupDraft?
+    @State private var isShowingDummyBlockedApp = false
 
     private var firstGroup: BlockGroup? {
         model.blockingState.groups.first
@@ -566,6 +705,15 @@ private struct BlockingOverviewCard: View {
                         .foregroundStyle(.tint)
                     }
 
+#if DEBUG
+                    Button {
+                        isShowingDummyBlockedApp = true
+                    } label: {
+                        DummyBlockedAppRow(title: "Open Dummy Blocked App")
+                    }
+                    .buttonStyle(.plain)
+#endif
+
                     HStack(spacing: 12) {
                         Button {
                             newGroupDraft = BlockGroupDraft()
@@ -604,8 +752,25 @@ private struct BlockingOverviewCard: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
+
+#if DEBUG
+                AppCardDivider()
+
+                Button {
+                    isShowingDummyBlockedApp = true
+                } label: {
+                    DummyBlockedAppRow(title: "Preview Blocked App")
+                        .appCardRow(verticalPadding: 14)
+                }
+                .buttonStyle(.plain)
+#endif
             }
         }
+#if DEBUG
+        .sheet(isPresented: $isShowingDummyBlockedApp) {
+            DummyBlockedAppPreviewView(group: firstGroup)
+        }
+#endif
         .sheet(item: $friendRequestGroup) { group in
             FriendApprovalRequestView(group: group)
         }
@@ -673,6 +838,242 @@ private struct BlockingOverviewCard: View {
         .opacity(remainingUnblocks(for: group) == 0 || seconds > group.unblockConfig.maxDurationSeconds ? 0.45 : 1)
     }
 }
+
+#if DEBUG
+private struct DummyBlockedAppRow: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            DummyAppIcon(size: 42)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text("Developer preview")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.58))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.86), lineWidth: 0.7)
+        }
+    }
+}
+
+private struct DummyBlockedAppPreviewView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: AppModel
+    let group: BlockGroup?
+    @State private var friendRequestGroup: BlockGroup?
+    @State private var localStatus: String?
+
+    var body: some View {
+        NavigationStack {
+            AppScreenScroll(backgroundStyle: .white) {
+                VStack(spacing: 18) {
+                    DummyAppIcon(size: 74)
+
+                    VStack(spacing: 8) {
+                        Text("Dummy App is blocked")
+                            .font(.title2.weight(.bold))
+                            .multilineTextAlignment(.center)
+
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(3)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.top, 18)
+                .padding(.bottom, 8)
+
+                AppCard {
+                    if let group {
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(Color(hex: group.colorHex))
+                                .frame(width: 12, height: 12)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(group.name)
+                                    .font(.headline)
+                                Text(group.mode.label)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+
+                            Spacer()
+                        }
+                        .appCardRow()
+
+                        if group.unblockConfig.isEnabled || group.friendRequestConfig.isEnabled {
+                            AppCardDivider()
+                            actionRows(for: group)
+                        } else {
+                            AppCardDivider()
+                            Text("No unblock options are enabled for this group.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .appCardRow()
+                        }
+                    } else {
+                        Text("Create a block group to connect this preview to real unblock and friend request settings.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .appCardRow()
+                    }
+                }
+
+                if let localStatus {
+                    Text(localStatus)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .navigationTitle("Blocked App")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            .sheet(item: $friendRequestGroup) { group in
+                FriendApprovalRequestView(group: group)
+            }
+        }
+    }
+
+    private var subtitle: String {
+        guard let group else {
+            return "This is a local preview of the blocked-app screen."
+        }
+
+        switch (group.unblockConfig.isEnabled, group.friendRequestConfig.isEnabled) {
+        case (true, true):
+            return "Open ScreenLog for a limited unblock or to request friend approval."
+        case (true, false):
+            return "Open ScreenLog for a limited unblock."
+        case (false, true):
+            return "Open ScreenLog to request friend approval."
+        case (false, false):
+            return "This group is blocked by your current ScreenLog settings."
+        }
+    }
+
+    @ViewBuilder
+    private func actionRows(for group: BlockGroup) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if group.unblockConfig.isEnabled {
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("\(remainingUnblocks(for: group)) limited unblocks left today")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        unblockButton("5m", seconds: 5 * 60, group: group)
+                        unblockButton("15m", seconds: 15 * 60, group: group)
+                        unblockButton("30m", seconds: 30 * 60, group: group)
+                    }
+                }
+            }
+
+            if group.friendRequestConfig.isEnabled {
+                Button {
+                    friendRequestGroup = group
+                } label: {
+                    Label("Request friend approval", systemImage: "person.2.badge.gearshape")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.12))
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+            }
+        }
+        .appCardRow()
+    }
+
+    private func remainingUnblocks(for group: BlockGroup) -> Int {
+        BlockingStateResolver.remainingUnblocks(for: group.id, in: model.blockingState)
+    }
+
+    private func unblockButton(_ title: String, seconds: TimeInterval, group: BlockGroup) -> some View {
+        let isDisabled = remainingUnblocks(for: group) == 0 || seconds > group.unblockConfig.maxDurationSeconds
+
+        return Button {
+            if model.startLocalUnblock(groupID: group.id, seconds: seconds) {
+                localStatus = "Dummy App would open for \(BlockingDisplayFormatter.durationLabel(seconds))."
+            }
+        } label: {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .fill(Color.white.opacity(0.72))
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.9), lineWidth: 0.7)
+                }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tint)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.45 : 1)
+    }
+}
+
+private struct DummyAppIcon: View {
+    let size: CGFloat
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.08, green: 0.49, blue: 0.95),
+                        Color(red: 0.08, green: 0.65, blue: 0.55),
+                        Color(red: 0.96, green: 0.58, blue: 0.18)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .frame(width: size, height: size)
+            .overlay {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: size * 0.38, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .shadow(color: Color(red: 0.08, green: 0.49, blue: 0.95).opacity(0.18), radius: 14, x: 0, y: 7)
+    }
+}
+#endif
 
 private struct FriendApprovalRequestView: View {
     @Environment(\.dismiss) private var dismiss
