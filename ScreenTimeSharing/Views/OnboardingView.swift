@@ -9,53 +9,46 @@ struct OnboardingView: View {
     @State private var selectedApps: Set<String> = []
     @State private var isAuthorizing = false
 
-    private let narrativePages: [NarrativePageContent] = [
-        .init(icon: "sparkles", title: "Welcome to Sharely", subtitle: "Share less screen. Live more real."),
-        .init(icon: "bird.fill", title: "Free yourself from your screens", subtitle: "Reclaim your hours. Sharely helps you set limits that actually hold."),
-        .init(icon: "person.2.fill", title: "Do it yourself, or hand it off", subtitle: "Manage your own screen time — or give a trusted friend the keys to keep you honest."),
-        .init(icon: "camera.fill", title: "Earn it back", subtitle: "Send a picture to a friend to unlock an app. Embrace your real life.")
-    ]
-
-    private let totalPages = 10
+    private let totalPages = 6
     private var lastPage: Int { totalPages - 1 }
 
     private var primaryTitle: String {
         switch currentPage {
         case lastPage: return "Let's Get Started!"
-        case 6: return "Get Started"
+        case 2: return "Get Started"
         default: return "Continue"
         }
     }
 
     private var primaryDisabled: Bool {
-        currentPage == 8 && selectedApps.count != 3
+        currentPage == 4 && selectedApps.count != 3
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                TabView(selection: $currentPage) {
-                    ForEach(Array(narrativePages.enumerated()), id: \.offset) { index, page in
-                        NarrativePage(content: page, isActive: currentPage == index).tag(index)
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    TabView(selection: $currentPage) {
+                        AgeSliderPage(age: $age, isActive: currentPage == 0).tag(0)
+                        ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
+                        WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
+                        FriendMonitorPage(isActive: currentPage == 3).tag(3)
+                        AppPickerPage(selected: $selectedApps, isActive: currentPage == 4).tag(4)
+                        FinalPage(isActive: currentPage == 5).tag(5)
                     }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .animation(.easeInOut, value: currentPage)
 
-                    AgeSliderPage(age: $age, isActive: currentPage == 4).tag(4)
-                    ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 5).tag(5)
-                    WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 6).tag(6)
-                    FriendMonitorPage(isActive: currentPage == 7).tag(7)
-                    AppPickerPage(selected: $selectedApps, isActive: currentPage == 8).tag(8)
-                    FinalPage(isActive: currentPage == 9).tag(9)
+                    pageIndicator
+                        .padding(.top, 8)
+
+                    primaryButton
+                        .padding(.horizontal, 20)
+                        .padding(.top, 16)
+                        .padding(.bottom, 12)
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .animation(.easeInOut, value: currentPage)
-
-                pageIndicator
-                    .padding(.top, 8)
-
-                primaryButton
-                    .padding(.horizontal, 20)
-                    .padding(.top, 16)
-                    .padding(.bottom, 12)
             }
             .toolbar {
                 if currentPage < lastPage {
@@ -67,14 +60,16 @@ struct OnboardingView: View {
                     }
                 }
             }
+            .toolbarBackground(.black, for: .navigationBar)
             .disabled(isAuthorizing)
             .overlay {
                 if isAuthorizing {
-                    Color.black.opacity(0.15).ignoresSafeArea()
-                    ProgressView().controlSize(.large)
+                    Color.black.opacity(0.35).ignoresSafeArea()
+                    ProgressView().controlSize(.large).tint(.white)
                 }
             }
         }
+        .preferredColorScheme(.dark)
     }
 
     private var pageIndicator: some View {
@@ -109,69 +104,6 @@ struct OnboardingView: View {
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
         .disabled(primaryDisabled)
-    }
-}
-
-// MARK: - Narrative pages
-
-private struct NarrativePageContent {
-    let icon: String
-    let title: String
-    let subtitle: String
-}
-
-private struct NarrativePage: View {
-    let content: NarrativePageContent
-    let isActive: Bool
-
-    @State private var entered = false
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 28) {
-                Spacer(minLength: 60)
-
-                Image(systemName: content.icon)
-                    .font(.system(size: 110, weight: .light))
-                    .foregroundStyle(.tint)
-                    .symbolEffect(.bounce, options: .nonRepeating, value: entered)
-                    .phaseAnimator([1.0, 1.06]) { view, phase in
-                        view.scaleEffect(phase)
-                    } animation: { _ in
-                        .easeInOut(duration: 1.6)
-                    }
-                    .accessibilityHidden(true)
-
-                VStack(spacing: 12) {
-                    Text(content.title)
-                        .font(.largeTitle.bold())
-                        .multilineTextAlignment(.center)
-                        .opacity(entered ? 1 : 0)
-                        .offset(y: entered ? 0 : 14)
-                        .animation(.easeOut(duration: 0.5).delay(0.15), value: entered)
-
-                    Text(content.subtitle)
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
-                        .opacity(entered ? 1 : 0)
-                        .offset(y: entered ? 0 : 14)
-                        .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
-                }
-
-                Spacer(minLength: 20)
-            }
-            .padding(.horizontal, 20)
-        }
-        .onChange(of: isActive, initial: true) { _, nowActive in
-            entered = false
-            guard nowActive else { return }
-            Task {
-                try? await Task.sleep(for: .milliseconds(50))
-                entered = true
-            }
-        }
     }
 }
 
