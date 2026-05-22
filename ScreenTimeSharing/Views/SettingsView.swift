@@ -24,6 +24,7 @@ struct SettingsView: View {
                         Spacer()
                         ForEach(avatarColors, id: \.self) { color in
                             Button {
+                                Haptics.tap()
                                 model.updateProfile(avatarColorHex: color)
                             } label: {
                                 Circle()
@@ -45,12 +46,14 @@ struct SettingsView: View {
 
                 Section("Sharing") {
                     Button {
+                        Haptics.tap()
                         isShowingShareSheet = true
                     } label: {
                         Label("Invite Friends", systemImage: "square.and.arrow.up")
                     }
 
                     Button {
+                        Haptics.tap()
                         isShowingActivityPicker = true
                     } label: {
                         Label("Change Selected Apps", systemImage: "app.badge")
@@ -66,18 +69,21 @@ struct SettingsView: View {
                 #if DEBUG
                 Section("Simulator Demo") {
                     Button {
+                        Haptics.tap()
                         model.seedDemoFriends()
                     } label: {
                         Label("Add Demo Friends", systemImage: "person.2.badge.plus")
                     }
 
                     Button(role: .destructive) {
+                        Haptics.tap()
                         model.clearDemoFriends()
                     } label: {
                         Label("Clear Demo Friends", systemImage: "trash")
                     }
 
                     Button {
+                        Haptics.tap()
                         model.resetOnboarding()
                     } label: {
                         Label("Replay Onboarding", systemImage: "arrow.counterclockwise")

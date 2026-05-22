@@ -54,6 +54,7 @@ struct OnboardingView: View {
                 if currentPage < lastPage {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Skip") {
+                            Haptics.tap()
                             withAnimation { currentPage = lastPage }
                         }
                     }
@@ -76,8 +77,10 @@ struct OnboardingView: View {
     private var primaryButton: some View {
         Button {
             if currentPage < lastPage {
+                Haptics.tap()
                 withAnimation { currentPage += 1 }
             } else {
+                Haptics.success()
                 model.completeOnboarding()
             }
         } label: {

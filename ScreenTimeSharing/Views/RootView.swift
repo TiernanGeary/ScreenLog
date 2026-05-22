@@ -20,6 +20,7 @@ struct RootView: View {
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") {
+                                Haptics.tap()
                                 model.persistSelection()
                                 isShowingActivityPicker = false
                             }

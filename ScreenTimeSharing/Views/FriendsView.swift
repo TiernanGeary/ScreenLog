@@ -22,6 +22,7 @@ struct FriendsView: View {
 
                 Section {
                     Button {
+                        Haptics.tap()
                         Task {
                             await model.reloadFriends()
                         }

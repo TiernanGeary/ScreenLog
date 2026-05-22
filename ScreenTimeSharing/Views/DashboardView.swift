@@ -39,12 +39,14 @@ struct DashboardView: View {
 
                 Section {
                     Button {
+                        Haptics.tap()
                         isShowingActivityPicker = true
                     } label: {
                         Label("Choose Apps", systemImage: "app.badge")
                     }
 
                     Button {
+                        Haptics.tap()
                         Task {
                             await model.requestScreenTimeAuthorization()
                         }
@@ -53,6 +55,7 @@ struct DashboardView: View {
                     }
 
                     Button {
+                        Haptics.tap()
                         Task {
                             await model.refreshAndPublish()
                         }
