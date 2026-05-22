@@ -3,6 +3,9 @@ import FamilyControls
 import Foundation
 import SwiftUI
 import UserNotifications
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum AppAppearanceMode: String, CaseIterable, Identifiable {
     case dark
@@ -38,6 +41,116 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
+struct FriendRequestPhotoStore {
+    private let fileManager: FileManager
+    private let directoryURL: URL
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        let baseURL = fileManager.containerURL(forSecurityApplicationGroupIdentifier: AppConfiguration.appGroupIdentifier)
+            ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        self.directoryURL = baseURL.appendingPathComponent("FriendRequestPhotos", isDirectory: true)
+    }
+
+    func saveJPEGData(_ data: Data, id: String = UUID().uuidString) throws -> BlockFriendRequestPhotoReference {
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try data.write(to: url(for: id), options: [.atomic])
+        return BlockFriendRequestPhotoReference(localIdentifier: id)
+    }
+
+    func data(for reference: BlockFriendRequestPhotoReference) -> Data? {
+        try? Data(contentsOf: url(for: reference.localIdentifier))
+    }
+
+    func hasPhoto(id: String) -> Bool {
+        fileManager.fileExists(atPath: url(for: id).path)
+    }
+
+    private func url(for id: String) -> URL {
+        directoryURL.appendingPathComponent("\(id).jpg", isDirectory: false)
+    }
+}
+
+#if canImport(UIKit)
+enum FriendRequestDemoPhotoFactory {
+    static func jpegData(
+        name: String,
+        background: (UIColor, UIColor),
+        shirt: UIColor,
+        expressionOffset: CGFloat
+    ) -> Data? {
+        let size = CGSize(width: 900, height: 1200)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { context in
+            let cgContext = context.cgContext
+            let colors = [background.0.cgColor, background.1.cgColor] as CFArray
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 1]) {
+                cgContext.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: size.width * 0.12, y: 0),
+                    end: CGPoint(x: size.width * 0.88, y: size.height),
+                    options: []
+                )
+            }
+
+            UIColor.white.withAlphaComponent(0.15).setFill()
+            UIBezierPath(ovalIn: CGRect(x: -120, y: 80, width: 430, height: 430)).fill()
+            UIBezierPath(ovalIn: CGRect(x: size.width - 260, y: 270, width: 360, height: 360)).fill()
+
+            UIColor.black.withAlphaComponent(0.22).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 205, y: 720, width: 490, height: 560)).fill()
+
+            shirt.setFill()
+            UIBezierPath(roundedRect: CGRect(x: 130, y: 790, width: 640, height: 520), cornerRadius: 260).fill()
+
+            UIColor(red: 0.86, green: 0.64, blue: 0.49, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 258, y: 276, width: 384, height: 446)).fill()
+
+            UIColor(red: 0.12, green: 0.09, blue: 0.07, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 250, y: 230, width: 400, height: 230)).fill()
+            UIBezierPath(roundedRect: CGRect(x: 222, y: 330, width: 110, height: 250), cornerRadius: 54).fill()
+            UIBezierPath(roundedRect: CGRect(x: 570, y: 330, width: 105, height: 250), cornerRadius: 52).fill()
+
+            UIColor.black.withAlphaComponent(0.78).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 355, y: 496, width: 34, height: 42)).fill()
+            UIBezierPath(ovalIn: CGRect(x: 512, y: 496, width: 34, height: 42)).fill()
+
+            UIColor.white.withAlphaComponent(0.72).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 365, y: 503, width: 10, height: 10)).fill()
+            UIBezierPath(ovalIn: CGRect(x: 522, y: 503, width: 10, height: 10)).fill()
+
+            UIColor(red: 0.68, green: 0.37, blue: 0.29, alpha: 1).setStroke()
+            let mouth = UIBezierPath()
+            mouth.lineWidth = 9
+            mouth.lineCapStyle = .round
+            mouth.move(to: CGPoint(x: 392, y: 612))
+            mouth.addQuadCurve(
+                to: CGPoint(x: 508, y: 612),
+                controlPoint: CGPoint(x: 450, y: 646 + expressionOffset)
+            )
+            mouth.stroke()
+
+            UIColor.white.withAlphaComponent(0.28).setFill()
+            UIBezierPath(roundedRect: CGRect(x: 70, y: 70, width: 760, height: 90), cornerRadius: 45).fill()
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 42, weight: .semibold),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.92)
+            ]
+            let text = "Please?"
+            let textSize = text.size(withAttributes: attributes)
+            text.draw(
+                at: CGPoint(x: (size.width - textSize.width) / 2, y: 91),
+                withAttributes: attributes
+            )
+        }
+
+        return image.jpegData(compressionQuality: 0.86)
+    }
+}
+#endif
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var profile: UserProfile
@@ -69,10 +182,11 @@ final class AppModel: ObservableObject {
     private let blockingStore: BlockingStateStore
     private let blockingEnforcementService: BlockingEnforcementService
     private let friendRequestNotificationService: FriendRequestNotificationService
+    private let friendRequestPhotoStore: FriendRequestPhotoStore
     private let usageHistoryDefaults: UserDefaults?
     private let onboardingKey = "HasCompletedOnboarding.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
-    #if DEBUG
+    #if DEBUG && targetEnvironment(simulator)
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
 
@@ -84,7 +198,8 @@ final class AppModel: ObservableObject {
         widgetCacheWriter: AppGroupWidgetCacheWriter = AppGroupWidgetCacheWriter(),
         blockingStore: BlockingStateStore = BlockingStateStore(),
         blockingEnforcementService: BlockingEnforcementService = BlockingEnforcementService(),
-        friendRequestNotificationService: FriendRequestNotificationService = FriendRequestNotificationService()
+        friendRequestNotificationService: FriendRequestNotificationService = FriendRequestNotificationService(),
+        friendRequestPhotoStore: FriendRequestPhotoStore = FriendRequestPhotoStore()
     ) {
         self.profileStore = profileStore
         self.selectionStore = selectionStore
@@ -94,6 +209,7 @@ final class AppModel: ObservableObject {
         self.blockingStore = blockingStore
         self.blockingEnforcementService = blockingEnforcementService
         self.friendRequestNotificationService = friendRequestNotificationService
+        self.friendRequestPhotoStore = friendRequestPhotoStore
         self.usageHistoryDefaults = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)
         self.profile = profileStore.load()
         self.appearanceMode = AppAppearanceMode(
@@ -109,7 +225,7 @@ final class AppModel: ObservableObject {
         loadPendingShieldFriendRequest()
         refreshLocalAccountabilityStats()
         syncFriendRequestNotifications()
-        #if DEBUG
+        #if DEBUG && targetEnvironment(simulator)
         let demoNow = Date()
         seedDemoUsageHistory(now: demoNow)
         seedDemoFriends(now: demoNow, showsStatusMessage: false)
@@ -187,6 +303,14 @@ final class AppModel: ObservableObject {
 
         profile.updatedAt = Date()
         profileStore.save(profile)
+    }
+
+    func friendRequestPhotoData(for request: BlockFriendRequest) -> Data? {
+        guard let photoReference = request.photoReference else {
+            return nil
+        }
+
+        return friendRequestPhotoStore.data(for: photoReference)
     }
 
     func persistSelection() {
@@ -479,7 +603,8 @@ final class AppModel: ObservableObject {
         groupID: String,
         seconds: TimeInterval,
         selectedFriendIDs: [String],
-        message requestMessage: String
+        message requestMessage: String,
+        photoJPEGData: Data?
     ) -> Bool {
         guard let group = BlockingStateResolver.group(for: groupID, in: blockingState),
               group.friendRequestConfig.isEnabled else {
@@ -492,6 +617,19 @@ final class AppModel: ObservableObject {
             return false
         }
 
+        guard let photoJPEGData, !photoJPEGData.isEmpty else {
+            message = "Take a photo before sending the request."
+            return false
+        }
+
+        let photoReference: BlockFriendRequestPhotoReference
+        do {
+            photoReference = try friendRequestPhotoStore.saveJPEGData(photoJPEGData)
+        } catch {
+            message = "Could not save request photo: \(error.localizedDescription)"
+            return false
+        }
+
         let now = Date()
         let request = BlockFriendRequest(
             id: UUID().uuidString,
@@ -501,7 +639,8 @@ final class AppModel: ObservableObject {
             message: requestMessage.trimmingCharacters(in: .whitespacesAndNewlines),
             requesterID: profile.id,
             requesterDisplayName: profile.displayName == "Me" ? "You" : profile.displayName,
-            createdAt: now
+            createdAt: now,
+            photoReference: photoReference
         )
 
         blockingState.friendRequests.insert(request, at: 0)
@@ -687,7 +826,7 @@ final class AppModel: ObservableObject {
     }
 
     func reloadFriends() async {
-        #if DEBUG
+        #if DEBUG && targetEnvironment(simulator)
         if UserDefaults.standard.bool(forKey: demoFriendsKey) {
             seedDemoFriends()
             return
@@ -1003,14 +1142,14 @@ final class AppModel: ObservableObject {
         leaderboardWindow = window
         refreshLocalAccountabilityStats()
 
-        #if DEBUG
+        #if DEBUG && targetEnvironment(simulator)
         if UserDefaults.standard.bool(forKey: demoFriendsKey) {
             seedDemoFriends()
         }
         #endif
     }
 
-    #if DEBUG
+    #if DEBUG && targetEnvironment(simulator)
     func seedDemoScreenTime() {
         seedDemoUsageHistory()
         message = "Demo Screen Time added for simulator testing."
@@ -1113,9 +1252,50 @@ final class AppModel: ObservableObject {
 
         let approvedAt = now.addingTimeInterval(-12 * 60)
         let collectedAt = now.addingTimeInterval(-94 * 60)
+        let samPhoto = demoPhotoReference(
+            id: "demo-photo-sam-please",
+            name: "Sam",
+            background: (
+                UIColor(red: 0.24, green: 0.47, blue: 0.86, alpha: 1),
+                UIColor(red: 0.06, green: 0.09, blue: 0.18, alpha: 1)
+            ),
+            shirt: UIColor(red: 0.10, green: 0.55, blue: 0.48, alpha: 1),
+            expressionOffset: 18
+        )
+        let mayaPhoto = demoPhotoReference(
+            id: "demo-photo-maya-please",
+            name: "Maya",
+            background: (
+                UIColor(red: 0.86, green: 0.25, blue: 0.32, alpha: 1),
+                UIColor(red: 0.32, green: 0.13, blue: 0.27, alpha: 1)
+            ),
+            shirt: UIColor(red: 0.95, green: 0.54, blue: 0.18, alpha: 1),
+            expressionOffset: 28
+        )
+        let rileyPhoto = demoPhotoReference(
+            id: "demo-photo-riley-please",
+            name: "Riley",
+            background: (
+                UIColor(red: 0.18, green: 0.55, blue: 0.72, alpha: 1),
+                UIColor(red: 0.12, green: 0.19, blue: 0.28, alpha: 1)
+            ),
+            shirt: UIColor(red: 0.42, green: 0.32, blue: 0.68, alpha: 1),
+            expressionOffset: 10
+        )
+        let mePhoto = demoPhotoReference(
+            id: "demo-photo-me-please",
+            name: "Me",
+            background: (
+                UIColor(red: 0.34, green: 0.44, blue: 0.38, alpha: 1),
+                UIColor(red: 0.08, green: 0.11, blue: 0.12, alpha: 1)
+            ),
+            shirt: UIColor(red: 0.18, green: 0.34, blue: 0.58, alpha: 1),
+            expressionOffset: 22
+        )
         let demoRequestIDs: Set<String> = [
             "demo-received-friend-request",
             "demo-request-received-pending",
+            "demo-request-received-pending-maya",
             "demo-request-received-denied",
             "demo-request-sent-pending",
             "demo-request-sent-approved",
@@ -1130,7 +1310,19 @@ final class AppModel: ObservableObject {
                 message: "Can you approve a quick check-in?",
                 requesterID: "demo-sam",
                 requesterDisplayName: "Sam Lee",
-                createdAt: now.addingTimeInterval(-9 * 60)
+                createdAt: now.addingTimeInterval(-9 * 60),
+                photoReference: samPhoto
+            ),
+            BlockFriendRequest(
+                id: "demo-request-received-pending-maya",
+                groupID: groupID,
+                requestedSeconds: 20 * 60,
+                selectedFriendIDs: [profile.id],
+                message: "I swear I only need to answer one DM.",
+                requesterID: "demo-maya",
+                requesterDisplayName: "Maya Chen",
+                createdAt: now.addingTimeInterval(-24 * 60),
+                photoReference: mayaPhoto
             ),
             BlockFriendRequest(
                 id: "demo-request-received-denied",
@@ -1142,7 +1334,8 @@ final class AppModel: ObservableObject {
                 requesterDisplayName: "Riley Park",
                 status: .denied,
                 createdAt: now.addingTimeInterval(-55 * 60),
-                resolvedAt: now.addingTimeInterval(-47 * 60)
+                resolvedAt: now.addingTimeInterval(-47 * 60),
+                photoReference: rileyPhoto
             ),
             BlockFriendRequest(
                 id: "demo-request-sent-pending",
@@ -1152,7 +1345,8 @@ final class AppModel: ObservableObject {
                 message: "Need a few minutes to reply.",
                 requesterID: profile.id,
                 requesterDisplayName: profile.displayName == "Me" ? "You" : profile.displayName,
-                createdAt: now.addingTimeInterval(-6 * 60)
+                createdAt: now.addingTimeInterval(-6 * 60),
+                photoReference: mePhoto
             ),
             BlockFriendRequest(
                 id: "demo-request-sent-approved",
@@ -1166,7 +1360,8 @@ final class AppModel: ObservableObject {
                 status: .approved,
                 createdAt: now.addingTimeInterval(-18 * 60),
                 resolvedAt: approvedAt,
-                approvedExpiresAt: BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: approvedAt)
+                approvedExpiresAt: BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: approvedAt),
+                photoReference: mePhoto
             ),
             BlockFriendRequest(
                 id: "demo-request-sent-collected",
@@ -1181,7 +1376,8 @@ final class AppModel: ObservableObject {
                 createdAt: now.addingTimeInterval(-2 * 3_600),
                 resolvedAt: now.addingTimeInterval(-105 * 60),
                 collectedAt: collectedAt,
-                approvedExpiresAt: BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: now.addingTimeInterval(-105 * 60))
+                approvedExpiresAt: BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: now.addingTimeInterval(-105 * 60)),
+                photoReference: mePhoto
             )
         ]
 
@@ -1223,6 +1419,29 @@ final class AppModel: ObservableObject {
             at: 0
         )
         return "demo-social-requests"
+    }
+
+    private func demoPhotoReference(
+        id: String,
+        name: String,
+        background: (UIColor, UIColor),
+        shirt: UIColor,
+        expressionOffset: CGFloat
+    ) -> BlockFriendRequestPhotoReference? {
+        if friendRequestPhotoStore.hasPhoto(id: id) {
+            return BlockFriendRequestPhotoReference(localIdentifier: id)
+        }
+
+        guard let data = FriendRequestDemoPhotoFactory.jpegData(
+            name: name,
+            background: background,
+            shirt: shirt,
+            expressionOffset: expressionOffset
+        ) else {
+            return nil
+        }
+
+        return try? friendRequestPhotoStore.saveJPEGData(data, id: id)
     }
 
     private func makeDemoScreenTimeSnapshot(

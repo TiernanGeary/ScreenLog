@@ -270,13 +270,15 @@ import Testing
 
 @Test func localFriendRequestPayloadRoundTrips() throws {
     let now = Date(timeIntervalSince1970: 1_779_236_400)
+    let photoReference = BlockFriendRequestPhotoReference(localIdentifier: "photo-123")
     let request = BlockFriendRequest(
         id: "friend-request",
         groupID: "social",
         requestedSeconds: 15 * 60,
         selectedFriendIDs: ["sam", "maya"],
         message: "Need to check a message",
-        createdAt: now
+        createdAt: now,
+        photoReference: photoReference
     )
     let state = BlockingState(friendRequests: [request], lastUpdated: now)
 
@@ -284,7 +286,73 @@ import Testing
     let decoded = try BlockingStoreCodec.decode(data)
 
     #expect(decoded.friendRequests == [request])
+    #expect(decoded.friendRequests.first?.photoReference == photoReference)
     #expect(BlockingStateResolver.pendingFriendRequests(in: decoded).map(\.id) == ["friend-request"])
+}
+
+@Test func legacyFriendRequestWithoutPhotoStillDecodes() throws {
+    let json = """
+    {
+      "id": "legacy-request",
+      "groupID": "social",
+      "requestedSeconds": 900,
+      "selectedFriendIDs": ["sam"],
+      "message": "Need a minute",
+      "status": "pending",
+      "createdAt": 0
+    }
+    """
+
+    let request = try JSONDecoder().decode(BlockFriendRequest.self, from: Data(json.utf8))
+
+    #expect(request.id == "legacy-request")
+    #expect(request.photoReference == nil)
+}
+
+@Test func pendingReceivedFriendRequestsOnlyIncludeActionableIncomingRequests() {
+    let now = Date(timeIntervalSince1970: 1_779_236_400)
+    let olderIncoming = BlockFriendRequest(
+        id: "older-incoming",
+        groupID: "social",
+        requestedSeconds: 10 * 60,
+        selectedFriendIDs: ["me"],
+        message: "",
+        requesterID: "sam",
+        createdAt: now.addingTimeInterval(-60)
+    )
+    let newerIncoming = BlockFriendRequest(
+        id: "newer-incoming",
+        groupID: "social",
+        requestedSeconds: 20 * 60,
+        selectedFriendIDs: ["me"],
+        message: "",
+        requesterID: "maya",
+        createdAt: now
+    )
+    let approvedIncoming = BlockFriendRequest(
+        id: "approved-incoming",
+        groupID: "social",
+        requestedSeconds: 15 * 60,
+        selectedFriendIDs: ["me"],
+        message: "",
+        requesterID: "riley",
+        status: .approved,
+        createdAt: now.addingTimeInterval(-30)
+    )
+    let sent = BlockFriendRequest(
+        id: "sent",
+        groupID: "social",
+        requestedSeconds: 15 * 60,
+        selectedFriendIDs: ["sam"],
+        message: "",
+        requesterID: "me",
+        createdAt: now.addingTimeInterval(-10)
+    )
+    let state = BlockingState(friendRequests: [olderIncoming, newerIncoming, approvedIncoming, sent], lastUpdated: now)
+
+    let ids = BlockingStateResolver.pendingReceivedFriendRequests(for: "me", in: state).map(\.id)
+
+    #expect(ids == ["newer-incoming", "older-incoming"])
 }
 
 @Test func friendRequestsExpireAndCollectAfterApproval() {

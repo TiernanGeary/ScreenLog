@@ -1,38 +1,22 @@
 import FamilyControls
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct RequestFeedView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: AppModel
     var highlightedFriendRequestID: String?
     var showsDoneButton = true
+    @State private var selectedPhotoRequestID = ""
 
-    private var highlightedFriendRequest: BlockFriendRequest? {
-        guard let highlightedFriendRequestID else {
-            return nil
-        }
-
-        return model.blockingState.friendRequests.first { $0.id == highlightedFriendRequestID }
+    private var pendingReceivedRequests: [BlockFriendRequest] {
+        BlockingStateResolver.pendingReceivedFriendRequests(for: model.profile.id, in: model.blockingState)
     }
 
-    private var attentionRequests: [BlockFriendRequest] {
+    private var friendRequestLogs: [BlockFriendRequest] {
         model.blockingState.friendRequests
-            .filter { request in
-                (request.isReceived(by: model.profile.id) && request.status == .pending)
-                    || (request.isSent(by: model.profile.id) && request.status == .approved)
-            }
-            .sorted { $0.createdAt > $1.createdAt }
-    }
-
-    private var receivedFriendRequests: [BlockFriendRequest] {
-        model.blockingState.friendRequests
-            .filter { $0.isReceived(by: model.profile.id) }
-            .sorted { $0.createdAt > $1.createdAt }
-    }
-
-    private var sentFriendRequests: [BlockFriendRequest] {
-        model.blockingState.friendRequests
-            .filter { $0.isSent(by: model.profile.id) }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -54,62 +38,18 @@ struct RequestFeedView: View {
 
     var body: some View {
         AppScreenScroll(backgroundStyle: .white) {
-            if let highlightedFriendRequest {
-                AppSection("Opened Request") {
+            photoBookSection
+
+            AppSection("Logs") {
+                AppCard {
+                    friendRequestLogList(friendRequestLogs)
+                }
+            }
+
+            if !recentQuickRequests.isEmpty {
+                AppSection("Quick Requests") {
                     AppCard {
-                        friendRequestRow(
-                            highlightedFriendRequest,
-                            direction: direction(for: highlightedFriendRequest),
-                            isHighlighted: true
-                        )
-                        .appCardRow(verticalPadding: 12)
-                    }
-                }
-            }
-
-            AppSection("Needs Attention") {
-                AppCard {
-                    friendRequestList(
-                        attentionRequests,
-                        emptyText: "No requests need attention right now."
-                    )
-                }
-            }
-
-            AppSection("Received") {
-                AppCard {
-                    friendRequestList(
-                        receivedFriendRequests,
-                        emptyText: "No received friend requests yet."
-                    )
-                }
-            }
-
-            AppSection("Sent") {
-                AppCard {
-                    friendRequestList(
-                        sentFriendRequests,
-                        emptyText: "No sent friend requests yet."
-                    )
-                }
-            }
-
-            AppSection("Quick Requests") {
-                AppCard {
-                    if recentQuickRequests.isEmpty {
-                        Text("No quick requests yet.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .appCardRow()
-                    } else {
-                        ForEach(Array(recentQuickRequests.enumerated()), id: \.element.id) { index, request in
-                            if index > 0 {
-                                AppCardDivider()
-                            }
-
-                            requestRow(request)
-                                .appCardRow(verticalPadding: 12)
-                        }
+                        quickRequestList(recentQuickRequests)
                     }
                 }
             }
@@ -117,6 +57,13 @@ struct RequestFeedView: View {
         .navigationTitle("Request Feed")
         .onAppear {
             model.expireStaleFriendRequests()
+            syncSelectedPhotoRequest(preferredID: highlightedFriendRequestID)
+        }
+        .onChange(of: highlightedFriendRequestID) { _, newValue in
+            syncSelectedPhotoRequest(preferredID: newValue)
+        }
+        .onChange(of: pendingReceivedRequests.map(\.id)) { _, _ in
+            syncSelectedPhotoRequest(preferredID: highlightedFriendRequestID)
         }
         .toolbar {
             if showsDoneButton {
@@ -131,12 +78,61 @@ struct RequestFeedView: View {
     }
 
     @ViewBuilder
-    private func friendRequestList(
-        _ requests: [BlockFriendRequest],
-        emptyText: String
-    ) -> some View {
+    private var photoBookSection: some View {
+        if pendingReceivedRequests.isEmpty {
+            AppCard {
+                ContentUnavailableView(
+                    "No Photo Requests",
+                    systemImage: "photo.on.rectangle",
+                    description: Text("New requests from friends will appear here.")
+                )
+                .appCardRow(verticalPadding: 20)
+            }
+        } else {
+            FriendRequestPhotoStackView(
+                requests: pendingReceivedRequests,
+                selectedRequestID: $selectedPhotoRequestID,
+                photoData: { request in
+                    model.friendRequestPhotoData(for: request)
+                },
+                participantName: { request in
+                    FriendRequestFeedDisplay.participantName(
+                        for: request,
+                        direction: .received,
+                        profile: model.profile,
+                        friends: model.friendSummaries
+                    )
+                },
+                avatarColorHex: { request in
+                    FriendRequestFeedDisplay.participantAvatarColorHex(
+                        for: request,
+                        direction: .received,
+                        profile: model.profile,
+                        friends: model.friendSummaries
+                    )
+                },
+                groupName: { request in
+                    groupName(for: request.groupID)
+                },
+                expiresIn: { request in
+                    FriendRequestFeedDisplay.remainingTimeLabel(until: request.pendingExpiresAt)
+                },
+                onDeny: { request in
+                    resolvePhotoBookRequest(request, approve: false)
+                },
+                onApprove: { request in
+                    resolvePhotoBookRequest(request, approve: true)
+                }
+            )
+            .frame(height: 580)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func friendRequestLogList(_ requests: [BlockFriendRequest]) -> some View {
         if requests.isEmpty {
-            Text(emptyText)
+            Text("No request logs yet.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .appCardRow()
@@ -146,22 +142,16 @@ struct RequestFeedView: View {
                     AppCardDivider()
                 }
 
-                friendRequestRow(
-                    request,
-                    direction: direction(for: request),
-                    isHighlighted: request.id == highlightedFriendRequestID
-                )
+                friendRequestLogRow(request, isHighlighted: request.id == highlightedFriendRequestID)
                 .appCardRow(verticalPadding: 12)
             }
         }
     }
 
-    private func friendRequestRow(
-        _ request: BlockFriendRequest,
-        direction: FriendRequestDirection,
-        isHighlighted: Bool = false
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func friendRequestLogRow(_ request: BlockFriendRequest, isHighlighted: Bool = false) -> some View {
+        let direction = direction(for: request)
+
+        return VStack(alignment: .leading, spacing: 10) {
             NavigationLink {
                 FriendRequestDetailView(requestID: request.id)
             } label: {
@@ -173,16 +163,8 @@ struct RequestFeedView: View {
                         friends: model.friendSummaries
                     )
 
-                    Avatar(
-                        colorHex: FriendRequestFeedDisplay.participantAvatarColorHex(
-                            for: request,
-                            direction: direction,
-                            profile: model.profile,
-                            friends: model.friendSummaries
-                        ),
-                        initials: participantName.initials
-                    )
-                    .frame(width: 40, height: 40)
+                    FriendRequestPhotoThumbnail(photoData: model.friendRequestPhotoData(for: request))
+                        .frame(width: 58, height: 72)
 
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -294,6 +276,18 @@ struct RequestFeedView: View {
         }
     }
 
+    @ViewBuilder
+    private func quickRequestList(_ requests: [BlockingRequestListItem]) -> some View {
+        ForEach(Array(requests.enumerated()), id: \.element.id) { index, request in
+            if index > 0 {
+                AppCardDivider()
+            }
+
+            requestRow(request)
+                .appCardRow(verticalPadding: 12)
+        }
+    }
+
     private func requestRow(_ request: BlockingRequestListItem) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "timer")
@@ -329,6 +323,481 @@ struct RequestFeedView: View {
     private func groupName(for groupID: String) -> String {
         model.blockingState.groups.first { $0.id == groupID }?.name ?? "Unknown group"
     }
+
+    private func syncSelectedPhotoRequest(preferredID: String? = nil) {
+        let ids = pendingReceivedRequests.map(\.id)
+        if let preferredID, ids.contains(preferredID) {
+            selectedPhotoRequestID = preferredID
+            return
+        }
+
+        if ids.contains(selectedPhotoRequestID) {
+            return
+        }
+
+        selectedPhotoRequestID = ids.first ?? ""
+    }
+
+    private func resolvePhotoBookRequest(_ request: BlockFriendRequest, approve: Bool) {
+        let currentIDs = pendingReceivedRequests.map(\.id)
+        let currentIndex = currentIDs.firstIndex(of: request.id) ?? 0
+        let didResolve = approve
+            ? model.approveFriendRequest(id: request.id)
+            : model.denyFriendRequest(id: request.id)
+
+        guard didResolve else {
+            return
+        }
+
+        AppHaptics.buttonTap()
+        let remainingIDs = currentIDs.filter { $0 != request.id }
+        if remainingIDs.isEmpty {
+            selectedPhotoRequestID = ""
+        } else if currentIndex < remainingIDs.count {
+            selectedPhotoRequestID = remainingIDs[currentIndex]
+        } else {
+            selectedPhotoRequestID = remainingIDs[remainingIDs.count - 1]
+        }
+    }
+}
+
+private struct FriendRequestPhotoStackView: View {
+    let requests: [BlockFriendRequest]
+    @Binding var selectedRequestID: String
+    let photoData: (BlockFriendRequest) -> Data?
+    let participantName: (BlockFriendRequest) -> String
+    let avatarColorHex: (BlockFriendRequest) -> String
+    let groupName: (BlockFriendRequest) -> String
+    let expiresIn: (BlockFriendRequest) -> String
+    let onDeny: (BlockFriendRequest) -> Void
+    let onApprove: (BlockFriendRequest) -> Void
+    @State private var dragOffset: CGSize = .zero
+    @State private var flyAwayOffset: CGSize = .zero
+    @State private var promotionProgress: CGFloat = 0
+    @State private var stackDirection = 1
+    @State private var isHorizontalDragActive = false
+    @State private var advancingRequestID: String?
+    @State private var isAdvancing = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let cardSize = CGSize(
+                width: max(260, proxy.size.width - 54),
+                height: max(420, proxy.size.height - 54)
+            )
+
+            ZStack {
+                ForEach(Array(stackedRequests(direction: stackDirection).reversed()), id: \.request.id) { item in
+                    stackedCard(
+                        item.request,
+                        depth: item.depth,
+                        cardSize: cardSize
+                    )
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .animation(.spring(response: 0.36, dampingFraction: 0.84), value: selectedRequestID)
+            .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.86), value: dragOffset)
+            .animation(.spring(response: 0.44, dampingFraction: 0.86), value: promotionProgress)
+        }
+    }
+
+    @ViewBuilder
+    private func stackedCard(
+        _ request: BlockFriendRequest,
+        depth: Int,
+        cardSize: CGSize
+    ) -> some View {
+        if depth == 0 {
+            let effectiveOffset = advancingRequestID == request.id ? flyAwayOffset : dragOffset
+
+            photoBookCard(for: request)
+                .frame(width: cardSize.width, height: cardSize.height)
+                .rotationEffect(.degrees(topCardRotation(for: effectiveOffset)))
+                .offset(effectiveOffset)
+                .zIndex(Double(10 - depth))
+                .simultaneousGesture(dragGesture(cardWidth: cardSize.width))
+                .allowsHitTesting(!isAdvancing)
+        } else {
+            let visualDepth = max(0, CGFloat(depth) - promotionProgress)
+
+            photoBookCard(for: request)
+                .frame(width: cardSize.width, height: cardSize.height)
+                .scaleEffect(stackedScale(depth: visualDepth))
+                .rotationEffect(.degrees(stackedRotation(depth: visualDepth)))
+                .offset(stackedOffset(depth: visualDepth))
+                .opacity(advancingRequestID == request.id ? 0 : 1)
+                .zIndex(Double(10 - depth))
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func photoBookCard(for request: BlockFriendRequest) -> some View {
+        FriendRequestPhotoBookCard(
+            request: request,
+            photoData: photoData(request),
+            participantName: participantName(request),
+            avatarColorHex: avatarColorHex(request),
+            groupName: groupName(request),
+            expiresIn: expiresIn(request),
+            onDeny: {
+                onDeny(request)
+            },
+            onApprove: {
+                onApprove(request)
+            }
+        )
+    }
+
+    private func dragGesture(cardWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 14)
+            .onChanged { value in
+                guard !isAdvancing else {
+                    return
+                }
+
+                guard isHorizontalDrag(value) else {
+                    withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+                        dragOffset = .zero
+                        promotionProgress = 0
+                    }
+                    return
+                }
+
+                isHorizontalDragActive = true
+                if abs(value.translation.width) > 8 {
+                    stackDirection = value.translation.width < 0 ? 1 : -1
+                }
+                dragOffset = CGSize(width: value.translation.width, height: 0)
+                promotionProgress = min(0.34, abs(value.translation.width) / max(cardWidth, 1) * 0.9)
+            }
+            .onEnded { value in
+                guard !isAdvancing else {
+                    return
+                }
+
+                guard isHorizontalDragActive, let direction = dragAdvanceDirection(value), requests.count > 1 else {
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                        dragOffset = .zero
+                        promotionProgress = 0
+                    }
+                    isHorizontalDragActive = false
+                    return
+                }
+
+                let exitingID = selectedRequestID
+                AppHaptics.selectionChanged()
+                stackDirection = direction
+                isAdvancing = true
+                isHorizontalDragActive = false
+                advancingRequestID = exitingID
+
+                withAnimation(.easeOut(duration: 0.28)) {
+                    flyAwayOffset = dismissalOffset(
+                        direction: direction,
+                        cardWidth: cardWidth,
+                        drag: value
+                    )
+                    dragOffset = .zero
+                }
+
+                withAnimation(.spring(response: 0.44, dampingFraction: 0.86)) {
+                    promotionProgress = 1
+                }
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        moveSelection(by: direction)
+                        flyAwayOffset = .zero
+                        promotionProgress = 0
+                        isHorizontalDragActive = false
+                        advancingRequestID = nil
+                        isAdvancing = false
+                    }
+                }
+            }
+    }
+
+    private func stackedRequests(direction: Int) -> [(depth: Int, request: BlockFriendRequest)] {
+        guard !requests.isEmpty else {
+            return []
+        }
+
+        let selectedIndex = requests.firstIndex { $0.id == selectedRequestID } ?? 0
+        let stackCount = min(3, requests.count)
+        let signedDirection = direction >= 0 ? 1 : -1
+
+        return (0..<stackCount).map { depth in
+            let rawIndex = selectedIndex + depth * signedDirection
+            let index = (rawIndex % requests.count + requests.count) % requests.count
+            return (depth: depth, request: requests[index])
+        }
+    }
+
+    private func stackedScale(depth: CGFloat) -> CGFloat {
+        max(0.88, 1 - depth * 0.045)
+    }
+
+    private func stackedOffset(depth: CGFloat) -> CGSize {
+        interpolatedStackValue(
+            depth: depth,
+            top: .zero,
+            middle: CGSize(width: 10, height: 18),
+            back: CGSize(width: -8, height: 34)
+        )
+    }
+
+    private func stackedRotation(depth: CGFloat) -> Double {
+        Double(
+            interpolatedStackValue(
+                depth: depth,
+                top: CGFloat.zero,
+                middle: 2.8,
+                back: -2.2
+            )
+        )
+    }
+
+    private func interpolatedStackValue(
+        depth: CGFloat,
+        top: CGFloat,
+        middle: CGFloat,
+        back: CGFloat
+    ) -> CGFloat {
+        let clampedDepth = min(2, max(0, depth))
+        if clampedDepth <= 1 {
+            return top + (middle - top) * clampedDepth
+        }
+
+        return middle + (back - middle) * (clampedDepth - 1)
+    }
+
+    private func interpolatedStackValue(
+        depth: CGFloat,
+        top: CGSize,
+        middle: CGSize,
+        back: CGSize
+    ) -> CGSize {
+        CGSize(
+            width: interpolatedStackValue(depth: depth, top: top.width, middle: middle.width, back: back.width),
+            height: interpolatedStackValue(depth: depth, top: top.height, middle: middle.height, back: back.height)
+        )
+    }
+
+    private func topCardRotation(for offset: CGSize) -> Double {
+        let rawDegrees = Double(offset.width / 18)
+        return min(10, max(-10, rawDegrees))
+    }
+
+    private func isHorizontalDrag(_ value: DragGesture.Value) -> Bool {
+        if isHorizontalDragActive {
+            return true
+        }
+
+        let horizontal = abs(value.translation.width)
+        let vertical = abs(value.translation.height)
+        return horizontal > 14 && horizontal > vertical * 1.2
+    }
+
+    private func moveSelection(by delta: Int) {
+        guard requests.count > 1 else {
+            return
+        }
+
+        let currentIndex = requests.firstIndex { $0.id == selectedRequestID } ?? 0
+        let nextIndex = (currentIndex + delta + requests.count) % requests.count
+        selectedRequestID = requests[nextIndex].id
+    }
+
+    private func dragAdvanceDirection(_ value: DragGesture.Value) -> Int? {
+        let projectedWidth = value.predictedEndTranslation.width
+        let projectedHeight = value.predictedEndTranslation.height
+        guard abs(projectedWidth) > 110, abs(projectedWidth) > abs(projectedHeight) * 1.15 else {
+            return nil
+        }
+
+        return projectedWidth < 0 ? 1 : -1
+    }
+
+    private func dismissalOffset(
+        direction: Int,
+        cardWidth: CGFloat,
+        drag: DragGesture.Value
+    ) -> CGSize {
+        let horizontal = direction > 0 ? -cardWidth * 1.28 : cardWidth * 1.28
+        return CGSize(width: horizontal, height: 0)
+    }
+}
+
+private struct FriendRequestPhotoBookCard: View {
+    let request: BlockFriendRequest
+    let photoData: Data?
+    let participantName: String
+    let avatarColorHex: String
+    let groupName: String
+    let expiresIn: String
+    let onDeny: () -> Void
+    let onApprove: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            FriendRequestPhotoImage(photoData: photoData)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0.0), location: 0.25),
+                    .init(color: .black.opacity(0.48), location: 0.70),
+                    .init(color: .black.opacity(0.74), location: 1.0)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top) {
+                    HStack(spacing: 10) {
+                        Avatar(colorHex: avatarColorHex, initials: participantName.initials)
+                            .frame(width: 44, height: 44)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(participantName)
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                            Text(FriendRequestFeedDisplay.relativeRequestAge(request.createdAt))
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.76))
+                        }
+                    }
+
+                    Spacer()
+
+                    Text("Expires in \(expiresIn)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.86))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(.black.opacity(0.28), in: Capsule())
+                }
+
+                Spacer()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        AppUsageIcon(name: groupName)
+                            .scaleEffect(0.78)
+                            .frame(width: 34, height: 34)
+
+                        Text(groupName)
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        Text(BlockingDisplayFormatter.durationLabel(request.requestedSeconds))
+                            .font(.title3.weight(.bold).monospacedDigit())
+                            .foregroundStyle(.white)
+                    }
+
+                    if let message = FriendRequestFeedDisplay.message(for: request) {
+                        Text(message)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.90))
+                            .lineLimit(3)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button {
+                            onDeny()
+                        } label: {
+                            Text("Deny")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                                .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+
+                        Button {
+                            onApprove()
+                        } label: {
+                            Text("Approve")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                                .background(Color.green.opacity(0.86), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            .padding(18)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 26, x: 0, y: 15)
+    }
+}
+
+private struct FriendRequestPhotoThumbnail: View {
+    let photoData: Data?
+
+    var body: some View {
+        FriendRequestPhotoImage(photoData: photoData)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.18), lineWidth: 0.8)
+            }
+    }
+}
+
+private struct FriendRequestPhotoImage: View {
+    let photoData: Data?
+
+    var body: some View {
+        ZStack {
+            #if canImport(UIKit)
+            if let photoData, let image = UIImage(data: photoData) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                placeholder
+            }
+            #else
+            placeholder
+            #endif
+        }
+        .clipped()
+        .accessibilityHidden(true)
+    }
+
+    private var placeholder: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.18, green: 0.22, blue: 0.28),
+                Color(red: 0.08, green: 0.10, blue: 0.14)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay {
+            Image(systemName: "camera.fill")
+                .font(.title2)
+                .foregroundStyle(.white.opacity(0.62))
+        }
+    }
 }
 
 private struct FriendRequestDetailView: View {
@@ -357,9 +826,19 @@ private struct FriendRequestDetailView: View {
                     friends: model.friendSummaries
                 )
 
+                FriendRequestPhotoImage(photoData: model.friendRequestPhotoData(for: request))
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(4 / 5, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.18), radius: 18, y: 10)
+
                 VStack(spacing: 9) {
                     Avatar(colorHex: avatarColorHex, initials: participantName.initials)
-                        .frame(width: 88, height: 88)
+                        .frame(width: 64, height: 64)
 
                     Text(participantName)
                         .font(.title3.weight(.semibold))
@@ -377,7 +856,7 @@ private struct FriendRequestDetailView: View {
                         )
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.top, 8)
+                .padding(.top, 2)
                 .padding(.bottom, 2)
 
                 AppSection("Request") {
@@ -648,6 +1127,22 @@ private enum FriendRequestFeedDisplay {
         return "\(Int(seconds / 86_400))d ago"
     }
 
+    static func remainingTimeLabel(until date: Date, now: Date = Date()) -> String {
+        let remainingSeconds = max(0, date.timeIntervalSince(now))
+        guard remainingSeconds > 0 else {
+            return "0m"
+        }
+
+        let hours = Int(remainingSeconds) / 3_600
+        let minutes = max(1, (Int(remainingSeconds) % 3_600 + 59) / 60)
+
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+
+        return "\(minutes)m"
+    }
+
     static func groupName(for groupID: String, groups: [BlockGroup]) -> String {
         groups.first { $0.id == groupID }?.name ?? "Unknown group"
     }
@@ -710,6 +1205,7 @@ private enum FriendRequestFeedDisplay {
 }
 
 struct BlockingSettingsView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var model: AppModel
     var highlightedFriendRequestID: String?
     var onShowBlockingActivityPicker: (() -> Void)?
@@ -1175,7 +1671,13 @@ struct BlockingSettingsView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .background(Color.white.opacity(0.58), in: Capsule())
+            .background(pillBackground, in: Capsule())
+    }
+
+    private var pillBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .tertiarySystemGroupedBackground)
+            : Color.white.opacity(0.58)
     }
 
     private func selectionCount(for group: BlockGroup) -> Int {
@@ -1899,7 +2401,7 @@ private struct UnblocksPerDayPicker: View {
             }
         }
         .padding(.horizontal, 24)
-        .background(Color.white.ignoresSafeArea())
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") {
@@ -1932,7 +2434,7 @@ private struct MaxUnblockDurationPicker: View {
             }
         }
         .padding(.horizontal, 24)
-        .background(Color.white.ignoresSafeArea())
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") {
@@ -2070,6 +2572,7 @@ struct BlockGroupDraft: Identifiable {
 }
 
 private struct RepeatDaysPicker: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var selectedDays: Set<BlockWeekday>
 
     private var everyDayBinding: Binding<Bool> {
@@ -2103,7 +2606,7 @@ private struct RepeatDaysPicker: View {
                                 .foregroundStyle(selectedDays.contains(day) ? Color.white : Color.primary)
                                 .background(
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(selectedDays.contains(day) ? Color.accentColor : Color.white.opacity(0.62))
+                                        .fill(selectedDays.contains(day) ? Color.accentColor : unselectedDayBackground)
                                 )
                         }
                         .buttonStyle(.plain)
@@ -2120,6 +2623,12 @@ private struct RepeatDaysPicker: View {
             selectedDays.insert(day)
         }
     }
+
+    private var unselectedDayBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .tertiarySystemGroupedBackground)
+            : Color.white.opacity(0.62)
+    }
 }
 
 private struct DurationWheelPicker: View {
@@ -2128,7 +2637,7 @@ private struct DurationWheelPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Daily time available", selection: $minutes) {
+            Picker("Time you can use these apps per day", selection: $minutes) {
                 ForEach(options, id: \.self) { option in
                     Text(BlockingDisplayFormatter.fullDurationLabel(TimeInterval(option * 60)))
                         .tag(option)
@@ -2143,11 +2652,11 @@ private struct DurationWheelPicker: View {
                 AppHaptics.selectionChanged()
             }
 
-            Text("Daily time available")
+            Text("This is the time you can use these apps per day.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
-        .accessibilityLabel("Daily time limit")
+        .accessibilityLabel("Time you can use these apps per day")
         .accessibilityValue("\(minutes) minutes")
     }
 }

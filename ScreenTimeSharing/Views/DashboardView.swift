@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(AVFoundation)
+import AVFoundation
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -835,6 +838,7 @@ private struct BlockingDeveloperToolsCard: View {
 }
 
 private struct DummyBlockedAppRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let title: String
 
     var body: some View {
@@ -858,12 +862,22 @@ private struct DummyBlockedAppRow: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white.opacity(0.58))
+                .fill(rowBackground)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.86), lineWidth: 0.7)
+                .strokeBorder(rowBorder, lineWidth: 0.7)
         }
+    }
+
+    private var rowBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .tertiarySystemGroupedBackground)
+            : Color.white.opacity(0.58)
+    }
+
+    private var rowBorder: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.86)
     }
 }
 
@@ -991,13 +1005,21 @@ private struct DummyAppIcon: View {
 }
 #endif
 
+private enum FriendApprovalRequestStep {
+    case capture
+    case review
+    case details
+}
+
 struct FriendApprovalRequestView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: AppModel
     let group: BlockGroup
+    @State private var requestStep: FriendApprovalRequestStep = .capture
     @State private var requestedMinutes = 15
     @State private var isShowingMinutePicker = false
     @State private var selectedFriendIDs: Set<String> = []
+    @State private var selectedPhotoData: Data?
     @State private var message = ""
 
     private let minuteOptions = [5, 10, 15, 20, 30, 45, 60]
@@ -1017,79 +1039,10 @@ struct FriendApprovalRequestView: View {
 
     var body: some View {
         NavigationStack {
-            AppScreenScroll(backgroundStyle: .white) {
-                AppSection("Request") {
-                    AppCard {
-                        Button {
-                            AppHaptics.buttonTap()
-                            isShowingMinutePicker = true
-                        } label: {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Time")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-
-                                    Text(RequestMinuteFormatting.label(requestedMinutes))
-                                        .font(.title3.weight(.semibold).monospacedDigit())
-                                        .foregroundStyle(.primary)
-                                }
-
-                                Spacer()
-
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .appCardRow()
-                        }
-                        .buttonStyle(.plain)
-
-                        AppCardDivider()
-
-                        TextField("Optional message", text: $message, axis: .vertical)
-                            .lineLimit(2...4)
-                            .appCardRow()
-                    }
-                }
-
-                AppSection("Friends") {
-                    AppCard {
-                        ForEach(Array(friends.enumerated()), id: \.element.id) { index, friend in
-                            if index > 0 {
-                                AppCardDivider()
-                            }
-                            Button {
-                                AppHaptics.selectionChanged()
-                                if selectedFriendIDs.contains(friend.id) {
-                                    selectedFriendIDs.remove(friend.id)
-                                } else {
-                                    selectedFriendIDs.insert(friend.id)
-                                }
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Avatar(colorHex: friend.avatarColorHex, initials: friend.name.initials)
-                                        .frame(width: 44, height: 44)
-
-                                    Text(friend.name)
-                                        .font(.subheadline.weight(.medium))
-                                        .lineLimit(1)
-
-                                    Spacer()
-
-                                    Image(systemName: selectedFriendIDs.contains(friend.id) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(selectedFriendIDs.contains(friend.id) ? Color.accentColor : Color.secondary)
-                                }
-                                .appCardRow()
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Request Time")
+            requestStepContent
+                .navigationTitle(navigationTitle)
             .safeAreaInset(edge: .bottom) {
-                sendButton
+                bottomBar
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1111,8 +1064,253 @@ struct FriendApprovalRequestView: View {
         }
     }
 
+    private var navigationTitle: String {
+        switch requestStep {
+        case .capture:
+            return "Take Pleading Photo"
+        case .review:
+            return "Photo"
+        case .details:
+            return "Request Time"
+        }
+    }
+
     private var canSendRequest: Bool {
-        !selectedFriendIDs.isEmpty
+        !selectedFriendIDs.isEmpty && selectedPhotoData != nil
+    }
+
+    @ViewBuilder
+    private var requestStepContent: some View {
+        switch requestStep {
+        case .capture:
+            captureStep
+        case .review:
+            reviewStep
+        case .details:
+            detailsStep
+        }
+    }
+
+    @ViewBuilder
+    private var captureStep: some View {
+        #if canImport(UIKit)
+        FriendRequestCameraCaptureView { image in
+            acceptCapturedPhoto(image)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .ignoresSafeArea(edges: .bottom)
+        #else
+        AppScreenScroll(backgroundStyle: .white) {
+            AppCard {
+                ContentUnavailableView(
+                    "Camera Unavailable",
+                    systemImage: "camera.fill",
+                    description: Text("Photo requests need camera access on an iPhone.")
+                )
+                .appCardRow(verticalPadding: 24)
+            }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var reviewStep: some View {
+        AppScreenScroll(backgroundStyle: .white) {
+            if let selectedPhotoData, let image = requestImage(from: selectedPhotoData) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(4 / 5, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.18), radius: 18, y: 10)
+            } else {
+                AppCard {
+                    ContentUnavailableView(
+                        "Photo Not Ready",
+                        systemImage: "camera.fill",
+                        description: Text("Retake the photo to continue.")
+                    )
+                    .appCardRow(verticalPadding: 24)
+                }
+            }
+        }
+    }
+
+    private var detailsStep: some View {
+        AppScreenScroll(backgroundStyle: .white) {
+            AppSection("Photo") {
+                AppCard {
+                    compactPhotoPreview
+                        .appCardRow(verticalPadding: 12)
+                }
+            }
+
+            AppSection("Request") {
+                AppCard {
+                    Button {
+                        AppHaptics.buttonTap()
+                        isShowingMinutePicker = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Time")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                Text(RequestMinuteFormatting.label(requestedMinutes))
+                                    .font(.title3.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(.primary)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .appCardRow()
+                    }
+                    .buttonStyle(.plain)
+
+                    AppCardDivider()
+
+                    TextField("Optional message", text: $message, axis: .vertical)
+                        .lineLimit(2...4)
+                        .appCardRow()
+                }
+            }
+
+            AppSection("Friends") {
+                AppCard {
+                    ForEach(Array(friends.enumerated()), id: \.element.id) { index, friend in
+                        if index > 0 {
+                            AppCardDivider()
+                        }
+                        Button {
+                            AppHaptics.selectionChanged()
+                            if selectedFriendIDs.contains(friend.id) {
+                                selectedFriendIDs.remove(friend.id)
+                            } else {
+                                selectedFriendIDs.insert(friend.id)
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Avatar(colorHex: friend.avatarColorHex, initials: friend.name.initials)
+                                    .frame(width: 44, height: 44)
+
+                                Text(friend.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+
+                                Spacer()
+
+                                Image(systemName: selectedFriendIDs.contains(friend.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(selectedFriendIDs.contains(friend.id) ? Color.accentColor : Color.secondary)
+                            }
+                            .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var compactPhotoPreview: some View {
+        HStack(spacing: 12) {
+            if let selectedPhotoData, let image = requestImage(from: selectedPhotoData) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 62, height: 78)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .clipped()
+            } else {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.secondary.opacity(0.14))
+                    .frame(width: 62, height: 78)
+                    .overlay {
+                        Image(systemName: "camera.fill")
+                            .foregroundStyle(.secondary)
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Pleading photo")
+                    .font(.subheadline.weight(.semibold))
+                Text("Included with this request.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("Retake") {
+                returnToCamera()
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    @ViewBuilder
+    private var bottomBar: some View {
+        switch requestStep {
+        case .capture:
+            EmptyView()
+        case .review:
+            reviewButtons
+        case .details:
+            sendButton
+        }
+    }
+
+    private var reviewButtons: some View {
+        HStack(spacing: 12) {
+            Button {
+                returnToCamera()
+            } label: {
+                Text("Retake")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+            }
+
+            Button {
+                AppHaptics.buttonTap()
+                requestStep = .details
+            } label: {
+                Text("Continue")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.white)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.accentColor)
+            }
+            .disabled(selectedPhotoData == nil)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.regularMaterial)
     }
 
     private var sendButton: some View {
@@ -1148,12 +1346,39 @@ struct FriendApprovalRequestView: View {
             groupID: group.id,
             seconds: TimeInterval(requestedMinutes * 60),
             selectedFriendIDs: Array(selectedFriendIDs),
-            message: message
+            message: message,
+            photoJPEGData: selectedPhotoData
         ) {
             AppHaptics.buttonTap()
             dismiss()
         }
     }
+
+    #if canImport(UIKit)
+    private func acceptCapturedPhoto(_ image: UIImage) {
+        if let data = image.requestPhotoJPEGData() {
+            selectedPhotoData = data
+            requestStep = .review
+            AppHaptics.buttonTap()
+        } else {
+            model.message = "Could not prepare that photo."
+        }
+    }
+
+    private func returnToCamera() {
+        AppHaptics.buttonTap()
+        selectedPhotoData = nil
+        requestStep = .capture
+    }
+
+    private func requestImage(from data: Data) -> UIImage? {
+        UIImage(data: data)
+    }
+    #else
+    private func returnToCamera() {
+        model.message = "Camera is unavailable on this device."
+    }
+    #endif
 }
 
 private struct FriendChoice: Identifiable {
@@ -1161,6 +1386,562 @@ private struct FriendChoice: Identifiable {
     let name: String
     let avatarColorHex: String
 }
+
+#if canImport(UIKit)
+private struct FriendRequestCameraCaptureView: UIViewControllerRepresentable {
+    let showsCloseButton: Bool
+    let onCancel: (() -> Void)?
+    let onImage: (UIImage) -> Void
+
+    init(
+        showsCloseButton: Bool = false,
+        onCancel: (() -> Void)? = nil,
+        onImage: @escaping (UIImage) -> Void
+    ) {
+        self.showsCloseButton = showsCloseButton
+        self.onCancel = onCancel
+        self.onImage = onImage
+    }
+
+    func makeUIViewController(context: Context) -> FriendRequestCameraViewController {
+        FriendRequestCameraViewController(
+            showsCloseButton: showsCloseButton,
+            onCapture: { image in
+                onImage(image)
+            },
+            onCancel: {
+                onCancel?()
+            }
+        )
+    }
+
+    func updateUIViewController(_ uiViewController: FriendRequestCameraViewController, context: Context) {}
+}
+
+private final class FriendRequestCameraViewController: UIViewController, @preconcurrency AVCapturePhotoCaptureDelegate {
+    private let onCapture: (UIImage) -> Void
+    private let onCancel: (() -> Void)?
+    private let showsCloseButton: Bool
+    private let session = AVCaptureSession()
+    private let photoOutput = AVCapturePhotoOutput()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var activeInput: AVCaptureDeviceInput?
+    private var currentPosition: AVCaptureDevice.Position = .front
+    private var isConfigured = false
+    private var isCaptureInFlight = false
+    private var isSelfieLightEnabled = false
+    private var brightnessBeforeSelfieLight: CGFloat?
+
+    private let previewView = UIView()
+    private let bottomScrimView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let closeButton = UIButton(type: .system)
+    private let selfieLightButton = UIButton(type: .system)
+    private let selfieLightOverlayView = UIView()
+    private let flipButton = UIButton(type: .system)
+    private let shutterButton = UIButton(type: .custom)
+    private let shutterInnerView = UIView()
+    private let unavailableView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let unavailableTitleLabel = UILabel()
+    private let unavailableDetailLabel = UILabel()
+    private let focusRingView = UIView()
+
+    init(
+        showsCloseButton: Bool,
+        onCapture: @escaping (UIImage) -> Void,
+        onCancel: (() -> Void)?
+    ) {
+        self.showsCloseButton = showsCloseButton
+        self.onCapture = onCapture
+        self.onCancel = onCancel
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        configureInterface()
+        requestAccessAndConfigureCamera()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = previewView.bounds
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        restoreSelfieLight()
+        if session.isRunning {
+            session.stopRunning()
+        }
+    }
+
+    private func configureInterface() {
+        view.backgroundColor = .black
+
+        previewView.translatesAutoresizingMaskIntoConstraints = false
+        previewView.backgroundColor = .black
+        view.addSubview(previewView)
+
+        selfieLightOverlayView.translatesAutoresizingMaskIntoConstraints = false
+        selfieLightOverlayView.backgroundColor = .white
+        selfieLightOverlayView.alpha = 0
+        selfieLightOverlayView.isUserInteractionEnabled = false
+        view.addSubview(selfieLightOverlayView)
+
+        bottomScrimView.translatesAutoresizingMaskIntoConstraints = false
+        bottomScrimView.clipsToBounds = true
+        view.addSubview(bottomScrimView)
+
+        configureRoundIconButton(closeButton, systemName: "xmark", pointSize: 18)
+        closeButton.isHidden = !showsCloseButton
+        closeButton.addTarget(self, action: #selector(cancelCapture), for: .touchUpInside)
+        view.addSubview(closeButton)
+
+        configureRoundIconButton(selfieLightButton, systemName: "bolt.slash.fill", pointSize: 20)
+        selfieLightButton.addTarget(self, action: #selector(toggleSelfieLight), for: .touchUpInside)
+        view.addSubview(selfieLightButton)
+
+        configureRoundIconButton(flipButton, systemName: "arrow.triangle.2.circlepath.camera", pointSize: 21)
+        flipButton.addTarget(self, action: #selector(switchCamera), for: .touchUpInside)
+        view.addSubview(flipButton)
+
+        shutterButton.translatesAutoresizingMaskIntoConstraints = false
+        shutterButton.backgroundColor = UIColor.white.withAlphaComponent(0.16)
+        shutterButton.layer.cornerRadius = 42
+        shutterButton.layer.borderColor = UIColor.white.cgColor
+        shutterButton.layer.borderWidth = 5
+        shutterButton.addTarget(self, action: #selector(capturePhoto), for: .touchUpInside)
+        view.addSubview(shutterButton)
+
+        shutterInnerView.translatesAutoresizingMaskIntoConstraints = false
+        shutterInnerView.backgroundColor = .white
+        shutterInnerView.isUserInteractionEnabled = false
+        shutterInnerView.layer.cornerRadius = 28
+        shutterButton.addSubview(shutterInnerView)
+
+        unavailableView.translatesAutoresizingMaskIntoConstraints = false
+        unavailableView.layer.cornerRadius = 22
+        unavailableView.clipsToBounds = true
+        unavailableView.isHidden = true
+        view.addSubview(unavailableView)
+
+        unavailableTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        unavailableTitleLabel.font = .preferredFont(forTextStyle: .headline)
+        unavailableTitleLabel.textColor = .white
+        unavailableTitleLabel.textAlignment = .center
+        unavailableView.contentView.addSubview(unavailableTitleLabel)
+
+        unavailableDetailLabel.translatesAutoresizingMaskIntoConstraints = false
+        unavailableDetailLabel.font = .preferredFont(forTextStyle: .footnote)
+        unavailableDetailLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+        unavailableDetailLabel.textAlignment = .center
+        unavailableDetailLabel.numberOfLines = 3
+        unavailableView.contentView.addSubview(unavailableDetailLabel)
+
+        focusRingView.frame = CGRect(x: 0, y: 0, width: 78, height: 78)
+        focusRingView.layer.borderColor = UIColor.white.cgColor
+        focusRingView.layer.borderWidth = 1.5
+        focusRingView.layer.cornerRadius = 39
+        focusRingView.alpha = 0
+        focusRingView.isUserInteractionEnabled = false
+        previewView.addSubview(focusRingView)
+
+        let focusTap = UITapGestureRecognizer(target: self, action: #selector(focusPreview(_:)))
+        previewView.addGestureRecognizer(focusTap)
+
+        NSLayoutConstraint.activate([
+            previewView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            previewView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            previewView.topAnchor.constraint(equalTo: view.topAnchor),
+            previewView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            selfieLightOverlayView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            selfieLightOverlayView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            selfieLightOverlayView.topAnchor.constraint(equalTo: view.topAnchor),
+            selfieLightOverlayView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            bottomScrimView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bottomScrimView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bottomScrimView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            bottomScrimView.heightAnchor.constraint(equalToConstant: 154),
+
+            closeButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 18),
+            closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 14),
+            closeButton.widthAnchor.constraint(equalToConstant: 46),
+            closeButton.heightAnchor.constraint(equalToConstant: 46),
+
+            selfieLightButton.trailingAnchor.constraint(equalTo: flipButton.leadingAnchor, constant: -12),
+            selfieLightButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 14),
+            selfieLightButton.widthAnchor.constraint(equalToConstant: 46),
+            selfieLightButton.heightAnchor.constraint(equalToConstant: 46),
+
+            flipButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -18),
+            flipButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 14),
+            flipButton.widthAnchor.constraint(equalToConstant: 46),
+            flipButton.heightAnchor.constraint(equalToConstant: 46),
+
+            shutterButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            shutterButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -28),
+            shutterButton.widthAnchor.constraint(equalToConstant: 84),
+            shutterButton.heightAnchor.constraint(equalToConstant: 84),
+
+            shutterInnerView.centerXAnchor.constraint(equalTo: shutterButton.centerXAnchor),
+            shutterInnerView.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
+            shutterInnerView.widthAnchor.constraint(equalToConstant: 56),
+            shutterInnerView.heightAnchor.constraint(equalToConstant: 56),
+
+            unavailableView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            unavailableView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            unavailableView.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 28),
+            unavailableView.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -28),
+            unavailableView.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+
+            unavailableTitleLabel.topAnchor.constraint(equalTo: unavailableView.contentView.topAnchor, constant: 22),
+            unavailableTitleLabel.leadingAnchor.constraint(equalTo: unavailableView.contentView.leadingAnchor, constant: 20),
+            unavailableTitleLabel.trailingAnchor.constraint(equalTo: unavailableView.contentView.trailingAnchor, constant: -20),
+
+            unavailableDetailLabel.topAnchor.constraint(equalTo: unavailableTitleLabel.bottomAnchor, constant: 8),
+            unavailableDetailLabel.leadingAnchor.constraint(equalTo: unavailableView.contentView.leadingAnchor, constant: 20),
+            unavailableDetailLabel.trailingAnchor.constraint(equalTo: unavailableView.contentView.trailingAnchor, constant: -20),
+            unavailableDetailLabel.bottomAnchor.constraint(equalTo: unavailableView.contentView.bottomAnchor, constant: -22)
+        ])
+    }
+
+    private func configureRoundIconButton(_ button: UIButton, systemName: String, pointSize: CGFloat) {
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.tintColor = .white
+        button.backgroundColor = UIColor.black.withAlphaComponent(0.34)
+        button.layer.cornerRadius = 23
+        button.layer.borderWidth = 0.8
+        button.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+
+        let configuration = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+        button.setImage(UIImage(systemName: systemName, withConfiguration: configuration), for: .normal)
+    }
+
+    private func updateSelfieLightButton() {
+        let isFrontCamera = currentPosition == .front
+        selfieLightButton.isHidden = !isFrontCamera
+        selfieLightButton.isEnabled = isFrontCamera && !isCaptureInFlight
+
+        let imageName = isSelfieLightEnabled ? "bolt.fill" : "bolt.slash.fill"
+        let configuration = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
+        selfieLightButton.setImage(UIImage(systemName: imageName, withConfiguration: configuration), for: .normal)
+        selfieLightButton.backgroundColor = isSelfieLightEnabled
+            ? UIColor.white.withAlphaComponent(0.84)
+            : UIColor.black.withAlphaComponent(0.34)
+        selfieLightButton.tintColor = isSelfieLightEnabled ? .black : .white
+    }
+
+    private func requestAccessAndConfigureCamera() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            configureCamera(position: currentPosition)
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] isGranted in
+                DispatchQueue.main.async {
+                    guard let self else {
+                        return
+                    }
+
+                    if isGranted {
+                        self.configureCamera(position: self.currentPosition)
+                    } else {
+                        self.showUnavailable(
+                            title: "Camera Access Off",
+                            detail: "Enable camera access to send a photo request."
+                        )
+                    }
+                }
+            }
+        case .denied, .restricted:
+            showUnavailable(
+                title: "Camera Access Off",
+                detail: "Enable camera access to send a photo request."
+            )
+        @unknown default:
+            showUnavailable(
+                title: "Camera Unavailable",
+                detail: "Try again after reopening the app."
+            )
+        }
+    }
+
+    private func configureCamera(position: AVCaptureDevice.Position) {
+        do {
+            try configureSession(position: position)
+            if !session.isRunning {
+                session.startRunning()
+            }
+
+            attachPreviewLayerIfNeeded()
+            setCaptureControlsEnabled(true)
+            updateSelfieLightButton()
+            unavailableView.isHidden = true
+        } catch {
+            showUnavailable(
+                title: "Camera Unavailable",
+                detail: "This device cannot start a camera preview."
+            )
+        }
+    }
+
+    private func configureSession(position: AVCaptureDevice.Position) throws {
+        session.beginConfiguration()
+        session.sessionPreset = .photo
+
+        if let activeInput {
+            session.removeInput(activeInput)
+        }
+
+        guard let device = cameraDevice(position: position) else {
+            session.commitConfiguration()
+            throw FriendRequestCameraError.noCamera
+        }
+
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else {
+            session.commitConfiguration()
+            throw FriendRequestCameraError.cannotAddInput
+        }
+
+        session.addInput(input)
+        activeInput = input
+        currentPosition = position
+
+        if !isConfigured {
+            guard session.canAddOutput(photoOutput) else {
+                session.commitConfiguration()
+                throw FriendRequestCameraError.cannotAddOutput
+            }
+
+            session.addOutput(photoOutput)
+            isConfigured = true
+        }
+
+        session.commitConfiguration()
+    }
+
+    private func attachPreviewLayerIfNeeded() {
+        if previewLayer == nil {
+            let layer = AVCaptureVideoPreviewLayer(session: session)
+            layer.videoGravity = .resizeAspectFill
+            previewView.layer.insertSublayer(layer, at: 0)
+            previewLayer = layer
+        }
+
+        previewLayer?.frame = previewView.bounds
+        updatePreviewMirroring()
+    }
+
+    private func cameraDevice(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
+            ?? AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: position)
+            ?? AVCaptureDevice.default(for: .video)
+    }
+
+    private func showUnavailable(title: String, detail: String) {
+        unavailableTitleLabel.text = title
+        unavailableDetailLabel.text = detail
+        unavailableView.isHidden = false
+        setCaptureControlsEnabled(false)
+    }
+
+    private func setCaptureControlsEnabled(_ isEnabled: Bool) {
+        shutterButton.isEnabled = isEnabled
+        flipButton.isEnabled = isEnabled
+        selfieLightButton.isEnabled = isEnabled && currentPosition == .front
+        shutterButton.alpha = isEnabled ? 1 : 0.38
+        flipButton.alpha = isEnabled ? 1 : 0.38
+        selfieLightButton.alpha = isEnabled ? 1 : 0.38
+    }
+
+    private func updatePreviewMirroring() {
+        guard let connection = previewLayer?.connection, connection.isVideoMirroringSupported else {
+            return
+        }
+
+        connection.automaticallyAdjustsVideoMirroring = false
+        connection.isVideoMirrored = currentPosition == .front
+        updateSelfieLightButton()
+    }
+
+    @objc private func cancelCapture() {
+        onCancel?()
+    }
+
+    @objc private func switchCamera() {
+        guard !isCaptureInFlight else {
+            return
+        }
+
+        AppHaptics.selectionChanged()
+        let nextPosition: AVCaptureDevice.Position = currentPosition == .front ? .back : .front
+        configureCamera(position: nextPosition)
+    }
+
+    @objc private func toggleSelfieLight() {
+        guard currentPosition == .front, !isCaptureInFlight else {
+            return
+        }
+
+        AppHaptics.selectionChanged()
+        isSelfieLightEnabled.toggle()
+        updateSelfieLightButton()
+    }
+
+    @objc private func capturePhoto() {
+        guard !isCaptureInFlight, isConfigured else {
+            return
+        }
+
+        isCaptureInFlight = true
+        setCaptureControlsEnabled(false)
+        UIView.animate(withDuration: 0.10, animations: {
+            self.shutterButton.transform = CGAffineTransform(scaleX: 0.90, y: 0.90)
+        }, completion: { _ in
+            UIView.animate(withDuration: 0.14) {
+                self.shutterButton.transform = .identity
+            }
+        })
+
+        if currentPosition == .front, isSelfieLightEnabled {
+            prepareSelfieLight()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                self.performPhotoCapture()
+            }
+        } else {
+            performPhotoCapture()
+        }
+    }
+
+    private func performPhotoCapture() {
+        let settings = AVCapturePhotoSettings()
+        if let connection = photoOutput.connection(with: .video), connection.isVideoMirroringSupported {
+            connection.isVideoMirrored = currentPosition == .front
+        }
+
+        photoOutput.capturePhoto(with: settings, delegate: self)
+    }
+
+    private func prepareSelfieLight() {
+        if brightnessBeforeSelfieLight == nil {
+            brightnessBeforeSelfieLight = UIScreen.main.brightness
+        }
+
+        UIScreen.main.brightness = 1
+        UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseOut]) {
+            self.selfieLightOverlayView.alpha = 0.92
+        }
+    }
+
+    private func restoreSelfieLight() {
+        if let brightnessBeforeSelfieLight {
+            UIScreen.main.brightness = brightnessBeforeSelfieLight
+            self.brightnessBeforeSelfieLight = nil
+        }
+
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn]) {
+            self.selfieLightOverlayView.alpha = 0
+        }
+    }
+
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishProcessingPhoto photo: AVCapturePhoto,
+        error: Error?
+    ) {
+        if
+            error == nil,
+            let data = photo.fileDataRepresentation(),
+            let image = UIImage(data: data)
+        {
+            DispatchQueue.main.async {
+                self.restoreSelfieLight()
+                self.onCapture(image)
+            }
+            return
+        }
+
+        DispatchQueue.main.async {
+            self.restoreSelfieLight()
+            self.isCaptureInFlight = false
+            self.setCaptureControlsEnabled(true)
+            self.updateSelfieLightButton()
+            self.showUnavailable(
+                title: "Photo Failed",
+                detail: "Try taking the photo again."
+            )
+        }
+    }
+
+    @objc private func focusPreview(_ recognizer: UITapGestureRecognizer) {
+        let point = recognizer.location(in: previewView)
+        animateFocusRing(at: point)
+
+        guard let previewLayer, let device = activeInput?.device else {
+            return
+        }
+
+        let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: point)
+        do {
+            try device.lockForConfiguration()
+            if device.isFocusPointOfInterestSupported {
+                device.focusPointOfInterest = devicePoint
+                device.focusMode = .autoFocus
+            }
+            if device.isExposurePointOfInterestSupported {
+                device.exposurePointOfInterest = devicePoint
+                device.exposureMode = .continuousAutoExposure
+            }
+            device.unlockForConfiguration()
+        } catch {
+            return
+        }
+    }
+
+    private func animateFocusRing(at point: CGPoint) {
+        focusRingView.center = point
+        focusRingView.transform = CGAffineTransform(scaleX: 1.25, y: 1.25)
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut]) {
+            self.focusRingView.alpha = 1
+            self.focusRingView.transform = .identity
+        } completion: { _ in
+            UIView.animate(withDuration: 0.24, delay: 0.28, options: [.curveEaseIn]) {
+                self.focusRingView.alpha = 0
+            }
+        }
+    }
+
+    private enum FriendRequestCameraError: Error {
+        case noCamera
+        case cannotAddInput
+        case cannotAddOutput
+    }
+}
+
+private extension UIImage {
+    func requestPhotoJPEGData(maxPixel: CGFloat = 1_400, compressionQuality: CGFloat = 0.82) -> Data? {
+        let largestSide = max(size.width, size.height)
+        guard largestSide > maxPixel else {
+            return jpegData(compressionQuality: compressionQuality)
+        }
+
+        let scale = maxPixel / largestSide
+        let targetSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let resized = renderer.image { _ in
+            draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+        return resized.jpegData(compressionQuality: compressionQuality)
+    }
+}
+#endif
 
 private struct RequestMinuteCarouselPicker: View {
     @Environment(\.dismiss) private var dismiss
@@ -1218,6 +1999,7 @@ private struct SnapshotMetrics: View {
 }
 
 private struct MetricTile: View {
+    @Environment(\.colorScheme) private var colorScheme
     let title: String
     let value: String
 
@@ -1235,11 +2017,21 @@ private struct MetricTile: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.58))
+                .fill(tileBackground)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.82), lineWidth: 0.7)
+                .strokeBorder(tileBorder, lineWidth: 0.7)
         }
+    }
+
+    private var tileBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .tertiarySystemGroupedBackground)
+            : Color.white.opacity(0.58)
+    }
+
+    private var tileBorder: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.82)
     }
 }

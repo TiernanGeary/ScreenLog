@@ -22,6 +22,8 @@
 	<string>1</string>
 	<key>CKSharingSupported</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>ScreenLog needs the camera so you can send a live pleading photo with time requests.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

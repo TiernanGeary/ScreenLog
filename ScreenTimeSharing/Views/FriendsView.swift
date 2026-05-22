@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct FriendsView: View {
     @EnvironmentObject private var model: AppModel
@@ -19,7 +22,7 @@ struct FriendsView: View {
                         FriendLeaderboardCard(
                             entries: leaderboardEntries,
                             addDemoAction: {
-                                #if DEBUG
+                                #if DEBUG && targetEnvironment(simulator)
                                 model.seedDemoFriends()
                                 #endif
                             }
@@ -77,6 +80,7 @@ struct FriendsView: View {
 }
 
 private struct FriendLeaderboardWindowSelector: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var selection: LeaderboardWindow
     @Namespace private var namespace
 
@@ -110,14 +114,24 @@ private struct FriendLeaderboardWindowSelector: View {
         .padding(4)
         .background {
             Capsule()
-                .fill(Color.white.opacity(0.72))
+                .fill(backgroundColor)
                 .overlay {
                     Capsule()
-                        .strokeBorder(Color.white.opacity(0.86), lineWidth: 0.8)
+                        .strokeBorder(borderColor, lineWidth: 0.8)
                 }
-                .shadow(color: Color.black.opacity(0.05), radius: 14, x: 0, y: 7)
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.05), radius: 14, x: 0, y: 7)
         }
         .animation(.snappy(duration: 0.22), value: selection)
+    }
+
+    private var backgroundColor: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .secondarySystemGroupedBackground)
+            : Color.white.opacity(0.72)
+    }
+
+    private var borderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.86)
     }
 
     private func shortLabel(for window: LeaderboardWindow) -> String {
@@ -152,7 +166,7 @@ private struct FriendLeaderboardCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
-                    #if DEBUG
+                    #if DEBUG && targetEnvironment(simulator)
                     Button(action: addDemoAction) {
                         Label("Add Demo Stats", systemImage: "person.3.sequence")
                             .font(.subheadline.weight(.semibold))
@@ -307,11 +321,6 @@ struct FriendSummaryRow: View {
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-
-                Text("\(UsageFormatting.capabilityLabel(friend.capability)) · \(UsageFormatting.lastUpdated(friend.lastUpdated))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
             }
         }
         .padding(.vertical, 6)

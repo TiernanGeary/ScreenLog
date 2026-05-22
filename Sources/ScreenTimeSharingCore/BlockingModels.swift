@@ -528,6 +528,14 @@ public enum BlockFriendRequestLifecycle {
     }
 }
 
+public struct BlockFriendRequestPhotoReference: Codable, Equatable, Sendable {
+    public var localIdentifier: String
+
+    public init(localIdentifier: String) {
+        self.localIdentifier = localIdentifier
+    }
+}
+
 public enum BlockingFriendRequestIntentStore {
     public static let groupIDKey = "PendingShieldFriendRequestGroupID.v1"
     public static let createdAtKey = "PendingShieldFriendRequestCreatedAt.v1"
@@ -581,6 +589,7 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
     public var collectedAt: Date?
     public var expiresAt: Date?
     public var approvedExpiresAt: Date?
+    public var photoReference: BlockFriendRequestPhotoReference?
 
     public init(
         id: String,
@@ -596,7 +605,8 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
         resolvedAt: Date? = nil,
         collectedAt: Date? = nil,
         expiresAt: Date? = nil,
-        approvedExpiresAt: Date? = nil
+        approvedExpiresAt: Date? = nil,
+        photoReference: BlockFriendRequestPhotoReference? = nil
     ) {
         self.id = id
         self.groupID = groupID
@@ -612,6 +622,7 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
         self.collectedAt = collectedAt
         self.expiresAt = expiresAt
         self.approvedExpiresAt = approvedExpiresAt
+        self.photoReference = photoReference
     }
 
     public var pendingExpiresAt: Date {
@@ -866,6 +877,15 @@ public enum BlockingStateResolver {
 
     public static func pendingFriendRequests(in state: BlockingState) -> [BlockFriendRequest] {
         state.friendRequests.filter { $0.status == .pending }
+    }
+
+    public static func pendingReceivedFriendRequests(
+        for userID: String,
+        in state: BlockingState
+    ) -> [BlockFriendRequest] {
+        state.friendRequests
+            .filter { $0.isReceived(by: userID) && $0.status == .pending }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     public static func dailyAllowanceSeconds(for groupID: String, in state: BlockingState) -> TimeInterval? {

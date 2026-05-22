@@ -80,7 +80,7 @@ struct SettingsView: View {
                     }
                 }
 
-                #if DEBUG
+                #if DEBUG && targetEnvironment(simulator)
                 AppSection("Simulator Demo") {
                     AppCard {
                         Button {
