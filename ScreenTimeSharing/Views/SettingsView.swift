@@ -76,6 +76,12 @@ struct SettingsView: View {
                     } label: {
                         Label("Clear Demo Friends", systemImage: "trash")
                     }
+
+                    Button {
+                        model.resetOnboarding()
+                    } label: {
+                        Label("Replay Onboarding", systemImage: "arrow.counterclockwise")
+                    }
                 }
                 #endif
             }

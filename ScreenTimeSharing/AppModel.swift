@@ -58,6 +58,14 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(true, forKey: onboardingKey)
     }
 
+    #if DEBUG
+    func resetOnboarding() {
+        hasCompletedOnboarding = false
+        UserDefaults.standard.set(false, forKey: onboardingKey)
+        message = "Onboarding reset. Relaunch or this screen will switch automatically."
+    }
+    #endif
+
     func updateProfile(displayName: String? = nil, avatarColorHex: String? = nil) {
         if let displayName {
             profile.displayName = displayName
