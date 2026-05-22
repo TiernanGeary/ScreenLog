@@ -1,8 +1,717 @@
 import FamilyControls
 import SwiftUI
 
+struct RequestFeedView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: AppModel
+    var highlightedFriendRequestID: String?
+    var showsDoneButton = true
+
+    private var highlightedFriendRequest: BlockFriendRequest? {
+        guard let highlightedFriendRequestID else {
+            return nil
+        }
+
+        return model.blockingState.friendRequests.first { $0.id == highlightedFriendRequestID }
+    }
+
+    private var attentionRequests: [BlockFriendRequest] {
+        model.blockingState.friendRequests
+            .filter { request in
+                (request.isReceived(by: model.profile.id) && request.status == .pending)
+                    || (request.isSent(by: model.profile.id) && request.status == .approved)
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var receivedFriendRequests: [BlockFriendRequest] {
+        model.blockingState.friendRequests
+            .filter { $0.isReceived(by: model.profile.id) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var sentFriendRequests: [BlockFriendRequest] {
+        model.blockingState.friendRequests
+            .filter { $0.isSent(by: model.profile.id) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var recentQuickRequests: [BlockingRequestListItem] {
+        model.blockingState.requests
+            .map { request in
+                BlockingRequestListItem(
+                    id: "legacy-\(request.id)",
+                    groupID: request.groupID,
+                    duration: request.requestedSeconds,
+                    status: request.status,
+                    createdAt: request.createdAt,
+                    kind: "Quick request",
+                    message: nil
+                )
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    var body: some View {
+        AppScreenScroll(backgroundStyle: .white) {
+            if let highlightedFriendRequest {
+                AppSection("Opened Request") {
+                    AppCard {
+                        friendRequestRow(
+                            highlightedFriendRequest,
+                            direction: direction(for: highlightedFriendRequest),
+                            isHighlighted: true
+                        )
+                        .appCardRow(verticalPadding: 12)
+                    }
+                }
+            }
+
+            AppSection("Needs Attention") {
+                AppCard {
+                    friendRequestList(
+                        attentionRequests,
+                        emptyText: "No requests need attention right now."
+                    )
+                }
+            }
+
+            AppSection("Received") {
+                AppCard {
+                    friendRequestList(
+                        receivedFriendRequests,
+                        emptyText: "No received friend requests yet."
+                    )
+                }
+            }
+
+            AppSection("Sent") {
+                AppCard {
+                    friendRequestList(
+                        sentFriendRequests,
+                        emptyText: "No sent friend requests yet."
+                    )
+                }
+            }
+
+            AppSection("Quick Requests") {
+                AppCard {
+                    if recentQuickRequests.isEmpty {
+                        Text("No quick requests yet.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .appCardRow()
+                    } else {
+                        ForEach(Array(recentQuickRequests.enumerated()), id: \.element.id) { index, request in
+                            if index > 0 {
+                                AppCardDivider()
+                            }
+
+                            requestRow(request)
+                                .appCardRow(verticalPadding: 12)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Request Feed")
+        .onAppear {
+            model.expireStaleFriendRequests()
+        }
+        .toolbar {
+            if showsDoneButton {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        AppHaptics.buttonTap()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func friendRequestList(
+        _ requests: [BlockFriendRequest],
+        emptyText: String
+    ) -> some View {
+        if requests.isEmpty {
+            Text(emptyText)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .appCardRow()
+        } else {
+            ForEach(Array(requests.enumerated()), id: \.element.id) { index, request in
+                if index > 0 {
+                    AppCardDivider()
+                }
+
+                friendRequestRow(
+                    request,
+                    direction: direction(for: request),
+                    isHighlighted: request.id == highlightedFriendRequestID
+                )
+                .appCardRow(verticalPadding: 12)
+            }
+        }
+    }
+
+    private func friendRequestRow(
+        _ request: BlockFriendRequest,
+        direction: FriendRequestDirection,
+        isHighlighted: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            NavigationLink {
+                FriendRequestDetailView(requestID: request.id)
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    let participantName = FriendRequestFeedDisplay.participantName(
+                        for: request,
+                        direction: direction,
+                        profile: model.profile,
+                        friends: model.friendSummaries
+                    )
+
+                    Avatar(
+                        colorHex: FriendRequestFeedDisplay.participantAvatarColorHex(
+                            for: request,
+                            direction: direction,
+                            profile: model.profile,
+                            friends: model.friendSummaries
+                        ),
+                        initials: participantName.initials
+                    )
+                    .frame(width: 40, height: 40)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(participantName)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+
+                            Spacer(minLength: 8)
+
+                            Text(FriendRequestFeedDisplay.relativeRequestAge(request.createdAt))
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Text("\(BlockingDisplayFormatter.durationLabel(request.requestedSeconds)) requested")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        if let message = FriendRequestFeedDisplay.message(for: request) {
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            friendRequestActions(request, direction: direction)
+        }
+        .padding(isHighlighted ? 10 : 0)
+        .background {
+            if isHighlighted {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.blue.opacity(0.08))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func friendRequestActions(
+        _ request: BlockFriendRequest,
+        direction: FriendRequestDirection
+    ) -> some View {
+        switch direction {
+        case .sent:
+            if request.status == .approved {
+                Button {
+                    if model.collectFriendRequest(id: request.id) {
+                        AppHaptics.buttonTap()
+                    }
+                } label: {
+                    Label("Collect", systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.green.opacity(0.12))
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
+                .frame(maxWidth: .infinity)
+            }
+        case .received:
+            if request.status == .pending {
+                HStack(spacing: 8) {
+                    Button {
+                        if model.approveFriendRequest(id: request.id) {
+                            AppHaptics.buttonTap()
+                        }
+                    } label: {
+                        Text("Approve")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.green.opacity(0.12))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
+
+                    Button {
+                        if model.denyFriendRequest(id: request.id) {
+                            AppHaptics.buttonTap()
+                        }
+                    } label: {
+                        Text("Deny")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.red.opacity(0.10))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color(red: 0.86, green: 0.24, blue: 0.22))
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private func requestRow(_ request: BlockingRequestListItem) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "timer")
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(BlockingDisplayFormatter.durationLabel(request.duration)) \(request.kind)")
+                    .font(.subheadline.weight(.semibold))
+                Text(groupName(for: request.groupID))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if let message = request.message {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer()
+
+            Text(request.status.rawValue.capitalized)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func direction(for request: BlockFriendRequest) -> FriendRequestDirection {
+        request.isSent(by: model.profile.id) ? .sent : .received
+    }
+
+    private func groupName(for groupID: String) -> String {
+        model.blockingState.groups.first { $0.id == groupID }?.name ?? "Unknown group"
+    }
+}
+
+private struct FriendRequestDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: AppModel
+    let requestID: String
+
+    private var request: BlockFriendRequest? {
+        model.blockingState.friendRequests.first { $0.id == requestID }
+    }
+
+    var body: some View {
+        AppScreenScroll(backgroundStyle: .white) {
+            if let request {
+                let direction = FriendRequestFeedDisplay.direction(for: request, currentUserID: model.profile.id)
+                let participantName = FriendRequestFeedDisplay.participantName(
+                    for: request,
+                    direction: direction,
+                    profile: model.profile,
+                    friends: model.friendSummaries
+                )
+                let avatarColorHex = FriendRequestFeedDisplay.participantAvatarColorHex(
+                    for: request,
+                    direction: direction,
+                    profile: model.profile,
+                    friends: model.friendSummaries
+                )
+
+                VStack(spacing: 9) {
+                    Avatar(colorHex: avatarColorHex, initials: participantName.initials)
+                        .frame(width: 88, height: 88)
+
+                    Text(participantName)
+                        .font(.title3.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+
+                    Text(FriendRequestFeedDisplay.statusLabel(for: request))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(FriendRequestFeedDisplay.statusColor(for: request))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule()
+                                .fill(FriendRequestFeedDisplay.statusColor(for: request).opacity(0.10))
+                        )
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+
+                AppSection("Request") {
+                    AppCard {
+                        requestSummaryRow(
+                            appName: FriendRequestFeedDisplay.groupName(for: request.groupID, groups: model.blockingState.groups),
+                            duration: BlockingDisplayFormatter.durationLabel(request.requestedSeconds)
+                        )
+
+                        if let message = FriendRequestFeedDisplay.message(for: request) {
+                            Text(message)
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .appCardRow(verticalPadding: 12)
+                        }
+
+                        if let expirationText = detailExpirationText(for: request) {
+                            expirationRow(expirationText)
+                        }
+                    }
+                }
+
+                detailActions(for: request, direction: direction)
+            } else {
+                AppCard {
+                    ContentUnavailableView(
+                        "Request Not Found",
+                        systemImage: "tray",
+                        description: Text("This request may have been removed.")
+                    )
+                    .appCardRow(verticalPadding: 16)
+                }
+            }
+        }
+        .navigationTitle("Request")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(.white.opacity(0.58), lineWidth: 0.75)
+                        )
+                        .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
+            }
+        }
+        .onAppear {
+            model.expireStaleFriendRequests()
+        }
+    }
+
+    @ViewBuilder
+    private func detailActions(for request: BlockFriendRequest, direction: FriendRequestDirection) -> some View {
+        switch direction {
+        case .sent:
+            if request.status == .approved {
+                Button {
+                    if model.collectFriendRequest(id: request.id) {
+                        AppHaptics.buttonTap()
+                    }
+                } label: {
+                    Label("Collect Time", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.green.opacity(0.12))
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
+            }
+        case .received:
+            if request.status == .pending {
+                HStack(spacing: 8) {
+                    Button {
+                        if model.approveFriendRequest(id: request.id) {
+                            AppHaptics.buttonTap()
+                        }
+                    } label: {
+                        Text("Approve")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.green.opacity(0.12))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
+
+                    Button {
+                        if model.denyFriendRequest(id: request.id) {
+                            AppHaptics.buttonTap()
+                        }
+                    } label: {
+                        Text("Deny")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.red.opacity(0.10))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color(red: 0.86, green: 0.24, blue: 0.22))
+                }
+            }
+        }
+    }
+
+    private func detailExpirationText(for request: BlockFriendRequest) -> String? {
+        switch request.status {
+        case .pending:
+            return remainingTimeLabel(until: request.pendingExpiresAt)
+        case .approved:
+            guard let collectionExpiresAt = request.collectionExpiresAt else {
+                return nil
+            }
+            return remainingTimeLabel(until: collectionExpiresAt)
+        case .denied, .expired, .collected:
+            return nil
+        }
+    }
+
+    private func remainingTimeLabel(until date: Date, now: Date = Date()) -> String {
+        let remainingSeconds = max(0, date.timeIntervalSince(now))
+        guard remainingSeconds > 0 else {
+            return "Expired"
+        }
+
+        let hours = Int(remainingSeconds) / 3_600
+        let minutes = max(1, (Int(remainingSeconds) % 3_600 + 59) / 60)
+
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+
+        return "\(minutes)m"
+    }
+
+    private func expirationRow(_ value: String) -> some View {
+        Text("Expires in \(value)")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.trailing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .appCardRow(verticalPadding: 4)
+    }
+
+    private func requestSummaryRow(appName: String, duration: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            HStack(spacing: 8) {
+                AppUsageIcon(name: appName)
+                    .scaleEffect(0.72)
+                    .frame(width: 30, height: 30)
+
+                Text(appName)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 16)
+
+            Text(duration)
+                .font(.subheadline.weight(.semibold))
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+        .appCardRow(verticalPadding: 10)
+    }
+}
+
+private enum FriendRequestFeedDisplay {
+    static func direction(for request: BlockFriendRequest, currentUserID: String) -> FriendRequestDirection {
+        request.isSent(by: currentUserID) ? .sent : .received
+    }
+
+    static func participantName(
+        for request: BlockFriendRequest,
+        direction: FriendRequestDirection,
+        profile: UserProfile,
+        friends: [FriendUsageSummary]
+    ) -> String {
+        switch direction {
+        case .sent:
+            let names = request.selectedFriendIDs.map { friendName($0, profile: profile, friends: friends) }
+            guard let firstName = names.first else {
+                return "Friend"
+            }
+
+            if names.count == 1 {
+                return firstName
+            }
+
+            return "\(firstName) +\(names.count - 1)"
+        case .received:
+            if let requesterID = request.requesterID {
+                return friendName(
+                    requesterID,
+                    profile: profile,
+                    friends: friends,
+                    fallback: request.requesterDisplayName
+                )
+            }
+
+            let trimmedName = request.requesterDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmedName.isEmpty ? "Friend" : trimmedName
+        }
+    }
+
+    static func participantAvatarColorHex(
+        for request: BlockFriendRequest,
+        direction: FriendRequestDirection,
+        profile: UserProfile,
+        friends: [FriendUsageSummary]
+    ) -> String {
+        switch direction {
+        case .sent:
+            guard let firstFriendID = request.selectedFriendIDs.first else {
+                return AppConfiguration.defaultAvatarColor
+            }
+            return friendAvatarColorHex(firstFriendID, profile: profile, friends: friends)
+        case .received:
+            guard let requesterID = request.requesterID else {
+                return AppConfiguration.defaultAvatarColor
+            }
+            return friendAvatarColorHex(requesterID, profile: profile, friends: friends)
+        }
+    }
+
+    static func message(for request: BlockFriendRequest) -> String? {
+        let trimmed = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func relativeRequestAge(_ date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+
+        if seconds < 60 {
+            return "now"
+        }
+
+        if seconds < 3_600 {
+            return "\(Int(seconds / 60))m ago"
+        }
+
+        if seconds < 86_400 {
+            return "\(Int(seconds / 3_600))h ago"
+        }
+
+        return "\(Int(seconds / 86_400))d ago"
+    }
+
+    static func groupName(for groupID: String, groups: [BlockGroup]) -> String {
+        groups.first { $0.id == groupID }?.name ?? "Unknown group"
+    }
+
+    static func statusLabel(for request: BlockFriendRequest) -> String {
+        switch request.status {
+        case .pending:
+            return "Pending"
+        case .approved:
+            return "\(BlockingDisplayFormatter.durationLabel(request.requestedSeconds)) left"
+        case .denied:
+            return "Denied"
+        case .expired:
+            return request.approvedByFriendID == nil ? "Expired" : "Approval expired"
+        case .collected:
+            return "Collected"
+        }
+    }
+
+    static func statusColor(for request: BlockFriendRequest) -> Color {
+        switch request.status {
+        case .pending:
+            return .secondary
+        case .approved, .collected:
+            return Color(red: 0.08, green: 0.58, blue: 0.32)
+        case .denied, .expired:
+            return Color(red: 0.86, green: 0.24, blue: 0.22)
+        }
+    }
+
+    private static func friendName(
+        _ id: String,
+        profile: UserProfile,
+        friends: [FriendUsageSummary],
+        fallback: String? = nil
+    ) -> String {
+        if id == profile.id {
+            return profile.displayName == "Me" ? "You" : profile.displayName
+        }
+
+        if let friendName = friends.first(where: { $0.id == id })?.displayName {
+            return friendName
+        }
+
+        let trimmedFallback = fallback?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmedFallback.isEmpty ? id : trimmedFallback
+    }
+
+    private static func friendAvatarColorHex(
+        _ id: String,
+        profile: UserProfile,
+        friends: [FriendUsageSummary]
+    ) -> String {
+        if id == profile.id {
+            return profile.avatarColorHex
+        }
+
+        return friends.first { $0.id == id }?.avatarColorHex ?? AppConfiguration.defaultAvatarColor
+    }
+}
+
 struct BlockingSettingsView: View {
     @EnvironmentObject private var model: AppModel
+    var highlightedFriendRequestID: String?
     var onShowBlockingActivityPicker: (() -> Void)?
 
     @State private var editorDraft: BlockGroupDraft?
@@ -20,6 +729,7 @@ struct BlockingSettingsView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                             Button {
+                                AppHaptics.buttonTap()
                                 editorDraft = BlockGroupDraft()
                             } label: {
                                 Label("Create Block Group", systemImage: "plus")
@@ -31,6 +741,7 @@ struct BlockingSettingsView: View {
                         .appCardRow()
                     } else {
                         Button {
+                            AppHaptics.buttonTap()
                             editorDraft = BlockGroupDraft()
                         } label: {
                             Label("New Block Group", systemImage: "plus.circle.fill")
@@ -52,31 +763,15 @@ struct BlockingSettingsView: View {
                     }
                 }
             }
-
-            AppSection("Recent Requests") {
-                AppCard {
-                    let requests = recentRequests
-                    if requests.isEmpty {
-                        Text("No extra-time requests yet.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .appCardRow()
-                    } else {
-                        ForEach(Array(requests.prefix(6).enumerated()), id: \.element.id) { index, request in
-                            if index > 0 {
-                                AppCardDivider()
-                            }
-                            requestRow(request)
-                                .appCardRow(verticalPadding: 12)
-                        }
-                    }
-                }
-            }
         }
         .navigationTitle("Blocking")
+        .onAppear {
+            model.expireStaleFriendRequests()
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
+                    AppHaptics.buttonTap()
                     editorDraft = BlockGroupDraft()
                 } label: {
                     Image(systemName: "plus")
@@ -104,7 +799,19 @@ struct BlockingSettingsView: View {
         }
     }
 
-    private var recentRequests: [BlockingRequestListItem] {
+    private var sentFriendRequests: [BlockFriendRequest] {
+        model.blockingState.friendRequests
+            .filter { $0.isSent(by: model.profile.id) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var receivedFriendRequests: [BlockFriendRequest] {
+        model.blockingState.friendRequests
+            .filter { $0.isReceived(by: model.profile.id) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var recentQuickRequests: [BlockingRequestListItem] {
         let legacy = model.blockingState.requests.map { request in
             BlockingRequestListItem(
                 id: "legacy-\(request.id)",
@@ -116,18 +823,229 @@ struct BlockingSettingsView: View {
                 message: nil
             )
         }
-        let friend = model.blockingState.friendRequests.map { request in
-            BlockingRequestListItem(
-                id: "friend-\(request.id)",
-                groupID: request.groupID,
-                duration: request.requestedSeconds,
-                status: request.status,
-                createdAt: request.createdAt,
-                kind: "Friend approval",
-                message: request.message.isEmpty ? nil : request.message
-            )
+        return legacy.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var highlightedFriendRequest: BlockFriendRequest? {
+        guard let highlightedFriendRequestID else {
+            return nil
         }
-        return (legacy + friend).sorted { $0.createdAt > $1.createdAt }
+
+        return model.blockingState.friendRequests.first { $0.id == highlightedFriendRequestID }
+    }
+
+    @ViewBuilder
+    private func friendRequestList(
+        _ requests: [BlockFriendRequest],
+        direction: FriendRequestDirection
+    ) -> some View {
+        if requests.isEmpty {
+            Text(direction.emptyText)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .appCardRow()
+        } else {
+            ForEach(Array(requests.enumerated()), id: \.element.id) { index, request in
+                if index > 0 {
+                    AppCardDivider()
+                }
+                friendRequestRow(
+                    request,
+                    direction: direction,
+                    isHighlighted: request.id == highlightedFriendRequestID
+                )
+                    .appCardRow(verticalPadding: 12)
+            }
+        }
+    }
+
+    private func friendRequestRow(
+        _ request: BlockFriendRequest,
+        direction: FriendRequestDirection,
+        isHighlighted: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: direction.systemImage)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(BlockingDisplayFormatter.durationLabel(request.requestedSeconds)) \(direction.title)")
+                        .font(.subheadline.weight(.semibold))
+                    Text(friendRequestDetail(request, direction: direction))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    if let message = friendRequestMessage(request) {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    if let deadline = friendRequestDeadlineText(request) {
+                        Text(deadline)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                Text(friendRequestStatusLabel(request))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(friendRequestStatusColor(request))
+            }
+
+            friendRequestActions(request, direction: direction)
+        }
+        .padding(isHighlighted ? 10 : 0)
+        .background {
+            if isHighlighted {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.blue.opacity(0.08))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func friendRequestActions(
+        _ request: BlockFriendRequest,
+        direction: FriendRequestDirection
+    ) -> some View {
+        switch direction {
+        case .sent:
+            if request.status == .approved {
+                Button {
+                    if model.collectFriendRequest(id: request.id) {
+                        AppHaptics.buttonTap()
+                    }
+                } label: {
+                    Label("Collect", systemImage: "checkmark.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.green.opacity(0.12))
+                        )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
+            }
+        case .received:
+            if request.status == .pending {
+                HStack(spacing: 8) {
+                    Button {
+                        if model.approveFriendRequest(id: request.id) {
+                            AppHaptics.buttonTap()
+                        }
+                    } label: {
+                        Text("Approve")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.green.opacity(0.12))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
+
+                    Button {
+                        if model.denyFriendRequest(id: request.id) {
+                            AppHaptics.buttonTap()
+                        }
+                    } label: {
+                        Text("Deny")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.red.opacity(0.10))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color(red: 0.86, green: 0.24, blue: 0.22))
+                }
+            }
+        }
+    }
+
+    private func friendRequestDetail(
+        _ request: BlockFriendRequest,
+        direction: FriendRequestDirection
+    ) -> String {
+        let group = groupName(for: request.groupID)
+        let party: String
+        switch direction {
+        case .sent:
+            let names = request.selectedFriendIDs.map(friendName).joined(separator: ", ")
+            party = names.isEmpty ? "No friends selected" : "To \(names)"
+        case .received:
+            party = "From \(request.requesterDisplayName ?? request.requesterID.map(friendName) ?? "Friend")"
+        }
+
+        return "\(party) • \(group) • \(request.createdAt.formatted(date: .omitted, time: .shortened))"
+    }
+
+    private func friendRequestMessage(_ request: BlockFriendRequest) -> String? {
+        let trimmed = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func friendRequestDeadlineText(_ request: BlockFriendRequest) -> String? {
+        switch request.status {
+        case .pending:
+            return "Expires \(request.pendingExpiresAt.formatted(date: .omitted, time: .shortened))"
+        case .approved:
+            guard let collectionExpiresAt = request.collectionExpiresAt else {
+                return nil
+            }
+            return "Collect by \(collectionExpiresAt.formatted(date: .abbreviated, time: .shortened))"
+        case .denied, .expired, .collected:
+            return nil
+        }
+    }
+
+    private func friendRequestStatusLabel(_ request: BlockFriendRequest) -> String {
+        switch request.status {
+        case .pending:
+            return "Pending"
+        case .approved:
+            return "\(BlockingDisplayFormatter.durationLabel(request.requestedSeconds)) left"
+        case .denied:
+            return "Denied"
+        case .expired:
+            return request.approvedByFriendID == nil ? "Expired" : "Approval expired"
+        case .collected:
+            return "Collected"
+        }
+    }
+
+    private func friendRequestStatusColor(_ request: BlockFriendRequest) -> Color {
+        switch request.status {
+        case .pending:
+            return .secondary
+        case .approved, .collected:
+            return Color(red: 0.08, green: 0.58, blue: 0.32)
+        case .denied, .expired:
+            return Color(red: 0.86, green: 0.24, blue: 0.22)
+        }
+    }
+
+    private func friendName(_ id: String) -> String {
+        if id == model.profile.id {
+            return model.profile.displayName == "Me" ? "You" : model.profile.displayName
+        }
+
+        return model.friendSummaries.first { $0.id == id }?.displayName ?? id
+    }
+
+    private func direction(for request: BlockFriendRequest) -> FriendRequestDirection {
+        request.isSent(by: model.profile.id) ? .sent : .received
     }
 
     private func groupRow(_ group: BlockGroup) -> some View {
@@ -227,6 +1145,7 @@ struct BlockingSettingsView: View {
     }
 
     private func beginProtectedAction(_ kind: PasswordProtectedAction.Kind, group: BlockGroup) {
+        AppHaptics.buttonTap()
         if kind == .edit, group.requiresPasswordSetup {
             editorDraft = BlockGroupDraft(group: group)
             return
@@ -282,7 +1201,39 @@ private struct BlockingRequestListItem: Identifiable {
     let message: String?
 }
 
-private struct PasswordProtectedAction: Identifiable {
+private enum FriendRequestDirection {
+    case sent
+    case received
+
+    var title: String {
+        switch self {
+        case .sent:
+            return "request"
+        case .received:
+            return "request"
+        }
+    }
+
+    var emptyText: String {
+        switch self {
+        case .sent:
+            return "No sent friend requests yet."
+        case .received:
+            return "No received friend requests yet."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .sent:
+            return "paperplane.fill"
+        case .received:
+            return "tray.and.arrow.down.fill"
+        }
+    }
+}
+
+struct PasswordProtectedAction: Identifiable {
     enum Kind {
         case edit
         case toggleEnabled
@@ -294,7 +1245,7 @@ private struct PasswordProtectedAction: Identifiable {
     let groupID: String
 }
 
-private struct PasswordPromptView: View {
+struct PasswordPromptView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: AppModel
     let action: PasswordProtectedAction
@@ -311,17 +1262,18 @@ private struct PasswordPromptView: View {
     var body: some View {
         NavigationStack {
             AppScreenScroll(backgroundStyle: .white) {
-                AppSection("Password") {
+                AppSection("Passcode") {
                     AppCard {
                         if let group {
                             if group.requiresPasswordSetup {
                                 VStack(alignment: .leading, spacing: 10) {
-                                    Text("\(group.name) needs a password before it can be changed.")
+                                    Text("\(group.name) needs a passcode before it can be changed.")
                                         .font(.subheadline)
                                     Button {
+                                        AppHaptics.buttonTap()
                                         onSetPassword(group)
                                     } label: {
-                                        Label("Set Password", systemImage: "key")
+                                        Label("Set Passcode", systemImage: "key")
                                     }
                                     .buttonStyle(.plain)
                                     .foregroundStyle(.tint)
@@ -329,11 +1281,12 @@ private struct PasswordPromptView: View {
                                 .appCardRow()
                             } else {
                                 VStack(alignment: .leading, spacing: 14) {
-                                    SecureField("Group password", text: $password)
+                                    SecureField("Group passcode", text: $password)
                                         .textContentType(.password)
 
                                     Button {
                                         if model.verifyPassword(for: group, password: password) {
+                                            AppHaptics.buttonTap()
                                             onUnlocked(action.kind, group)
                                         }
                                     } label: {
@@ -359,15 +1312,16 @@ private struct PasswordPromptView: View {
                                         .foregroundStyle(.secondary)
 
                                     if reset.isAvailable() {
-                                        SecureField("New password", text: $newPassword)
+                                        SecureField("New passcode", text: $newPassword)
                                             .textContentType(.newPassword)
                                         Button {
                                             if model.completePasswordReset(for: group, newPassword: newPassword),
                                                let updatedGroup = model.blockingState.groups.first(where: { $0.id == group.id }) {
+                                                AppHaptics.buttonTap()
                                                 onUnlocked(action.kind, updatedGroup)
                                             }
                                         } label: {
-                                            Label("Reset Password", systemImage: "key.fill")
+                                            Label("Reset Passcode", systemImage: "key.fill")
                                         }
                                         .buttonStyle(.plain)
                                         .foregroundStyle(.tint)
@@ -376,6 +1330,7 @@ private struct PasswordPromptView: View {
                                 .appCardRow()
                             } else {
                                 Button {
+                                    AppHaptics.buttonTap()
                                     model.requestPasswordReset(for: group)
                                 } label: {
                                     Label("Forgot Password", systemImage: "clock.badge.exclamationmark")
@@ -392,11 +1347,251 @@ private struct PasswordPromptView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        AppHaptics.buttonTap()
                         dismiss()
                     }
                 }
             }
         }
+    }
+}
+
+struct BlockGroupConfigurationView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: AppModel
+    let groupID: String
+
+    @State private var passwordAction: PasswordProtectedAction?
+    @State private var editorDraft: BlockGroupDraft?
+
+    private var group: BlockGroup? {
+        model.blockingState.groups.first { $0.id == groupID }
+    }
+
+    var body: some View {
+        NavigationStack {
+            AppScreenScroll(backgroundStyle: .white) {
+                if let group {
+                    header(for: group)
+
+                    AppSection("Apps & Websites") {
+                        AppCard {
+                            configurationRow(
+                                title: "Selected items",
+                                value: "\(selectionCount(for: group))",
+                                systemImage: "app.badge"
+                            )
+                        }
+                    }
+
+                    AppSection("Mode") {
+                        AppCard {
+                            modeRows(for: group)
+                        }
+                    }
+
+                    AppSection("Unblock") {
+                        AppCard {
+                            configurationRow(
+                                title: "Limited unblocks",
+                                value: group.unblockConfig.isEnabled ? "On" : "Off",
+                                systemImage: "lock.open"
+                            )
+
+                            if group.unblockConfig.isEnabled {
+                                AppCardDivider()
+
+                                configurationRow(
+                                    title: "Unblocks per day",
+                                    value: "\(group.unblockConfig.unblocksPerDay)",
+                                    systemImage: "number"
+                                )
+
+                                AppCardDivider()
+
+                                configurationRow(
+                                    title: "Max duration",
+                                    value: BlockingDisplayFormatter.fullDurationLabel(group.unblockConfig.maxDurationSeconds),
+                                    systemImage: "timer"
+                                )
+                            }
+                        }
+                    }
+
+                    AppSection("Friend Requests") {
+                        AppCard {
+                            configurationRow(
+                                title: "Friend approval requests",
+                                value: group.friendRequestConfig.isEnabled ? "On" : "Off",
+                                systemImage: "person.2.badge.gearshape"
+                            )
+                        }
+                    }
+
+                    AppSection("Security") {
+                        AppCard {
+                            configurationRow(
+                                title: "Passcode",
+                                value: group.requiresPasswordSetup ? "Needs setup" : "Required",
+                                systemImage: "key"
+                            )
+                        }
+                    }
+                } else {
+                    AppCard {
+                        Text("This block group is no longer available.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .appCardRow()
+                    }
+                }
+            }
+            .navigationTitle(group?.name ?? "Block Group")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                if let group {
+                    editButton(for: group)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        AppHaptics.buttonTap()
+                        dismiss()
+                    }
+                }
+            }
+            .sheet(item: $passwordAction) { action in
+                PasswordPromptView(action: action) { resolvedAction, group in
+                    passwordAction = nil
+                    if case .edit = resolvedAction {
+                        editorDraft = BlockGroupDraft(group: group)
+                    }
+                } onSetPassword: { group in
+                    passwordAction = nil
+                    editorDraft = BlockGroupDraft(group: group)
+                }
+            }
+            .sheet(item: $editorDraft) { draft in
+                NavigationStack {
+                    BlockGroupEditorView(initialDraft: draft) { group, password in
+                        if model.upsertBlockGroup(group, password: password) {
+                            editorDraft = nil
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func header(for group: BlockGroup) -> some View {
+        AppCard(cornerRadius: 24, opacity: 0.78) {
+            HStack(spacing: 14) {
+                Circle()
+                    .fill(Color(hex: group.colorHex))
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        Image(systemName: "lock.shield.fill")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                    }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(group.name)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
+                        .font(.subheadline)
+                        .foregroundStyle(group.isEnabled ? Color.green : Color.secondary)
+                }
+
+                Spacer()
+            }
+            .appCardRow(verticalPadding: 16)
+        }
+    }
+
+    @ViewBuilder
+    private func modeRows(for group: BlockGroup) -> some View {
+        switch group.mode {
+        case .scheduled(let startMinute, let endMinute, let days):
+            configurationRow(title: "Current setting", value: "Schedule", systemImage: "calendar")
+            AppCardDivider()
+            configurationRow(title: "Days", value: BlockRuleKind.dayLabel(days), systemImage: "repeat")
+            AppCardDivider()
+            configurationRow(title: "Start", value: BlockRuleKind.timeLabel(startMinute), systemImage: "clock")
+            AppCardDivider()
+            configurationRow(title: "End", value: BlockRuleKind.timeLabel(endMinute), systemImage: "clock.arrow.circlepath")
+        case .timeLimit(let limitSeconds, let days):
+            configurationRow(title: "Current setting", value: "Daily time limit", systemImage: "hourglass")
+            AppCardDivider()
+            configurationRow(title: "Limit", value: BlockingDisplayFormatter.fullDurationLabel(limitSeconds), systemImage: "timer")
+            AppCardDivider()
+            configurationRow(title: "Days", value: BlockRuleKind.dayLabel(days), systemImage: "repeat")
+        }
+    }
+
+    private func configurationRow(title: String, value: String, systemImage: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 12)
+
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .minimumScaleFactor(0.76)
+        }
+        .appCardRow(verticalPadding: 12)
+    }
+
+    private func editButton(for group: BlockGroup) -> some View {
+        VStack(spacing: 0) {
+            Button {
+                AppHaptics.buttonTap()
+                beginPasscodeEdit(for: group)
+            } label: {
+                Label(group.requiresPasswordSetup ? "Set Passcode to Edit" : "Edit with Passcode", systemImage: "lock.open")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.white)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.accentColor)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.regularMaterial)
+    }
+
+    private func beginPasscodeEdit(for group: BlockGroup) {
+        if group.requiresPasswordSetup {
+            editorDraft = BlockGroupDraft(group: group)
+        } else {
+            passwordAction = PasswordProtectedAction(kind: .edit, groupID: group.id)
+        }
+    }
+
+    private func selectionCount(for group: BlockGroup) -> Int {
+        guard let selection = try? BlockingSelectionCodec.decode(group.selectionData) else {
+            return 0
+        }
+
+        return selection.applicationTokens.count + selection.categoryTokens.count + selection.webDomainTokens.count
     }
 }
 
@@ -417,6 +1612,7 @@ struct BlockGroupEditorView: View {
             AppSection("Apps & Websites To Block") {
                 AppCard {
                     Button {
+                        AppHaptics.buttonTap()
                         isShowingActivityPicker = true
                     } label: {
                         HStack(spacing: 12) {
@@ -450,6 +1646,9 @@ struct BlockGroupEditorView: View {
                     }
                     .pickerStyle(.segmented)
                     .appCardRow()
+                    .onChange(of: draft.modeChoice) {
+                        AppHaptics.selectionChanged()
+                    }
 
                     AppCardDivider()
 
@@ -491,15 +1690,15 @@ struct BlockGroupEditorView: View {
             }
 
             if draft.requiresPassword {
-                AppSection("Password") {
+                AppSection("Passcode") {
                     AppCard {
-                        SecureField("Group password", text: $draft.password)
+                        SecureField("Group passcode", text: $draft.password)
                             .textContentType(.newPassword)
                             .appCardRow()
 
                         AppCardDivider()
 
-                        SecureField("Confirm password", text: $draft.confirmPassword)
+                        SecureField("Confirm passcode", text: $draft.confirmPassword)
                             .textContentType(.newPassword)
                             .appCardRow()
                     }
@@ -510,12 +1709,14 @@ struct BlockGroupEditorView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
+                    AppHaptics.buttonTap()
                     dismiss()
                 }
             }
 
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
+                    AppHaptics.buttonTap()
                     save()
                 }
             }
@@ -537,6 +1738,7 @@ struct BlockGroupEditorView: View {
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") {
+                                AppHaptics.buttonTap()
                                 isShowingActivityPicker = false
                             }
                         }
@@ -616,7 +1818,10 @@ struct BlockGroupEditorView: View {
         isEnabled: Bool,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        Button {
+            AppHaptics.buttonTap()
+            action()
+        } label: {
             HStack {
                 Text(title)
                     .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
@@ -689,12 +1894,16 @@ private struct UnblocksPerDayPicker: View {
             .labelsHidden()
             .frame(height: 220)
             .clipped()
+            .onChange(of: selection) {
+                AppHaptics.selectionChanged()
+            }
         }
         .padding(.horizontal, 24)
         .background(Color.white.ignoresSafeArea())
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") {
+                    AppHaptics.buttonTap()
                     dismiss()
                 }
             }
@@ -718,12 +1927,16 @@ private struct MaxUnblockDurationPicker: View {
             .labelsHidden()
             .frame(height: 220)
             .clipped()
+            .onChange(of: minutes) {
+                AppHaptics.selectionChanged()
+            }
         }
         .padding(.horizontal, 24)
         .background(Color.white.ignoresSafeArea())
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") {
+                    AppHaptics.buttonTap()
                     dismiss()
                 }
             }
@@ -863,6 +2076,7 @@ private struct RepeatDaysPicker: View {
         Binding(
             get: { selectedDays == Set(BlockWeekday.everyDay) },
             set: { isOn in
+                AppHaptics.selectionChanged()
                 if isOn {
                     selectedDays = Set(BlockWeekday.everyDay)
                 } else {
@@ -880,6 +2094,7 @@ private struct RepeatDaysPicker: View {
                 HStack(spacing: 7) {
                     ForEach(BlockWeekday.everyDay) { day in
                         Button {
+                            AppHaptics.selectionChanged()
                             toggle(day)
                         } label: {
                             Text(day.shortLabel)
@@ -924,6 +2139,9 @@ private struct DurationWheelPicker: View {
             .frame(maxWidth: .infinity)
             .frame(height: 170)
             .clipped()
+            .onChange(of: minutes) {
+                AppHaptics.selectionChanged()
+            }
 
             Text("Daily time available")
                 .font(.footnote)

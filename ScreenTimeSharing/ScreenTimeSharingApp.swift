@@ -11,11 +11,15 @@ struct ScreenTimeSharingApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(model)
+                .preferredColorScheme(model.appearanceMode.colorScheme)
                 .onAppear {
                     CloudKitShareAcceptanceCenter.shared.handler = { metadata in
                         Task {
                             await model.acceptShare(metadata: metadata)
                         }
+                    }
+                    FriendRequestNotificationCenter.shared.handler = { requestID in
+                        model.openFriendRequestLog(requestID: requestID)
                     }
                 }
                 .task {

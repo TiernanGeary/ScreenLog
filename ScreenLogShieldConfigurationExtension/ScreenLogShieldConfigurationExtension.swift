@@ -4,25 +4,45 @@ import UIKit
 
 final class ScreenLogShieldConfigurationExtension: ShieldConfigurationDataSource {
     override func configuration(shielding application: Application) -> ShieldConfiguration {
-        configuration(copy: ExtensionBlockingSupport.shieldCopy(matching: nil as ApplicationToken?))
+        configuration(
+            copy: ExtensionBlockingSupport.shieldCopy(
+                matching: application.token,
+                itemName: application.localizedDisplayName
+            )
+        )
     }
 
     override func configuration(
         shielding application: Application,
         in category: ActivityCategory
     ) -> ShieldConfiguration {
-        configuration(copy: ExtensionBlockingSupport.shieldCopy(matching: nil as ApplicationToken?))
+        configuration(
+            copy: ExtensionBlockingSupport.shieldCopy(
+                matching: application.token,
+                itemName: application.localizedDisplayName
+            )
+        )
     }
 
     override func configuration(shielding webDomain: WebDomain) -> ShieldConfiguration {
-        configuration(copy: ExtensionBlockingSupport.shieldCopy(matching: nil as WebDomainToken?))
+        configuration(
+            copy: ExtensionBlockingSupport.shieldCopy(
+                matching: webDomain.token,
+                itemName: "this website"
+            )
+        )
     }
 
     override func configuration(
         shielding webDomain: WebDomain,
         in category: ActivityCategory
     ) -> ShieldConfiguration {
-        configuration(copy: ExtensionBlockingSupport.shieldCopy(matching: nil as WebDomainToken?))
+        configuration(
+            copy: ExtensionBlockingSupport.shieldCopy(
+                matching: webDomain.token,
+                itemName: "this website"
+            )
+        )
     }
 
     private func configuration(copy: ShieldCopy) -> ShieldConfiguration {
@@ -45,7 +65,7 @@ final class ScreenLogShieldConfigurationExtension: ShieldConfigurationDataSource
             primaryButtonBackgroundColor: UIColor.systemBlue,
             secondaryButtonLabel: ShieldConfiguration.Label(
                 text: copy.secondaryButton,
-                color: UIColor.systemBlue
+                color: copy.isFriendRequestEnabled ? UIColor.systemBlue : UIColor.systemGray2
             )
         )
     }

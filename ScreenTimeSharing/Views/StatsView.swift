@@ -1,9 +1,11 @@
 import Charts
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct StatsView: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var isShowingSettings: Bool
     @State private var selectedRange: StatsRange = .week
     @State private var selectedDate = Date()
     @State private var selectedChartBucketID: String?
@@ -41,16 +43,16 @@ struct StatsView: View {
         return UsageStatsBuilder.snapshot(for: selectedChartBucket.date, in: model.usageHistory)
     }
 
-    private var friendEntries: [LeaderboardEntry] {
-        model.leaderboardEntries.filter { $0.userID != model.profile.id }
-    }
-
     private var personalEntry: LeaderboardEntry? {
         StatsBoardBuilder.entry(for: model.profile.id, in: model.leaderboardEntries)
     }
 
-    private var mostExtraEntries: [LeaderboardEntry] {
-        StatsBoardBuilder.mostExtraRequested(entries: friendEntries)
+    private var appUsageRows: [SharedAppUsage] {
+        UsageStatsBuilder.appUsageRows(
+            range: selectedRange,
+            selectedDate: selectedDate,
+            history: model.usageHistory
+        )
     }
 
     var body: some View {
@@ -85,19 +87,13 @@ struct StatsView: View {
                     selectedBucketID: $selectedChartBucketID
                 )
 
-                AppSection("Friends") {
-                    StatsBoardCard(
-                        entries: Array(mostExtraEntries.prefix(4)),
-                        addDemoAction: {
-                            #if DEBUG
-                            model.seedDemoFriends()
-                            #endif
-                        }
-                    )
-                }
+                MostUsedAppsSection(
+                    range: selectedRange,
+                    apps: appUsageRows,
+                    hasScreenTimeData: summary.hasScreenTimeData
+                )
             }
             .navigationTitle("Stats")
-            .settingsToolbar(isShowingSettings: $isShowingSettings)
             .onAppear {
                 model.setLeaderboardWindow(selectedRange.leaderboardWindow)
             }
@@ -116,6 +112,7 @@ struct StatsView: View {
 }
 
 private struct StatsRangeSelector: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var selection: StatsRange
     @Namespace private var namespace
 
@@ -123,6 +120,9 @@ private struct StatsRangeSelector: View {
         HStack(spacing: 4) {
             ForEach(StatsRange.allCases) { range in
                 Button {
+                    if selection != range {
+                        AppHaptics.selectionChanged()
+                    }
                     selection = range
                 } label: {
                     Text(range.label)
@@ -146,14 +146,24 @@ private struct StatsRangeSelector: View {
         .padding(4)
         .background {
             Capsule()
-                .fill(Color.white.opacity(0.72))
+                .fill(backgroundColor)
                 .overlay {
                     Capsule()
-                        .strokeBorder(Color.white.opacity(0.86), lineWidth: 0.8)
+                        .strokeBorder(borderColor, lineWidth: 0.8)
                 }
-                .shadow(color: Color.black.opacity(0.05), radius: 14, x: 0, y: 7)
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.05), radius: 14, x: 0, y: 7)
         }
         .animation(.snappy(duration: 0.22), value: selection)
+    }
+
+    private var backgroundColor: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .secondarySystemGroupedBackground)
+            : Color.white.opacity(0.72)
+    }
+
+    private var borderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.86)
     }
 }
 
@@ -169,6 +179,7 @@ private struct PeriodNavigator: View {
     var body: some View {
         HStack {
             Button {
+                AppHaptics.buttonTap()
                 move(-1)
             } label: {
                 Image(systemName: "chevron.left")
@@ -191,6 +202,7 @@ private struct PeriodNavigator: View {
             Spacer()
 
             Button {
+                AppHaptics.buttonTap()
                 move(1)
             } label: {
                 Image(systemName: "chevron.right")
@@ -254,6 +266,9 @@ private struct DayDateStrip: View {
                     date: date,
                     isSelected: calendar.isDate(date, inSameDayAs: selectedDate)
                 ) {
+                    if !calendar.isDate(date, inSameDayAs: selectedDate) {
+                        AppHaptics.selectionChanged()
+                    }
                     selectedDate = date
                 }
                 .frame(maxWidth: .infinity)
@@ -339,6 +354,7 @@ private struct UsageSummaryCard: View {
                         .font(.system(size: 40, weight: .bold).monospacedDigit())
                         .lineLimit(1)
                         .minimumScaleFactor(0.55)
+                        .rollingNumberTransition(value: primaryDuration)
 
                     Text(primaryCaption)
                         .font(.subheadline.weight(.semibold))
@@ -438,6 +454,7 @@ private struct SummaryValueBlock: View {
                 .font(.title3.bold().monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.62)
+                .rollingNumberTransition(value: value)
 
             Text(title)
                 .font(.caption.weight(.semibold))
@@ -446,6 +463,13 @@ private struct SummaryValueBlock: View {
                 .minimumScaleFactor(0.72)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private extension View {
+    func rollingNumberTransition(value: String) -> some View {
+        contentTransition(.numericText())
+            .animation(.snappy(duration: 0.24), value: value)
     }
 }
 
@@ -466,11 +490,112 @@ private struct UsageChartSection: View {
     }
 }
 
+private struct MostUsedAppsSection: View {
+    let range: StatsRange
+    let apps: [SharedAppUsage]
+    let hasScreenTimeData: Bool
+
+    private var maxDuration: TimeInterval {
+        max(1, apps.map(\.duration).max() ?? 1)
+    }
+
+    var body: some View {
+        AppSection("Most Used Apps") {
+            AppCard {
+                if apps.isEmpty {
+                    ContentUnavailableView(
+                        emptyTitle,
+                        systemImage: "app.dashed",
+                        description: Text(emptyDescription)
+                    )
+                    .appCardRow(verticalPadding: 16)
+                } else {
+                    ForEach(Array(apps.enumerated()), id: \.element.id) { index, app in
+                        MostUsedAppRow(
+                            rank: index + 1,
+                            app: app,
+                            maxDuration: maxDuration
+                        )
+                        .appCardRow(verticalPadding: 9)
+
+                        if index < apps.count - 1 {
+                            AppCardDivider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var emptyTitle: String {
+        hasScreenTimeData ? "No app detail" : "No usage yet"
+    }
+
+    private var emptyDescription: String {
+        if hasScreenTimeData {
+            return "App-level rows are unavailable for this \(range.label.lowercased())."
+        }
+
+        return "Refresh Screen Time after usage is available."
+    }
+}
+
+private struct MostUsedAppRow: View {
+    let rank: Int
+    let app: SharedAppUsage
+    let maxDuration: TimeInterval
+
+    private var ratio: CGFloat {
+        CGFloat(min(1, max(0, app.duration / maxDuration)))
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(rank)")
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 24, alignment: .leading)
+
+            AppUsageIcon(name: app.displayName)
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(app.displayName)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.76)
+
+                    Spacer(minLength: 8)
+
+                    Text(UsageFormatting.duration(app.duration))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.76)
+                }
+
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.12))
+
+                        Capsule()
+                            .fill(Color.blue.opacity(0.72))
+                            .frame(width: max(6, proxy.size.width * ratio))
+                    }
+                }
+                .frame(height: 5)
+            }
+        }
+    }
+}
+
 private struct UsageBarChart: View {
     let range: StatsRange
     let buckets: [UsageChartBucket]
     @Binding var selectedBucketID: String?
     @State private var isPressSelectionActive = false
+    @State private var pinnedBucketID: String?
     @State private var pendingGestureLocation: CGPoint?
 
     private let chartHoldDuration = 0.18
@@ -544,22 +669,44 @@ private struct UsageBarChart: View {
                                     return
                                 }
 
-                                selectBucket(at: value.location, proxy: proxy, geometry: geometry)
+                                updatePressSelection(at: value.location, proxy: proxy, geometry: geometry)
                             }
                             .onEnded { _ in
-                                clearPressSelection()
+                                endPressSelection()
+                            }
+                    )
+                    .simultaneousGesture(
+                        SpatialTapGesture()
+                            .onEnded { value in
+                                togglePinnedSelection(at: value.location, proxy: proxy, geometry: geometry)
                             }
                     )
                     .simultaneousGesture(
                         LongPressGesture(minimumDuration: chartHoldDuration, maximumDistance: .infinity)
                             .onEnded { _ in
                                 isPressSelectionActive = true
+                                AppHaptics.buttonTap()
                                 if let pendingGestureLocation {
-                                    selectBucket(at: pendingGestureLocation, proxy: proxy, geometry: geometry)
+                                    updatePressSelection(at: pendingGestureLocation, proxy: proxy, geometry: geometry)
                                 }
                             }
                     )
             }
+        }
+        .onChange(of: selectedBucketID) { _, newValue in
+            guard !isPressSelectionActive else {
+                return
+            }
+
+            pinnedBucketID = newValue
+        }
+        .onChange(of: buckets.map(\.id)) { _, bucketIDs in
+            guard let pinnedBucketID, !bucketIDs.contains(pinnedBucketID) else {
+                return
+            }
+
+            self.pinnedBucketID = nil
+            selectedBucketID = nil
         }
         .frame(height: range == .week ? 178 : 154)
     }
@@ -606,110 +753,71 @@ private struct UsageBarChart: View {
         }
     }
 
-    private func selectBucket(
+    private func bucketID(
         at location: CGPoint,
         proxy: ChartProxy,
         geometry: GeometryProxy
-    ) {
+    ) -> String? {
         guard let plotFrameAnchor = proxy.plotFrame else {
-            return
+            return nil
         }
 
         let plotFrame = geometry[plotFrameAnchor]
         let xPosition = location.x - plotFrame.origin.x
         guard xPosition >= 0, xPosition <= plotFrame.width else {
-            selectedBucketID = nil
-            return
+            return nil
         }
 
         guard let bucketID = proxy.value(atX: xPosition, as: String.self),
               buckets.contains(where: { $0.id == bucketID }) else {
+            return nil
+        }
+
+        return bucketID
+    }
+
+    private func updatePressSelection(
+        at location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        let bucketID = bucketID(at: location, proxy: proxy, geometry: geometry)
+        if selectedBucketID != bucketID {
+            AppHaptics.selectionChanged()
+        }
+        selectedBucketID = bucketID
+    }
+
+    private func togglePinnedSelection(
+        at location: CGPoint,
+        proxy: ChartProxy,
+        geometry: GeometryProxy
+    ) {
+        guard let bucketID = bucketID(at: location, proxy: proxy, geometry: geometry) else {
+            if selectedBucketID != nil {
+                AppHaptics.selectionChanged()
+            }
+            pinnedBucketID = nil
             selectedBucketID = nil
             return
         }
 
-        selectedBucketID = bucketID
+        let nextBucketID = pinnedBucketID == bucketID ? nil : bucketID
+        if selectedBucketID != nextBucketID {
+            AppHaptics.selectionChanged()
+        }
+        pinnedBucketID = nextBucketID
+        selectedBucketID = nextBucketID
     }
 
-    private func clearPressSelection() {
+    private func endPressSelection() {
+        guard isPressSelectionActive else {
+            pendingGestureLocation = nil
+            return
+        }
+
         isPressSelectionActive = false
         pendingGestureLocation = nil
-        selectedBucketID = nil
-    }
-}
-
-private struct StatsBoardCard: View {
-    let entries: [LeaderboardEntry]
-    let addDemoAction: () -> Void
-
-    var body: some View {
-        AppCard {
-            if entries.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("No friend stats yet")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    #if DEBUG
-                    Button(action: addDemoAction) {
-                        Label("Add Demo Stats", systemImage: "person.3.sequence")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
-                    #endif
-                }
-                .appCardRow()
-            } else {
-                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                    StatsBoardRow(rank: index + 1, entry: entry)
-                        .appCardRow(verticalPadding: 8)
-
-                    if index < entries.count - 1 {
-                        AppCardDivider()
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct StatsBoardRow: View {
-    let rank: Int
-    let entry: LeaderboardEntry
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text("\(rank)")
-                .font(.headline.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 26, alignment: .leading)
-
-            Avatar(colorHex: entry.avatarColorHex, initials: entry.displayName.initials)
-                .frame(width: 40, height: 40)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(entry.displayName)
-                    .font(.headline)
-                    .lineLimit(1)
-
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-            }
-
-            Spacer(minLength: 8)
-
-            Text(UsageFormatting.duration(entry.requestedExtraSeconds))
-                .font(.headline.monospacedDigit())
-                .lineLimit(1)
-                .minimumScaleFactor(0.76)
-        }
-    }
-
-    private var subtitle: String {
-        "\(entry.requestCount) asks · \(entry.emergencyUnlockCount) emergency"
+        selectedBucketID = pinnedBucketID
     }
 }

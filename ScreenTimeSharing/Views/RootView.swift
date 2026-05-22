@@ -24,6 +24,7 @@ struct RootView: View {
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") {
+                                AppHaptics.buttonTap()
                                 model.persistSelection()
                                 isShowingActivityPicker = false
                             }
@@ -38,6 +39,7 @@ struct RootView: View {
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") {
+                                AppHaptics.buttonTap()
                                 model.saveSuggestedSocialBlockGroup()
                                 isShowingBlockingActivityPicker = false
                             }
@@ -45,14 +47,34 @@ struct RootView: View {
                     }
             }
         }
+        .sheet(
+            item: Binding<BlockGroup?>(
+                get: { model.pendingShieldFriendRequestGroup },
+                set: { newValue in
+                    if newValue == nil {
+                        model.clearPendingShieldFriendRequest()
+                    }
+                }
+            )
+        ) { group in
+            FriendApprovalRequestView(group: group)
+        }
     }
 }
 
 private struct AppTabs: View {
+    @EnvironmentObject private var model: AppModel
     @Binding var isShowingActivityPicker: Bool
     @Binding var isShowingBlockingActivityPicker: Bool
     @State private var selection: AppTab = .today
-    @State private var isShowingSettings = false
+    @State private var highlightedFeedRequestID: String?
+
+    private var requestFeedAttentionCount: Int {
+        model.blockingState.friendRequests.filter { request in
+            (request.isReceived(by: model.profile.id) && request.status == .pending)
+                || (request.isSent(by: model.profile.id) && request.status == .approved)
+        }.count
+    }
 
     var body: some View {
         ZStack {
@@ -62,24 +84,26 @@ private struct AppTabs: View {
         }
         .animation(.snappy(duration: 0.22), value: selection)
         .safeAreaInset(edge: .bottom) {
-            GlassTabBar(selection: $selection)
+            GlassTabBar(selection: $selection, feedBadgeCount: requestFeedAttentionCount)
         }
-        .sheet(isPresented: $isShowingSettings) {
-            SettingsView(
-                isShowingActivityPicker: $isShowingActivityPicker,
-                onShowActivityPicker: {
-                    isShowingSettings = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        isShowingActivityPicker = true
-                    }
-                },
-                onShowBlockingActivityPicker: {
-                    isShowingSettings = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        isShowingBlockingActivityPicker = true
-                    }
-                }
-            )
+        .onAppear {
+            if let requestID = model.focusedFriendRequestLogID {
+                presentFriendRequestLog(requestID: requestID)
+                model.clearFocusedFriendRequestLog()
+            }
+        }
+        .onChange(of: model.focusedFriendRequestLogID) { _, requestID in
+            guard let requestID else {
+                return
+            }
+
+            presentFriendRequestLog(requestID: requestID)
+            model.clearFocusedFriendRequestLog()
+        }
+        .onChange(of: selection) { _, newSelection in
+            if newSelection != .feed {
+                highlightedFeedRequestID = nil
+            }
         }
     }
 
@@ -89,21 +113,44 @@ private struct AppTabs: View {
         case .today:
             DashboardView(
                 isShowingActivityPicker: $isShowingActivityPicker,
-                isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker,
-                isShowingSettings: $isShowingSettings
+                isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
             )
         case .stats:
-            StatsView(isShowingSettings: $isShowingSettings)
+            StatsView()
+        case .feed:
+            NavigationStack {
+                RequestFeedView(
+                    highlightedFriendRequestID: highlightedFeedRequestID,
+                    showsDoneButton: false
+                )
+            }
         case .friends:
-            FriendsView(isShowingSettings: $isShowingSettings)
+            FriendsView()
+        case .settings:
+            SettingsView(
+                isShowingActivityPicker: $isShowingActivityPicker,
+                onShowActivityPicker: {
+                    isShowingActivityPicker = true
+                },
+                onShowBlockingActivityPicker: {
+                    isShowingBlockingActivityPicker = true
+                }
+            )
         }
+    }
+
+    private func presentFriendRequestLog(requestID: String) {
+        highlightedFeedRequestID = requestID
+        selection = .feed
     }
 }
 
 private enum AppTab: String, CaseIterable, Identifiable {
     case today
     case stats
+    case feed
     case friends
+    case settings
 
     var id: String { rawValue }
 
@@ -113,8 +160,12 @@ private enum AppTab: String, CaseIterable, Identifiable {
             return "Home"
         case .stats:
             return "Stats"
+        case .feed:
+            return "Feed"
         case .friends:
             return "Friends"
+        case .settings:
+            return "Profile"
         }
     }
 
@@ -124,14 +175,19 @@ private enum AppTab: String, CaseIterable, Identifiable {
             return "house"
         case .stats:
             return "chart.bar.fill"
+        case .feed:
+            return "tray.full"
         case .friends:
             return "person.2"
+        case .settings:
+            return "person.crop.circle"
         }
     }
 }
 
 private struct GlassTabBar: View {
     @Binding var selection: AppTab
+    let feedBadgeCount: Int
     @Namespace private var indicatorNamespace
 
     var body: some View {
@@ -140,8 +196,12 @@ private struct GlassTabBar: View {
                 GlassTabButton(
                     tab: tab,
                     isSelected: selection == tab,
+                    badgeCount: tab == .feed ? feedBadgeCount : 0,
                     namespace: indicatorNamespace
                 ) {
+                    if selection != tab {
+                        AppHaptics.selectionChanged()
+                    }
                     selection = tab
                 }
             }
@@ -159,16 +219,31 @@ private struct GlassTabBar: View {
 }
 
 private struct GlassTabButton: View {
+    @EnvironmentObject private var model: AppModel
     let tab: AppTab
     let isSelected: Bool
+    let badgeCount: Int
     let namespace: Namespace.ID
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 3) {
-                icon
-                    .frame(width: 20, height: 19)
+                ZStack(alignment: .topTrailing) {
+                    icon
+                        .frame(width: tab == .settings ? 24 : 20, height: 22)
+
+                    if badgeCount > 0 {
+                        Text("\(badgeCount)")
+                            .font(.system(size: 8.5, weight: .bold).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .frame(minWidth: 15, minHeight: 15)
+                            .padding(.horizontal, 1.5)
+                            .background(Color.red, in: Capsule())
+                            .offset(x: 9, y: -6)
+                    }
+                }
+                .frame(width: 32, height: 22)
 
                 Text(tab.title)
                     .font(.system(size: 10.5, weight: isSelected ? .semibold : .medium))
@@ -192,13 +267,41 @@ private struct GlassTabButton: View {
 
     @ViewBuilder
     private var icon: some View {
-        if tab == .stats {
+        if tab == .settings {
+            ProfileTabIcon(
+                imageData: model.profile.avatarImageData,
+                colorHex: model.profile.avatarColorHex,
+                initials: model.profile.displayName.initials,
+                isSelected: isSelected
+            )
+        } else if tab == .stats {
             IncreasingBarsIcon(isSelected: isSelected)
         } else {
             Image(systemName: tab.systemImage)
                 .symbolVariant(isSelected ? .fill : .none)
                 .font(.system(size: 16, weight: isSelected ? .bold : .semibold))
         }
+    }
+}
+
+private struct ProfileTabIcon: View {
+    let imageData: Data?
+    let colorHex: String
+    let initials: String
+    let isSelected: Bool
+
+    var body: some View {
+        ProfileAvatar(
+            imageData: imageData,
+            colorHex: colorHex,
+            initials: initials,
+            size: 22
+        )
+        .overlay {
+            Circle()
+                .strokeBorder(isSelected ? Color.primary.opacity(0.20) : Color.white.opacity(0.72), lineWidth: 1)
+        }
+        .shadow(color: Color(hex: colorHex).opacity(isSelected ? 0.12 : 0.0), radius: 5, y: 2)
     }
 }
 

@@ -4,6 +4,7 @@ public struct UserProfile: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var displayName: String
     public var avatarColorHex: String
+    public var avatarImageData: Data?
     public var shareStatus: ShareStatus
     public var updatedAt: Date
 
@@ -11,12 +12,14 @@ public struct UserProfile: Codable, Equatable, Identifiable, Sendable {
         id: String,
         displayName: String,
         avatarColorHex: String,
+        avatarImageData: Data? = nil,
         shareStatus: ShareStatus,
         updatedAt: Date
     ) {
         self.id = id
         self.displayName = displayName
         self.avatarColorHex = avatarColorHex
+        self.avatarImageData = avatarImageData
         self.shareStatus = shareStatus
         self.updatedAt = updatedAt
     }
@@ -648,6 +651,38 @@ public enum UsageStatsBuilder {
                 hourlyDurationsByDayID: hourlyDurationsByDayID,
                 calendar: calendar
             )
+        }
+    }
+
+    public static func appUsageRows(
+        range: StatsRange,
+        selectedDate: Date,
+        history: [DailyUsageSnapshot],
+        calendar: Calendar = .current
+    ) -> [SharedAppUsage] {
+        let interval = periodInterval(for: range, containing: selectedDate, calendar: calendar)
+        let snapshots = snapshots(in: interval, history: history, calendar: calendar)
+        var totals: [String: SharedAppUsage] = [:]
+
+        for snapshot in snapshots {
+            for row in snapshot.appRows {
+                let key = row.bundleIdentifier ?? row.id
+                let existing = totals[key]
+                totals[key] = SharedAppUsage(
+                    id: key,
+                    displayName: existing?.displayName ?? row.displayName,
+                    bundleIdentifier: existing?.bundleIdentifier ?? row.bundleIdentifier,
+                    duration: (existing?.duration ?? 0) + max(0, row.duration)
+                )
+            }
+        }
+
+        return totals.values.sorted { lhs, rhs in
+            if lhs.duration != rhs.duration {
+                return lhs.duration > rhs.duration
+            }
+
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
         }
     }
 

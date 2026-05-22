@@ -67,6 +67,7 @@ struct OnboardingView: View {
                     }
 
                     Button {
+                        AppHaptics.buttonTap()
                         model.completeOnboarding()
                     } label: {
                         Label("Continue", systemImage: "arrow.right")
@@ -132,7 +133,10 @@ private struct OnboardingActionRow: View {
 
             Spacer(minLength: 12)
 
-            Button(actionTitle, action: action)
+            Button(actionTitle) {
+                AppHaptics.buttonTap()
+                action()
+            }
                 .buttonStyle(.bordered)
         }
         .padding(14)

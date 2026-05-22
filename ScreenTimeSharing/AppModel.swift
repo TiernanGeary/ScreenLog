@@ -1,10 +1,47 @@
 import CloudKit
 import FamilyControls
 import Foundation
+import SwiftUI
+import UserNotifications
+
+enum AppAppearanceMode: String, CaseIterable, Identifiable {
+    case dark
+    case light
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .dark:
+            return "Dark"
+        case .light:
+            return "Light"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .dark:
+            return "moon.fill"
+        case .light:
+            return "sun.max.fill"
+        }
+    }
+
+    var colorScheme: ColorScheme {
+        switch self {
+        case .dark:
+            return .dark
+        case .light:
+            return .light
+        }
+    }
+}
 
 @MainActor
 final class AppModel: ObservableObject {
     @Published var profile: UserProfile
+    @Published var appearanceMode: AppAppearanceMode
     @Published var selection: FamilyActivitySelection
     @Published var blockingSelection: FamilyActivitySelection
     @Published var blockingState: BlockingState
@@ -20,6 +57,8 @@ final class AppModel: ObservableObject {
     @Published var isWorking = false
     @Published var hasCompletedOnboarding: Bool
     @Published private(set) var groupUnlockExpirations: [String: Date] = [:]
+    @Published var pendingShieldFriendRequestGroupID: String?
+    @Published var focusedFriendRequestLogID: String?
 
     let snapshotStore: CloudKitUsageSnapshotStore
 
@@ -29,8 +68,10 @@ final class AppModel: ObservableObject {
     private let widgetCacheWriter: AppGroupWidgetCacheWriter
     private let blockingStore: BlockingStateStore
     private let blockingEnforcementService: BlockingEnforcementService
+    private let friendRequestNotificationService: FriendRequestNotificationService
     private let usageHistoryDefaults: UserDefaults?
     private let onboardingKey = "HasCompletedOnboarding.v1"
+    private static let appearanceKey = "AppAppearanceMode.v1"
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
@@ -42,7 +83,8 @@ final class AppModel: ObservableObject {
         snapshotStore: CloudKitUsageSnapshotStore = CloudKitUsageSnapshotStore(),
         widgetCacheWriter: AppGroupWidgetCacheWriter = AppGroupWidgetCacheWriter(),
         blockingStore: BlockingStateStore = BlockingStateStore(),
-        blockingEnforcementService: BlockingEnforcementService = BlockingEnforcementService()
+        blockingEnforcementService: BlockingEnforcementService = BlockingEnforcementService(),
+        friendRequestNotificationService: FriendRequestNotificationService = FriendRequestNotificationService()
     ) {
         self.profileStore = profileStore
         self.selectionStore = selectionStore
@@ -51,17 +93,26 @@ final class AppModel: ObservableObject {
         self.widgetCacheWriter = widgetCacheWriter
         self.blockingStore = blockingStore
         self.blockingEnforcementService = blockingEnforcementService
+        self.friendRequestNotificationService = friendRequestNotificationService
         self.usageHistoryDefaults = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)
         self.profile = profileStore.load()
+        self.appearanceMode = AppAppearanceMode(
+            rawValue: UserDefaults.standard.string(forKey: Self.appearanceKey) ?? ""
+        ) ?? .dark
         self.selection = selectionStore.load()
         self.blockingState = blockingStore.load()
         self.blockingSelection = FamilyActivitySelection()
         self.hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingKey)
         self.screenTimeAuthorization = screenTimeProvider.authorizationLabel()
         loadUsageHistory()
+        expireStaleFriendRequests()
+        loadPendingShieldFriendRequest()
         refreshLocalAccountabilityStats()
+        syncFriendRequestNotifications()
         #if DEBUG
-        seedDemoUsageHistory()
+        let demoNow = Date()
+        seedDemoUsageHistory(now: demoNow)
+        seedDemoFriends(now: demoNow, showsStatusMessage: false)
         #else
         self.localSnapshot = UsageStatsBuilder.snapshot(for: Date(), in: usageHistory)
             ?? usageHistory.sorted { $0.date > $1.date }.first
@@ -85,10 +136,25 @@ final class AppModel: ObservableObject {
             + BlockingStateResolver.pendingFriendRequests(in: blockingState).count
     }
 
+    var pendingShieldFriendRequestGroup: BlockGroup? {
+        guard let pendingShieldFriendRequestGroupID else {
+            return nil
+        }
+
+        return blockingState.groups.first { group in
+            group.id == pendingShieldFriendRequestGroupID
+                && group.isEnabled
+                && group.friendRequestConfig.isEnabled
+        }
+    }
+
     func load() async {
         screenTimeAuthorization = screenTimeProvider.authorizationLabel()
+        expireStaleFriendRequests()
+        loadPendingShieldFriendRequest()
         cloudAvailability = await snapshotStore.cloudAvailability()
         await reloadFriends()
+        syncFriendRequestNotifications()
         syncBlockingEnforcement()
     }
 
@@ -97,13 +163,26 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(true, forKey: onboardingKey)
     }
 
-    func updateProfile(displayName: String? = nil, avatarColorHex: String? = nil) {
+    func setAppearanceMode(_ mode: AppAppearanceMode) {
+        guard appearanceMode != mode else {
+            return
+        }
+
+        appearanceMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.appearanceKey)
+    }
+
+    func updateProfile(displayName: String? = nil, avatarColorHex: String? = nil, avatarImageData: Data? = nil) {
         if let displayName {
             profile.displayName = displayName
         }
 
         if let avatarColorHex {
             profile.avatarColorHex = avatarColorHex
+        }
+
+        if let avatarImageData {
+            profile.avatarImageData = avatarImageData
         }
 
         profile.updatedAt = Date()
@@ -408,6 +487,11 @@ final class AppModel: ObservableObject {
             return false
         }
 
+        guard !selectedFriendIDs.isEmpty else {
+            message = "Choose at least one friend."
+            return false
+        }
+
         let now = Date()
         let request = BlockFriendRequest(
             id: UUID().uuidString,
@@ -415,14 +499,136 @@ final class AppModel: ObservableObject {
             requestedSeconds: BlockingTimeLimitRange.snappedSeconds(seconds),
             selectedFriendIDs: selectedFriendIDs,
             message: requestMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+            requesterID: profile.id,
+            requesterDisplayName: profile.displayName == "Me" ? "You" : profile.displayName,
             createdAt: now
         )
 
         blockingState.friendRequests.insert(request, at: 0)
-        saveBlockingStateWithStatus("Friend request saved locally for this demo build.")
+        clearPendingShieldFriendRequest()
+        saveBlockingStateWithStatus("Friend request sent.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
         return true
+    }
+
+    @discardableResult
+    func approveFriendRequest(id: String) -> Bool {
+        expireStaleFriendRequests()
+        guard let index = blockingState.friendRequests.firstIndex(where: { $0.id == id }) else {
+            message = "Request not found."
+            return false
+        }
+
+        let request = blockingState.friendRequests[index]
+        guard request.isReceived(by: profile.id), request.status == .pending else {
+            message = "Only pending received requests can be approved."
+            return false
+        }
+
+        let now = Date()
+        blockingState.friendRequests[index] = request.resolving(
+            as: .approved,
+            at: now,
+            approvedByFriendID: profile.id
+        )
+        friendRequestNotificationService.clearNotification(for: id)
+        saveBlockingStateWithStatus("Request approved.")
+        refreshLocalAccountabilityStats()
+        writeWidgetCacheSnapshot()
+        return true
+    }
+
+    @discardableResult
+    func denyFriendRequest(id: String) -> Bool {
+        expireStaleFriendRequests()
+        guard let index = blockingState.friendRequests.firstIndex(where: { $0.id == id }) else {
+            message = "Request not found."
+            return false
+        }
+
+        let request = blockingState.friendRequests[index]
+        guard request.isReceived(by: profile.id), request.status == .pending else {
+            message = "Only pending received requests can be denied."
+            return false
+        }
+
+        blockingState.friendRequests[index] = request.resolving(as: .denied, at: Date())
+        friendRequestNotificationService.clearNotification(for: id)
+        saveBlockingStateWithStatus("Request denied.")
+        refreshLocalAccountabilityStats()
+        writeWidgetCacheSnapshot()
+        return true
+    }
+
+    @discardableResult
+    func collectFriendRequest(id: String) -> Bool {
+        expireStaleFriendRequests()
+        guard let index = blockingState.friendRequests.firstIndex(where: { $0.id == id }) else {
+            message = "Request not found."
+            return false
+        }
+
+        let request = blockingState.friendRequests[index]
+        guard request.isSent(by: profile.id), request.status == .approved else {
+            message = "Only approved sent requests can be collected."
+            return false
+        }
+
+        let now = Date()
+        if let collectionExpiresAt = request.collectionExpiresAt, now >= collectionExpiresAt {
+            blockingState.friendRequests[index] = request.expiringIfNeeded(now: now)
+            saveBlockingStateWithStatus("Approved request expired.")
+            refreshLocalAccountabilityStats()
+            writeWidgetCacheSnapshot()
+            return false
+        }
+
+        guard BlockingStateResolver.group(for: request.groupID, in: blockingState) != nil else {
+            message = "Block group no longer exists."
+            return false
+        }
+
+        let duration = BlockingTimeLimitRange.snappedSeconds(request.requestedSeconds)
+        blockingState.unblockSessions.insert(
+            BlockUnblockSession(
+                id: UUID().uuidString,
+                groupID: request.groupID,
+                durationSeconds: duration,
+                startedAt: now,
+                expiresAt: now.addingTimeInterval(duration)
+            ),
+            at: 0
+        )
+        blockingState.friendRequests[index] = request.collecting(at: now)
+        saveBlockingStateWithStatus("Collected \(BlockingDisplayFormatter.durationLabel(duration)) of approved time.")
+        refreshLocalAccountabilityStats()
+        writeWidgetCacheSnapshot()
+        return true
+    }
+
+    @discardableResult
+    func expireStaleFriendRequests(now: Date = Date()) -> Bool {
+        let updatedRequests = blockingState.friendRequests.map { $0.expiringIfNeeded(now: now) }
+        guard updatedRequests != blockingState.friendRequests else {
+            return false
+        }
+
+        blockingState.friendRequests = updatedRequests
+        saveBlockingStateWithStatus("Expired old friend requests.")
+        refreshLocalAccountabilityStats()
+        syncFriendRequestNotifications()
+        writeWidgetCacheSnapshot()
+        return true
+    }
+
+    func openFriendRequestLog(requestID: String) {
+        friendRequestNotificationService.clearNotification(for: requestID)
+        focusedFriendRequestLogID = requestID
+    }
+
+    func clearFocusedFriendRequestLog() {
+        focusedFriendRequestLogID = nil
     }
 
     func requestScreenTimeAuthorization() async {
@@ -551,6 +757,35 @@ final class AppModel: ObservableObject {
         groupUnlockExpirations = groupUnlockExpirations.filter { $0.value > now }
     }
 
+    func clearPendingShieldFriendRequest() {
+        usageHistoryDefaults?.removeObject(forKey: BlockingFriendRequestIntentStore.groupIDKey)
+        usageHistoryDefaults?.removeObject(forKey: BlockingFriendRequestIntentStore.createdAtKey)
+        pendingShieldFriendRequestGroupID = nil
+    }
+
+    private func loadPendingShieldFriendRequest(now: Date = Date()) {
+        guard let groupID = usageHistoryDefaults?.string(forKey: BlockingFriendRequestIntentStore.groupIDKey) else {
+            pendingShieldFriendRequestGroupID = nil
+            return
+        }
+
+        let createdAt = usageHistoryDefaults?.object(forKey: BlockingFriendRequestIntentStore.createdAtKey) as? Date
+        if let createdAt,
+           now.timeIntervalSince(createdAt) > BlockingFriendRequestIntentStore.expirationSeconds {
+            clearPendingShieldFriendRequest()
+            return
+        }
+
+        guard blockingState.groups.contains(where: { group in
+            group.id == groupID && group.isEnabled && group.friendRequestConfig.isEnabled
+        }) else {
+            clearPendingShieldFriendRequest()
+            return
+        }
+
+        pendingShieldFriendRequestGroupID = groupID
+    }
+
     private func persistBlockingState() throws {
         blockingState.lastUpdated = Date()
         try blockingStore.save(blockingState)
@@ -641,7 +876,7 @@ final class AppModel: ObservableObject {
                             requestID: request.id
                         )
                     )
-                case .expired, .pending:
+                case .expired, .pending, .collected:
                     break
                 }
             }
@@ -649,10 +884,11 @@ final class AppModel: ObservableObject {
             return events
         }
         let friendRequestEvents = blockingState.friendRequests.flatMap { request -> [AccountabilityEvent] in
+            let requesterID = request.requesterID ?? profile.id
             var events = [
                 AccountabilityEvent(
                     id: "\(request.id)-friend-requested",
-                    userID: profile.id,
+                    userID: requesterID,
                     kind: .extraTimeRequested,
                     occurredAt: request.createdAt,
                     seconds: request.requestedSeconds,
@@ -662,30 +898,44 @@ final class AppModel: ObservableObject {
 
             if let resolvedAt = request.resolvedAt {
                 switch request.status {
-                case .approved:
+                case .approved, .collected:
                     events.append(
                         AccountabilityEvent(
                             id: "\(request.id)-friend-approved",
-                            userID: profile.id,
+                            userID: requesterID,
                             kind: .extraTimeApproved,
                             occurredAt: resolvedAt,
                             seconds: request.requestedSeconds,
                             requestID: request.id,
-                            actorUserID: request.selectedFriendIDs.first
+                            actorUserID: request.approvedByFriendID ?? request.selectedFriendIDs.first
                         )
                     )
                 case .denied:
                     events.append(
                         AccountabilityEvent(
                             id: "\(request.id)-friend-denied",
-                            userID: profile.id,
+                            userID: requesterID,
                             kind: .extraTimeDenied,
                             occurredAt: resolvedAt,
                             requestID: request.id,
                             actorUserID: request.selectedFriendIDs.first
                         )
                     )
-                case .expired, .pending:
+                case .expired:
+                    if let approvedByFriendID = request.approvedByFriendID {
+                        events.append(
+                            AccountabilityEvent(
+                                id: "\(request.id)-friend-approved",
+                                userID: requesterID,
+                                kind: .extraTimeApproved,
+                                occurredAt: resolvedAt,
+                                seconds: request.requestedSeconds,
+                                requestID: request.id,
+                                actorUserID: approvedByFriendID
+                            )
+                        )
+                    }
+                case .pending:
                     break
                 }
             }
@@ -728,6 +978,27 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func syncFriendRequestNotifications() {
+        for request in blockingState.friendRequests {
+            guard request.isReceived(by: profile.id) else {
+                continue
+            }
+
+            if request.status == .pending {
+                friendRequestNotificationService.scheduleNotification(
+                    for: request,
+                    groupName: groupName(forNotification: request.groupID)
+                )
+            } else {
+                friendRequestNotificationService.clearNotification(for: request.id)
+            }
+        }
+    }
+
+    private func groupName(forNotification groupID: String) -> String {
+        blockingState.groups.first { $0.id == groupID }?.name ?? "restricted app"
+    }
+
     func setLeaderboardWindow(_ window: LeaderboardWindow) {
         leaderboardWindow = window
         refreshLocalAccountabilityStats()
@@ -753,13 +1024,14 @@ final class AppModel: ObservableObject {
         persistUsageHistory()
     }
 
-    func seedDemoFriends() {
-        let now = Date()
+    func seedDemoFriends(now: Date = Date(), showsStatusMessage: Bool = true) {
         let friends = makeDemoFriends(now: now)
         let demo = makeDemoLeaderboard(now: now)
         friendSummaries = friends
         leaderboardEntries = demo.entries
         UserDefaults.standard.set(true, forKey: demoFriendsKey)
+        seedDemoFriendRequests(now: now)
+        refreshLocalAccountabilityStats()
 
         do {
             try widgetCacheWriter.write(
@@ -767,7 +1039,9 @@ final class AppModel: ObservableObject {
                 leaderboardEntries: leaderboardEntries,
                 currentUserID: profile.id
             )
-            message = "Demo friends added for simulator testing."
+            if showsStatusMessage {
+                message = "Demo friends added for simulator testing."
+            }
         } catch {
             message = "Could not write demo widget cache: \(error.localizedDescription)"
         }
@@ -832,6 +1106,125 @@ final class AppModel: ObservableObject {
         ]
     }
 
+    private func seedDemoFriendRequests(now: Date) {
+        guard let groupID = ensureDemoRequestGroup(now: now) else {
+            return
+        }
+
+        let approvedAt = now.addingTimeInterval(-12 * 60)
+        let collectedAt = now.addingTimeInterval(-94 * 60)
+        let demoRequestIDs: Set<String> = [
+            "demo-received-friend-request",
+            "demo-request-received-pending",
+            "demo-request-received-denied",
+            "demo-request-sent-pending",
+            "demo-request-sent-approved",
+            "demo-request-sent-collected"
+        ]
+        let requests = [
+            BlockFriendRequest(
+                id: "demo-request-received-pending",
+                groupID: groupID,
+                requestedSeconds: 10 * 60,
+                selectedFriendIDs: [profile.id],
+                message: "Can you approve a quick check-in?",
+                requesterID: "demo-sam",
+                requesterDisplayName: "Sam Lee",
+                createdAt: now.addingTimeInterval(-9 * 60)
+            ),
+            BlockFriendRequest(
+                id: "demo-request-received-denied",
+                groupID: groupID,
+                requestedSeconds: 30 * 60,
+                selectedFriendIDs: [profile.id],
+                message: "Wanted a little more YouTube time.",
+                requesterID: "demo-riley",
+                requesterDisplayName: "Riley Park",
+                status: .denied,
+                createdAt: now.addingTimeInterval(-55 * 60),
+                resolvedAt: now.addingTimeInterval(-47 * 60)
+            ),
+            BlockFriendRequest(
+                id: "demo-request-sent-pending",
+                groupID: groupID,
+                requestedSeconds: 15 * 60,
+                selectedFriendIDs: ["demo-maya"],
+                message: "Need a few minutes to reply.",
+                requesterID: profile.id,
+                requesterDisplayName: profile.displayName == "Me" ? "You" : profile.displayName,
+                createdAt: now.addingTimeInterval(-6 * 60)
+            ),
+            BlockFriendRequest(
+                id: "demo-request-sent-approved",
+                groupID: groupID,
+                requestedSeconds: 20 * 60,
+                selectedFriendIDs: ["demo-sam"],
+                message: "Finishing a conversation.",
+                requesterID: profile.id,
+                requesterDisplayName: profile.displayName == "Me" ? "You" : profile.displayName,
+                approvedByFriendID: "demo-sam",
+                status: .approved,
+                createdAt: now.addingTimeInterval(-18 * 60),
+                resolvedAt: approvedAt,
+                approvedExpiresAt: BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: approvedAt)
+            ),
+            BlockFriendRequest(
+                id: "demo-request-sent-collected",
+                groupID: groupID,
+                requestedSeconds: 10 * 60,
+                selectedFriendIDs: ["demo-maya"],
+                message: "",
+                requesterID: profile.id,
+                requesterDisplayName: profile.displayName == "Me" ? "You" : profile.displayName,
+                approvedByFriendID: "demo-maya",
+                status: .collected,
+                createdAt: now.addingTimeInterval(-2 * 3_600),
+                resolvedAt: now.addingTimeInterval(-105 * 60),
+                collectedAt: collectedAt,
+                approvedExpiresAt: BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: now.addingTimeInterval(-105 * 60))
+            )
+        ]
+
+        blockingState.friendRequests.removeAll { demoRequestIDs.contains($0.id) }
+        blockingState.friendRequests.insert(contentsOf: requests, at: 0)
+        try? persistBlockingState()
+        syncFriendRequestNotifications()
+    }
+
+    private func ensureDemoRequestGroup(now: Date) -> String? {
+        if let group = blockingState.groups.first(where: { $0.isEnabled && $0.friendRequestConfig.isEnabled }) {
+            return group.id
+        }
+
+        if let index = blockingState.groups.firstIndex(where: { $0.id == "demo-social-requests" }) {
+            blockingState.groups[index].isEnabled = true
+            blockingState.groups[index].friendRequestConfig = BlockFriendRequestConfig(isEnabled: true)
+            blockingState.groups[index].updatedAt = now
+            return blockingState.groups[index].id
+        }
+
+        guard let selectionData = try? BlockingSelectionCodec.encode(FamilyActivitySelection()) else {
+            return nil
+        }
+
+        blockingState.groups.insert(
+            BlockGroup(
+                id: "demo-social-requests",
+                name: "Social",
+                colorHex: "#E84855",
+                selectionData: selectionData,
+                isEnabled: true,
+                mode: .timeLimit(limitSeconds: 30 * 60, days: BlockWeekday.everyDay),
+                friendRequestConfig: BlockFriendRequestConfig(isEnabled: true),
+                password: BlockingPasswordHasher.makePassword("demo", now: now),
+                createdAt: now,
+                updatedAt: now
+            ),
+            at: 0
+        )
+        return "demo-social-requests"
+    }
+
     private func makeDemoScreenTimeSnapshot(
         now: Date,
         totalDuration: TimeInterval = 5 * 3_600 + 42 * 60,
@@ -865,7 +1258,7 @@ final class AppModel: ObservableObject {
 
         let today = calendar.startOfDay(for: now)
         let currentWeek = calendar.dateInterval(of: .weekOfYear, for: now)
-        let currentWeekMinutes = [421, 360, 238, 297, 22, 0, 0]
+        let currentWeekMinutes = [421, 360, 238, 297, 312, 248, 184]
         let monthPatternMinutes = [510, 485, 462, 438, 506, 472, 449, 330, 300, 285, 260, 310, 275, 255, 290, 270]
         var snapshots: [DailyUsageSnapshot] = []
         var hourlyDurationsByDayID: [String: [TimeInterval]] = [:]
@@ -1053,12 +1446,6 @@ final class AppModel: ObservableObject {
                 occurredAt: now.addingTimeInterval(-2 * 3_600),
                 seconds: 35 * 60,
                 requestID: "riley-req-2"
-            ),
-            AccountabilityEvent(
-                id: "riley-emergency-1",
-                userID: "demo-riley",
-                kind: .emergencyUnlockUsed,
-                occurredAt: now.addingTimeInterval(-90 * 60)
             )
         ]
 
@@ -1086,4 +1473,69 @@ final class AppModel: ObservableObject {
         return events
     }
     #endif
+}
+
+struct FriendRequestNotificationService {
+    static let categoryIdentifier = "friend-time-request"
+    static let requestIDUserInfoKey = "friendRequestID"
+
+    private let defaults: UserDefaults
+    private let notifiedRequestIDsKey = "NotifiedFriendRequestIDs.v1"
+
+    init(defaults: UserDefaults? = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)) {
+        self.defaults = defaults ?? .standard
+    }
+
+    func scheduleNotification(for request: BlockFriendRequest, groupName: String) {
+        guard request.status == .pending,
+              rememberNotification(for: request.id) else {
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        let sender = request.requesterDisplayName ?? "A friend"
+        let duration = BlockingDisplayFormatter.durationLabel(request.requestedSeconds)
+        content.title = "\(sender) requests extra time"
+        content.body = "\(duration) for \(groupName). Tap to review."
+        content.sound = .default
+        content.categoryIdentifier = Self.categoryIdentifier
+        content.userInfo = [Self.requestIDUserInfoKey: request.id]
+
+        let notificationRequest = UNNotificationRequest(
+            identifier: notificationIdentifier(for: request.id),
+            content: content,
+            trigger: nil
+        )
+
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            guard granted else {
+                return
+            }
+
+            center.add(notificationRequest)
+        }
+    }
+
+    func clearNotification(for requestID: String) {
+        let identifier = notificationIdentifier(for: requestID)
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+    }
+
+    private func rememberNotification(for requestID: String) -> Bool {
+        var requestIDs = Set(defaults.stringArray(forKey: notifiedRequestIDsKey) ?? [])
+        guard !requestIDs.contains(requestID) else {
+            return false
+        }
+
+        requestIDs.insert(requestID)
+        defaults.set(Array(requestIDs), forKey: notifiedRequestIDsKey)
+        return true
+    }
+
+    private func notificationIdentifier(for requestID: String) -> String {
+        "friend-time-request-\(requestID)"
+    }
 }

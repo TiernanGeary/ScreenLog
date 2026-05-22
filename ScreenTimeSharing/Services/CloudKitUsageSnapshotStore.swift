@@ -28,6 +28,14 @@ enum CloudAvailability: Equatable {
     }
 }
 
+private enum CloudKitUsageSnapshotStoreError: LocalizedError {
+    case unavailableInSimulator
+
+    var errorDescription: String? {
+        "iCloud sharing is unavailable in this simulator build."
+    }
+}
+
 @MainActor
 final class CloudKitUsageSnapshotStore {
     private enum RecordType {
@@ -53,19 +61,27 @@ final class CloudKitUsageSnapshotStore {
         static let profileReference = "profileReference"
     }
 
-    private let container: CKContainer
+    private let container: CKContainer?
     private let sharedZoneStore: SharedZoneStore
 
     init(
         containerIdentifier: String = AppConfiguration.cloudKitContainerIdentifier,
         sharedZoneStore: SharedZoneStore = SharedZoneStore()
     ) {
+        #if targetEnvironment(simulator)
+        self.container = nil
+        #else
         self.container = CKContainer(identifier: containerIdentifier)
+        #endif
         self.sharedZoneStore = sharedZoneStore
     }
 
     func cloudAvailability() async -> CloudAvailability {
-        await withCheckedContinuation { continuation in
+        guard let container else {
+            return .unavailable("iCloud unavailable in simulator")
+        }
+
+        return await withCheckedContinuation { (continuation: CheckedContinuation<CloudAvailability, Never>) in
             container.accountStatus { status, error in
                 if let error {
                     continuation.resume(returning: .unavailable(error.localizedDescription))
@@ -91,11 +107,15 @@ final class CloudKitUsageSnapshotStore {
     }
 
     func publish(profile: UserProfile, snapshot: DailyUsageSnapshot) async throws {
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
         guard let payload = try SnapshotRecordPayloadMapper.payload(from: snapshot) else {
             return
         }
 
-        try await ensurePrivateZone()
+        try await ensurePrivateZone(in: container)
 
         let profileRecord = makeProfileRecord(profile)
         let snapshotRecord = makeSnapshotRecord(payload, profileRecordID: profileRecord.recordID)
@@ -113,7 +133,11 @@ final class CloudKitUsageSnapshotStore {
     }
 
     func prepareProfileShare(profile: UserProfile) async throws -> (share: CKShare, container: CKContainer) {
-        try await ensurePrivateZone()
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
+        try await ensurePrivateZone(in: container)
 
         var sharingProfile = profile
         sharingProfile.shareStatus = .sharing
@@ -141,6 +165,10 @@ final class CloudKitUsageSnapshotStore {
     }
 
     func acceptShare(metadata: CKShare.Metadata) async throws {
+        guard container != nil else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
         let acceptingContainer = CKContainer(identifier: metadata.containerIdentifier)
         let result = try await acceptingContainer.accept([metadata])
 
@@ -151,6 +179,10 @@ final class CloudKitUsageSnapshotStore {
     }
 
     func fetchFriendSummaries(now: Date = Date()) async throws -> [FriendUsageSummary] {
+        guard let container else {
+            return []
+        }
+
         var summaries: [FriendUsageSummary] = []
 
         for zoneID in sharedZoneStore.load() {
@@ -189,7 +221,7 @@ final class CloudKitUsageSnapshotStore {
         CKRecordZone.ID(zoneName: "ScreenTimeSharing", ownerName: CKCurrentUserDefaultName)
     }
 
-    private func ensurePrivateZone() async throws {
+    private func ensurePrivateZone(in container: CKContainer) async throws {
         let existingZones = try? await container.privateCloudDatabase.recordZones(for: [privateZoneID])
         if let zoneResult = existingZones?[privateZoneID],
            case .success = zoneResult {

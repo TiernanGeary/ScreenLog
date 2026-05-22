@@ -100,6 +100,55 @@ import Foundation
     #expect(StatsRange.day.leaderboardWindow == .today)
 }
 
+@Test func usageStatsAggregatesAppRowsInSelectedRange() throws {
+    let calendar = makeCalendar()
+    let monday = try makeDate(2026, 5, 18, 10, calendar: calendar)
+    let tuesday = try makeDate(2026, 5, 19, 10, calendar: calendar)
+    let priorWeek = try makeDate(2026, 5, 12, 10, calendar: calendar)
+    let history = [
+        makeSnapshot(
+            date: monday,
+            duration: 3_600,
+            pickups: 1,
+            appRows: [
+                SharedAppUsage(id: "tiktok-a", displayName: "TikTok", bundleIdentifier: "com.tiktok", duration: 900),
+                SharedAppUsage(id: "youtube", displayName: "YouTube", bundleIdentifier: "com.youtube", duration: 1_200)
+            ],
+            calendar: calendar
+        ),
+        makeSnapshot(
+            date: tuesday,
+            duration: 3_600,
+            pickups: 1,
+            appRows: [
+                SharedAppUsage(id: "tiktok-b", displayName: "TikTok", bundleIdentifier: "com.tiktok", duration: 1_800),
+                SharedAppUsage(id: "messages", displayName: "Messages", bundleIdentifier: "com.messages", duration: 300)
+            ],
+            calendar: calendar
+        ),
+        makeSnapshot(
+            date: priorWeek,
+            duration: 3_600,
+            pickups: 1,
+            appRows: [
+                SharedAppUsage(id: "reddit", displayName: "Reddit", bundleIdentifier: "com.reddit", duration: 9_000)
+            ],
+            calendar: calendar
+        )
+    ]
+
+    let rows = UsageStatsBuilder.appUsageRows(
+        range: .week,
+        selectedDate: tuesday,
+        history: history,
+        calendar: calendar
+    )
+
+    #expect(rows.map(\.displayName) == ["TikTok", "YouTube", "Messages"])
+    #expect(rows.first?.duration == 2_700)
+    #expect(rows.first?.id == "com.tiktok")
+}
+
 private func makeCalendar() -> Calendar {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -129,6 +178,7 @@ private func makeSnapshot(
     date: Date,
     duration: TimeInterval,
     pickups: Int,
+    appRows: [SharedAppUsage] = [],
     calendar: Calendar
 ) -> DailyUsageSnapshot {
     let day = UsageDateBoundary.dayInterval(containing: date, calendar: calendar).start
@@ -141,7 +191,7 @@ private func makeSnapshot(
         totalDuration: duration,
         selectedAppDuration: duration,
         pickupCount: pickups,
-        appRows: [],
+        appRows: appRows,
         lastUpdated: date,
         capability: .fullAppDetail
     )

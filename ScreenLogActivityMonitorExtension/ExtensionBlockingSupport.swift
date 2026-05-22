@@ -42,99 +42,90 @@ enum ExtensionBlockingSupport {
     }
 
     @discardableResult
-    static func logExtraTimeRequest(seconds: TimeInterval, matching token: ApplicationToken? = nil) -> Bool {
+    static func queueFriendRequestDraft(matching token: ApplicationToken? = nil) -> Bool {
         let state = state()
-        return logExtraTimeRequest(seconds: seconds, groupID: requestGroupID(matching: token, in: state), state: state)
+        return queueFriendRequestDraft(groupID: requestGroupID(matching: token, in: state))
     }
 
     @discardableResult
-    static func logExtraTimeRequest(seconds: TimeInterval, matching token: ActivityCategoryToken? = nil) -> Bool {
+    static func queueFriendRequestDraft(matching token: ActivityCategoryToken? = nil) -> Bool {
         let state = state()
-        return logExtraTimeRequest(seconds: seconds, groupID: requestGroupID(matching: token, in: state), state: state)
+        return queueFriendRequestDraft(groupID: requestGroupID(matching: token, in: state))
     }
 
     @discardableResult
-    static func logExtraTimeRequest(seconds: TimeInterval, matching token: WebDomainToken? = nil) -> Bool {
+    static func queueFriendRequestDraft(matching token: WebDomainToken? = nil) -> Bool {
         let state = state()
-        return logExtraTimeRequest(seconds: seconds, groupID: requestGroupID(matching: token, in: state), state: state)
+        return queueFriendRequestDraft(groupID: requestGroupID(matching: token, in: state))
     }
 
-    static func shieldCopy(matching token: ApplicationToken? = nil) -> ShieldCopy {
-        let state = state()
-        let groupIDs = groupIDs(matching: token, in: state)
-        return shieldCopy(groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs, state: state)
-    }
-
-    static func shieldCopy(matching token: ActivityCategoryToken? = nil) -> ShieldCopy {
+    static func shieldCopy(matching token: ApplicationToken? = nil, itemName: String? = nil) -> ShieldCopy {
         let state = state()
         let groupIDs = groupIDs(matching: token, in: state)
-        return shieldCopy(groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs, state: state)
+        return shieldCopy(
+            groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs,
+            state: state,
+            itemName: itemName
+        )
     }
 
-    static func shieldCopy(matching token: WebDomainToken? = nil) -> ShieldCopy {
+    static func shieldCopy(matching token: ActivityCategoryToken? = nil, itemName: String? = nil) -> ShieldCopy {
         let state = state()
         let groupIDs = groupIDs(matching: token, in: state)
-        return shieldCopy(groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs, state: state)
+        return shieldCopy(
+            groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs,
+            state: state,
+            itemName: itemName
+        )
     }
 
-    private static func logExtraTimeRequest(seconds: TimeInterval, groupID: String?, state initialState: BlockingState) -> Bool {
-        var state = initialState
+    static func shieldCopy(matching token: WebDomainToken? = nil, itemName: String? = nil) -> ShieldCopy {
+        let state = state()
+        let groupIDs = groupIDs(matching: token, in: state)
+        return shieldCopy(
+            groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs,
+            state: state,
+            itemName: itemName
+        )
+    }
+
+    private static func queueFriendRequestDraft(groupID: String?) -> Bool {
         guard let groupID = groupID else {
             return false
         }
 
-        let group = state.groups.first { $0.id == groupID }
-        guard group?.friendRequestConfig.isEnabled == true else {
-            return false
-        }
-
-        state.friendRequests.insert(
-            BlockFriendRequest(
-                id: UUID().uuidString,
-                groupID: groupID,
-                requestedSeconds: seconds,
-                selectedFriendIDs: [],
-                message: "Requested from shield",
-                createdAt: Date()
-            ),
-            at: 0
-        )
-        state.lastUpdated = Date()
-        try? BlockingStateStore(defaults: defaults).save(state)
+        defaults?.set(groupID, forKey: BlockingFriendRequestIntentStore.groupIDKey)
+        defaults?.set(Date(), forKey: BlockingFriendRequestIntentStore.createdAtKey)
         return true
     }
 
-    private static func shieldCopy(groupIDs: Set<String>, state: BlockingState) -> ShieldCopy {
+    private static func shieldCopy(groupIDs: Set<String>, state: BlockingState, itemName: String?) -> ShieldCopy {
         let groups = state.groups.filter { groupIDs.contains($0.id) && $0.isEnabled }
+        let restrictedItemName = normalizedItemName(itemName)
         guard !groups.isEmpty else {
             return ShieldCopy(
-                title: "Blocked by ScreenLog",
-                subtitle: "Open ScreenLog to manage this block.",
-                primaryButton: "Request 15m",
-                secondaryButton: "Open ScreenLog"
+                title: "Restricted",
+                subtitle: "You cannot use \(restrictedItemName) because it is restricted.",
+                primaryButton: "OK",
+                secondaryButton: "Friend request disabled",
+                isFriendRequestEnabled: false
             )
         }
 
-        let hasLocalUnblock = groups.contains { $0.unblockConfig.isEnabled }
         let hasFriendRequest = groups.contains { $0.friendRequestConfig.isEnabled }
-        let subtitle: String
-        switch (hasLocalUnblock, hasFriendRequest) {
-        case (true, true):
-            subtitle = "Open ScreenLog for a limited unblock or to request friend approval."
-        case (true, false):
-            subtitle = "Open ScreenLog for a limited unblock."
-        case (false, true):
-            subtitle = "Open ScreenLog to request friend approval."
-        case (false, false):
-            subtitle = "This group is blocked by your current ScreenLog settings."
-        }
 
         return ShieldCopy(
-            title: groups.count == 1 ? "\(groups[0].name) is blocked" : "App is blocked",
-            subtitle: subtitle,
-            primaryButton: hasFriendRequest ? "Request 15m" : "Open ScreenLog",
-            secondaryButton: "Open ScreenLog"
+            title: "Restricted",
+            subtitle: "You cannot use \(restrictedItemName) because it is restricted.",
+            primaryButton: "OK",
+            secondaryButton: hasFriendRequest ? "Request time from friends" : "Friend request disabled",
+            isFriendRequestEnabled: hasFriendRequest
         )
+    }
+
+    private static func normalizedItemName(_ itemName: String?) -> String {
+        let trimmed = itemName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "this app" : trimmed
     }
 
     private static func activeShieldedGroupIDs() -> Set<String> {
@@ -228,4 +219,5 @@ struct ShieldCopy {
     let subtitle: String
     let primaryButton: String
     let secondaryButton: String
+    let isFriendRequestEnabled: Bool
 }

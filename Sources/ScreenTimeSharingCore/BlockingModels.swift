@@ -512,6 +512,26 @@ public enum BlockRequestStatus: String, Codable, CaseIterable, Equatable, Sendab
     case approved
     case denied
     case expired
+    case collected
+}
+
+public enum BlockFriendRequestLifecycle {
+    public static let pendingExpirationSeconds: TimeInterval = 8 * 3_600
+    public static let approvedCollectionExpirationSeconds: TimeInterval = 24 * 3_600
+
+    public static func pendingExpirationDate(createdAt: Date) -> Date {
+        createdAt.addingTimeInterval(pendingExpirationSeconds)
+    }
+
+    public static func approvedExpirationDate(approvedAt: Date) -> Date {
+        approvedAt.addingTimeInterval(approvedCollectionExpirationSeconds)
+    }
+}
+
+public enum BlockingFriendRequestIntentStore {
+    public static let groupIDKey = "PendingShieldFriendRequestGroupID.v1"
+    public static let createdAtKey = "PendingShieldFriendRequestCreatedAt.v1"
+    public static let expirationSeconds: TimeInterval = 10 * 60
 }
 
 public struct BlockRequest: Codable, Equatable, Identifiable, Sendable {
@@ -552,9 +572,15 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
     public var requestedSeconds: TimeInterval
     public var selectedFriendIDs: [String]
     public var message: String
+    public var requesterID: String?
+    public var requesterDisplayName: String?
+    public var approvedByFriendID: String?
     public var status: BlockRequestStatus
     public var createdAt: Date
     public var resolvedAt: Date?
+    public var collectedAt: Date?
+    public var expiresAt: Date?
+    public var approvedExpiresAt: Date?
 
     public init(
         id: String,
@@ -562,25 +588,89 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
         requestedSeconds: TimeInterval,
         selectedFriendIDs: [String],
         message: String,
+        requesterID: String? = nil,
+        requesterDisplayName: String? = nil,
+        approvedByFriendID: String? = nil,
         status: BlockRequestStatus = .pending,
         createdAt: Date,
-        resolvedAt: Date? = nil
+        resolvedAt: Date? = nil,
+        collectedAt: Date? = nil,
+        expiresAt: Date? = nil,
+        approvedExpiresAt: Date? = nil
     ) {
         self.id = id
         self.groupID = groupID
         self.requestedSeconds = requestedSeconds
         self.selectedFriendIDs = selectedFriendIDs
         self.message = message
+        self.requesterID = requesterID
+        self.requesterDisplayName = requesterDisplayName
+        self.approvedByFriendID = approvedByFriendID
         self.status = status
         self.createdAt = createdAt
         self.resolvedAt = resolvedAt
+        self.collectedAt = collectedAt
+        self.expiresAt = expiresAt
+        self.approvedExpiresAt = approvedExpiresAt
     }
 
-    public func resolving(as status: BlockRequestStatus, at date: Date) -> BlockFriendRequest {
+    public var pendingExpiresAt: Date {
+        expiresAt ?? BlockFriendRequestLifecycle.pendingExpirationDate(createdAt: createdAt)
+    }
+
+    public var collectionExpiresAt: Date? {
+        guard let resolvedAt else {
+            return approvedExpiresAt
+        }
+
+        return approvedExpiresAt ?? BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: resolvedAt)
+    }
+
+    public func resolving(
+        as status: BlockRequestStatus,
+        at date: Date,
+        approvedByFriendID: String? = nil
+    ) -> BlockFriendRequest {
         var copy = self
         copy.status = status
         copy.resolvedAt = date
+        if status == .approved {
+            copy.approvedByFriendID = approvedByFriendID
+            copy.approvedExpiresAt = BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: date)
+        }
         return copy
+    }
+
+    public func collecting(at date: Date) -> BlockFriendRequest {
+        var copy = self
+        copy.status = .collected
+        copy.collectedAt = date
+        return copy
+    }
+
+    public func expiringIfNeeded(now: Date) -> BlockFriendRequest {
+        switch status {
+        case .pending where now >= pendingExpiresAt:
+            return resolving(as: .expired, at: pendingExpiresAt)
+        case .approved:
+            guard let collectionExpiresAt, now >= collectionExpiresAt else {
+                return self
+            }
+            var copy = self
+            copy.status = .expired
+            copy.approvedExpiresAt = collectionExpiresAt
+            return copy
+        case .pending, .denied, .expired, .collected:
+            return self
+        }
+    }
+
+    public func isSent(by userID: String) -> Bool {
+        requesterID == nil || requesterID == userID
+    }
+
+    public func isReceived(by userID: String) -> Bool {
+        requesterID != nil && requesterID != userID && selectedFriendIDs.contains(userID)
     }
 }
 

@@ -1,10 +1,12 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var isShowingActivityPicker: Bool
     @Binding var isShowingBlockingActivityPicker: Bool
-    @Binding var isShowingSettings: Bool
 
     var body: some View {
         NavigationStack {
@@ -18,10 +20,15 @@ struct DashboardView: View {
 
                 AppSection("Blocking") {
                     BlockingOverviewCard(
-                        isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker,
-                        isShowingSettings: $isShowingSettings
+                        isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
                     )
                 }
+
+#if DEBUG
+                AppSection("Developer Preview") {
+                    BlockingDeveloperToolsCard()
+                }
+#endif
 
                 if let message = model.message {
                     AppCard {
@@ -33,7 +40,6 @@ struct DashboardView: View {
                 }
             }
             .navigationTitle("Home")
-            .settingsToolbar(isShowingSettings: $isShowingSettings)
             .overlay {
                 if model.isWorking {
                     ProgressView()
@@ -47,17 +53,23 @@ struct DashboardView: View {
 private struct TodayScreenTimeCard: View {
     let snapshot: DailyUsageSnapshot?
 
+    private var topApps: [SharedAppUsage] {
+        Array(
+            (snapshot?.appRows ?? [])
+                .sorted { lhs, rhs in
+                    if lhs.duration != rhs.duration {
+                        return lhs.duration > rhs.duration
+                    }
+
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
+                .prefix(8)
+        )
+    }
+
     var body: some View {
-        TintedHomeCard(
-            cornerRadius: 24,
-            colors: [
-                Color(red: 0.91, green: 0.97, blue: 1.0),
-                Color(red: 0.98, green: 0.99, blue: 1.0),
-                Color.white.opacity(0.90)
-            ],
-            shadowColor: Color(red: 0.12, green: 0.46, blue: 0.86).opacity(0.08)
-        ) {
-            VStack(alignment: .leading, spacing: 12) {
+        HomeCard(cornerRadius: 24) {
+            VStack(alignment: .leading, spacing: 16) {
                 Text("Today")
                     .font(.footnote.weight(.bold))
                     .foregroundStyle(.secondary)
@@ -77,6 +89,22 @@ private struct TodayScreenTimeCard: View {
                         systemImage: "hand.tap",
                         accentColor: Color(red: 0.08, green: 0.58, blue: 0.50)
                     )
+                }
+
+                VStack(alignment: .leading, spacing: 0) {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 10) {
+                            if topApps.isEmpty {
+                                TopAppEmptyTile(capability: snapshot?.capability)
+                            } else {
+                                ForEach(topApps) { app in
+                                    TopAppUsageTile(app: app)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .scrollIndicators(.hidden)
                 }
             }
             .appCardRow(verticalPadding: 14)
@@ -111,7 +139,7 @@ private struct TodayMetricColumn: View {
             .lineLimit(1)
 
             Text(value)
-                .font(.system(size: 44, weight: .black, design: .default).monospacedDigit())
+                .font(.system(size: 40, weight: .bold).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.56)
         }
@@ -124,15 +152,7 @@ private struct HomeROICard: View {
     let snapshot: DailyUsageSnapshot?
 
     var body: some View {
-        TintedHomeCard(
-            cornerRadius: 26,
-            colors: [
-                Color(red: 0.94, green: 1.0, blue: 0.98),
-                Color(red: 0.95, green: 0.98, blue: 1.0),
-                Color.white.opacity(0.90)
-            ],
-            shadowColor: Color(red: 0.08, green: 0.52, blue: 0.48).opacity(0.075)
-        ) {
+        HomeCard(cornerRadius: 26) {
             VStack(alignment: .leading, spacing: 18) {
                 switch summary.baselineStatus {
                 case .ready:
@@ -155,7 +175,7 @@ private struct HomeROICard: View {
                     .foregroundStyle(.secondary)
 
                 Text(UsageFormatting.duration(abs(summary.netSavedDuration)))
-                    .font(.system(size: 46, weight: .black, design: .default).monospacedDigit())
+                    .font(.system(size: 40, weight: .bold).monospacedDigit())
                     .lineLimit(1)
                     .minimumScaleFactor(0.58)
 
@@ -182,7 +202,7 @@ private struct HomeROICard: View {
 
                 HStack(alignment: .lastTextBaseline, spacing: 9) {
                     Text("\(daysCollected)/\(requiredDays)")
-                        .font(.system(size: 46, weight: .black, design: .default).monospacedDigit())
+                        .font(.system(size: 40, weight: .bold).monospacedDigit())
                         .lineLimit(1)
 
                     Text("baseline days")
@@ -213,7 +233,7 @@ private struct HomeROICard: View {
                 .foregroundStyle(.secondary)
 
             Text("Unavailable")
-                .font(.system(size: 40, weight: .black, design: .default))
+                .font(.system(size: 40, weight: .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
@@ -241,21 +261,16 @@ private struct HomeROICard: View {
     }
 }
 
-private struct TintedHomeCard<Content: View>: View {
+private struct HomeCard<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
     let cornerRadius: CGFloat
-    let colors: [Color]
-    let shadowColor: Color
     let content: Content
 
     init(
         cornerRadius: CGFloat,
-        colors: [Color],
-        shadowColor: Color,
         @ViewBuilder content: () -> Content
     ) {
         self.cornerRadius = cornerRadius
-        self.colors = colors
-        self.shadowColor = shadowColor
         self.content = content()
     }
 
@@ -268,19 +283,13 @@ private struct TintedHomeCard<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: colors,
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(Color(uiColor: colorScheme == .dark ? .secondarySystemGroupedBackground : .systemBackground))
                 .overlay {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.86), lineWidth: 0.8)
+                        .strokeBorder(colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.86), lineWidth: 0.8)
                 }
-                .shadow(color: shadowColor, radius: 22, x: 0, y: 10)
-                .shadow(color: Color.black.opacity(0.035), radius: 14, x: 0, y: 7)
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.055), radius: 22, x: 0, y: 10)
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.16 : 0.035), radius: 14, x: 0, y: 7)
         }
     }
 }
@@ -301,7 +310,7 @@ private struct HomeProofRow: View {
                 title: "Streak",
                 value: dayLabel(summary.beatBaselineStreakDays),
                 systemImage: "flame",
-                accentColor: Color(red: 0.96, green: 0.48, blue: 0.10)
+                usesWarmGradient: true
             )
         }
     }
@@ -346,6 +355,7 @@ private struct HomeProofMetric: View {
     let systemImage: String
     var valueSystemImage: String?
     var accentColor: Color = .primary
+    var usesWarmGradient = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -359,7 +369,7 @@ private struct HomeProofMetric: View {
                         .font(.subheadline.weight(.black))
                 }
             }
-            .foregroundStyle(accentColor)
+            .foregroundStyle(primaryAccentStyle)
             .lineLimit(1)
             .minimumScaleFactor(0.66)
 
@@ -371,9 +381,52 @@ private struct HomeProofMetric: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
-            .foregroundStyle(accentColor.opacity(0.78))
+            .foregroundStyle(secondaryAccentStyle)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .shadow(color: warmGlowColor, radius: usesWarmGradient ? 5 : 0, x: 0, y: 2)
+    }
+
+    private var primaryAccentStyle: AnyShapeStyle {
+        if usesWarmGradient {
+            return AnyShapeStyle(Self.warmGradient)
+        }
+
+        return AnyShapeStyle(accentColor)
+    }
+
+    private var secondaryAccentStyle: AnyShapeStyle {
+        if usesWarmGradient {
+            return AnyShapeStyle(Self.mutedWarmGradient)
+        }
+
+        return AnyShapeStyle(accentColor.opacity(0.78))
+    }
+
+    private var warmGlowColor: Color {
+        usesWarmGradient ? Color(red: 1.0, green: 0.50, blue: 0.12).opacity(0.16) : .clear
+    }
+
+    private static var warmGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.92, green: 0.24, blue: 0.14),
+                Color(red: 1.0, green: 0.73, blue: 0.22)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private static var mutedWarmGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.92, green: 0.24, blue: 0.14).opacity(0.84),
+                Color(red: 1.0, green: 0.73, blue: 0.22).opacity(0.84)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 }
 
@@ -402,11 +455,11 @@ private struct HomeTopImprovementRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.accentColor.opacity(0.08))
+                .fill(Color.accentColor.opacity(0.10))
         )
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.74), lineWidth: 0.7)
+                .strokeBorder(Color.accentColor.opacity(0.16), lineWidth: 0.7)
         }
     }
 
@@ -511,6 +564,7 @@ private struct SummaryMetricTile: View {
 }
 
 private struct TopAppUsageTile: View {
+    @Environment(\.colorScheme) private var colorScheme
     let app: SharedAppUsage
 
     var body: some View {
@@ -533,16 +587,27 @@ private struct TopAppUsageTile: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white.opacity(0.58))
+                .fill(tileBackground)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.82), lineWidth: 0.7)
+                .strokeBorder(tileBorder, lineWidth: 0.7)
         }
+    }
+
+    private var tileBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .tertiarySystemGroupedBackground)
+            : Color.white.opacity(0.58)
+    }
+
+    private var tileBorder: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.82)
     }
 }
 
 private struct TopAppEmptyTile: View {
+    @Environment(\.colorScheme) private var colorScheme
     let capability: ScreenTimeCapability?
 
     var body: some View {
@@ -565,12 +630,22 @@ private struct TopAppEmptyTile: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white.opacity(0.58))
+                .fill(tileBackground)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.82), lineWidth: 0.7)
+                .strokeBorder(tileBorder, lineWidth: 0.7)
         }
+    }
+
+    private var tileBackground: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .tertiarySystemGroupedBackground)
+            : Color.white.opacity(0.58)
+    }
+
+    private var tileBorder: Color {
+        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.82)
     }
 
     private var emptyTitle: String {
@@ -586,193 +661,77 @@ private struct TopAppEmptyTile: View {
     }
 }
 
-private struct AppUsageIcon: View {
-    let name: String
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(iconGradient)
-            .frame(width: 42, height: 42)
-            .overlay {
-                Text(initial)
-                    .font(.headline.bold())
-                    .foregroundStyle(.white)
-            }
-            .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
-            .accessibilityHidden(true)
-    }
-
-    private var initial: String {
-        guard let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first else {
-            return "A"
-        }
-
-        return String(first).uppercased()
-    }
-
-    private var iconGradient: LinearGradient {
-        let palette: [(Color, Color)] = [
-            (Color(red: 0.10, green: 0.60, blue: 0.55), Color(red: 0.12, green: 0.42, blue: 0.78)),
-            (Color(red: 0.91, green: 0.30, blue: 0.33), Color(red: 0.94, green: 0.55, blue: 0.15)),
-            (Color(red: 0.42, green: 0.30, blue: 0.62), Color(red: 0.18, green: 0.46, blue: 0.72)),
-            (Color(red: 0.18, green: 0.48, blue: 0.34), Color(red: 0.78, green: 0.56, blue: 0.18))
-        ]
-        let index = abs(name.hashValue) % palette.count
-        let colors = palette[index]
-
-        return LinearGradient(colors: [colors.0, colors.1], startPoint: .topLeading, endPoint: .bottomTrailing)
-    }
-}
-
 private struct BlockingOverviewCard: View {
     @EnvironmentObject private var model: AppModel
     @Binding var isShowingBlockingActivityPicker: Bool
-    @Binding var isShowingSettings: Bool
-    @State private var friendRequestGroup: BlockGroup?
     @State private var newGroupDraft: BlockGroupDraft?
-    @State private var isShowingDummyBlockedApp = false
+    @State private var viewedGroup: BlockGroup?
+    @State private var isShowingBlockingSettings = false
 
-    private var firstGroup: BlockGroup? {
-        model.blockingState.groups.first
+    private var groups: [BlockGroup] {
+        model.blockingState.groups
     }
 
     var body: some View {
         AppCard {
-            if let firstGroup {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(Color(hex: firstGroup.colorHex))
-                            .frame(width: 12, height: 12)
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(firstGroup.name)
-                                .font(.headline)
-                            Text(firstGroup.isEnabled ? "Blocking enabled" : "Blocking paused")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Button {
-                            isShowingSettings = true
-                        } label: {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.title3)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-                        .accessibilityLabel("Manage block group")
+            if groups.isEmpty {
+                startBlockingButton
+            } else {
+                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                    if index > 0 {
+                        AppCardDivider()
                     }
 
-                    HStack(spacing: 10) {
-                        MetricTile(title: "Groups", value: "\(model.activeBlockingRulesCount)")
-                        MetricTile(title: modeMetricTitle, value: modeMetricValue)
-                        MetricTile(title: "Requests", value: "\(model.pendingBlockRequestCount)")
-                    }
-
-                    Text(firstGroup.mode.label)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-
-                    if firstGroup.unblockConfig.isEnabled {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("\(remainingUnblocks(for: firstGroup)) limited unblocks left today")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            HStack(spacing: 8) {
-                                unblockButton("5m", seconds: 5 * 60, group: firstGroup)
-                                unblockButton("15m", seconds: 15 * 60, group: firstGroup)
-                                unblockButton("30m", seconds: 30 * 60, group: firstGroup)
-                            }
-                        }
-                    } else {
-                        Text("Limited local unblocks are off for this group.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if firstGroup.friendRequestConfig.isEnabled {
-                        Button {
-                            friendRequestGroup = firstGroup
-                        } label: {
-                            Label("Request friend approval", systemImage: "person.2.badge.gearshape")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-                    }
-
-#if DEBUG
                     Button {
-                        isShowingDummyBlockedApp = true
+                        AppHaptics.buttonTap()
+                        viewedGroup = group
                     } label: {
-                        DummyBlockedAppRow(title: "Open Dummy Blocked App")
+                        blockGroupRow(group)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-#endif
-
-                    HStack(spacing: 12) {
-                        Button {
-                            newGroupDraft = BlockGroupDraft()
-                        } label: {
-                            Label("New Group", systemImage: "plus.circle.fill")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-
-                        Spacer()
-
-                        Button {
-                            isShowingSettings = true
-                        } label: {
-                            Label("Manage", systemImage: "slider.horizontal.3")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-                    }
                 }
-                .appCardRow(verticalPadding: 16)
-            } else {
-                Button {
-                    newGroupDraft = BlockGroupDraft()
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title2.weight(.semibold))
-                        Text("Start New Blocking")
-                            .font(.headline)
-                        Spacer()
-                    }
-                    .appCardRow(verticalPadding: 18)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
 
-#if DEBUG
                 AppCardDivider()
 
-                Button {
-                    isShowingDummyBlockedApp = true
-                } label: {
-                    DummyBlockedAppRow(title: "Preview Blocked App")
-                        .appCardRow(verticalPadding: 14)
+                HStack(spacing: 12) {
+                    Button {
+                        AppHaptics.buttonTap()
+                        newGroupDraft = BlockGroupDraft()
+                    } label: {
+                        Label("New Group", systemImage: "plus.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+
+                    Spacer()
+
+                    Button {
+                        AppHaptics.buttonTap()
+                        isShowingBlockingSettings = true
+                    } label: {
+                        Label("Manage", systemImage: "slider.horizontal.3")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
                 }
-                .buttonStyle(.plain)
-#endif
+                .appCardRow(verticalPadding: 14)
             }
         }
-#if DEBUG
-        .sheet(isPresented: $isShowingDummyBlockedApp) {
-            DummyBlockedAppPreviewView(group: firstGroup)
+        .sheet(isPresented: $isShowingBlockingSettings) {
+            NavigationStack {
+                BlockingSettingsView(onShowBlockingActivityPicker: {
+                    isShowingBlockingSettings = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        isShowingBlockingActivityPicker = true
+                    }
+                })
+            }
         }
-#endif
-        .sheet(item: $friendRequestGroup) { group in
-            FriendApprovalRequestView(group: group)
+        .sheet(item: $viewedGroup) { group in
+            BlockGroupConfigurationView(groupID: group.id)
         }
         .sheet(item: $newGroupDraft) { draft in
             NavigationStack {
@@ -785,61 +744,96 @@ private struct BlockingOverviewCard: View {
         }
     }
 
-    private var modeMetricTitle: String {
-        guard let firstGroup else {
-            return "Mode"
-        }
-
-        switch firstGroup.mode {
-        case .scheduled:
-            return "Schedule"
-        case .timeLimit:
-            return "Limit"
-        }
-    }
-
-    private var modeMetricValue: String {
-        guard let firstGroup else {
-            return "--"
-        }
-
-        switch firstGroup.mode {
-        case .scheduled:
-            return "On"
-        case .timeLimit(let seconds, _):
-            return BlockingDisplayFormatter.durationLabel(seconds)
-        }
-    }
-
-    private func remainingUnblocks(for group: BlockGroup) -> Int {
-        BlockingStateResolver.remainingUnblocks(for: group.id, in: model.blockingState)
-    }
-
-    private func unblockButton(_ title: String, seconds: TimeInterval, group: BlockGroup) -> some View {
+    private var startBlockingButton: some View {
         Button {
-            _ = model.startLocalUnblock(groupID: group.id, seconds: seconds)
+            AppHaptics.buttonTap()
+            newGroupDraft = BlockGroupDraft()
         } label: {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.64))
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.9), lineWidth: 0.7)
-                }
+            HStack(spacing: 14) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title2.weight(.semibold))
+                Text("Start New Blocking")
+                    .font(.headline)
+                Spacer()
+            }
+            .appCardRow(verticalPadding: 18)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.tint)
-        .disabled(remainingUnblocks(for: group) == 0 || seconds > group.unblockConfig.maxDurationSeconds)
-        .opacity(remainingUnblocks(for: group) == 0 || seconds > group.unblockConfig.maxDurationSeconds ? 0.45 : 1)
     }
+
+    private func blockGroupRow(_ group: BlockGroup) -> some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(Color(hex: group.colorHex))
+                .frame(width: 12, height: 12)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(group.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tertiary)
+        }
+        .appCardRow(verticalPadding: 12)
+    }
+
 }
 
 #if DEBUG
+private struct BlockingDeveloperToolsCard: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var isShowingDummyBlockedApp = false
+
+    private var firstGroup: BlockGroup? {
+        model.blockingState.groups.first
+    }
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "hammer")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Debug-only tools")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Hidden from release builds. Use this to preview the blocked-app screen in the simulator.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Button {
+                    AppHaptics.buttonTap()
+                    isShowingDummyBlockedApp = true
+                } label: {
+                    DummyBlockedAppRow(title: "Preview Blocked App")
+                }
+                .buttonStyle(.plain)
+            }
+            .appCardRow(verticalPadding: 14)
+        }
+        .sheet(isPresented: $isShowingDummyBlockedApp) {
+            DummyBlockedAppPreviewView(group: firstGroup)
+        }
+    }
+}
+
 private struct DummyBlockedAppRow: View {
     let title: String
 
@@ -875,10 +869,8 @@ private struct DummyBlockedAppRow: View {
 
 private struct DummyBlockedAppPreviewView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var model: AppModel
     let group: BlockGroup?
     @State private var friendRequestGroup: BlockGroup?
-    @State private var localStatus: String?
 
     var body: some View {
         NavigationStack {
@@ -887,11 +879,11 @@ private struct DummyBlockedAppPreviewView: View {
                     DummyAppIcon(size: 74)
 
                     VStack(spacing: 8) {
-                        Text("Dummy App is blocked")
+                        Text("Restricted")
                             .font(.title2.weight(.bold))
                             .multilineTextAlignment(.center)
 
-                        Text(subtitle)
+                        Text("You cannot use Dummy App because it is restricted.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -903,148 +895,72 @@ private struct DummyBlockedAppPreviewView: View {
                 .padding(.bottom, 8)
 
                 AppCard {
-                    if let group {
-                        HStack(spacing: 12) {
-                            Circle()
-                                .fill(Color(hex: group.colorHex))
-                                .frame(width: 12, height: 12)
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(group.name)
-                                    .font(.headline)
-                                Text(group.mode.label)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-
-                            Spacer()
-                        }
-                        .appCardRow()
-
-                        if group.unblockConfig.isEnabled || group.friendRequestConfig.isEnabled {
-                            AppCardDivider()
-                            actionRows(for: group)
-                        } else {
-                            AppCardDivider()
-                            Text("No unblock options are enabled for this group.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .appCardRow()
-                        }
-                    } else {
-                        Text("Create a block group to connect this preview to real unblock and friend request settings.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .appCardRow()
+                    Button {
+                        AppHaptics.buttonTap()
+                        dismiss()
+                    } label: {
+                        Text("OK")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.accentColor)
+                            )
                     }
-                }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .appCardRow(verticalPadding: 10)
 
-                if let localStatus {
-                    Text(localStatus)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    AppCardDivider()
+
+                    friendRequestButton
                 }
             }
             .navigationTitle("Blocked App")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
             .sheet(item: $friendRequestGroup) { group in
                 FriendApprovalRequestView(group: group)
             }
         }
     }
 
-    private var subtitle: String {
-        guard let group else {
-            return "This is a local preview of the blocked-app screen."
-        }
-
-        switch (group.unblockConfig.isEnabled, group.friendRequestConfig.isEnabled) {
-        case (true, true):
-            return "Open ScreenLog for a limited unblock or to request friend approval."
-        case (true, false):
-            return "Open ScreenLog for a limited unblock."
-        case (false, true):
-            return "Open ScreenLog to request friend approval."
-        case (false, false):
-            return "This group is blocked by your current ScreenLog settings."
-        }
-    }
-
     @ViewBuilder
-    private func actionRows(for group: BlockGroup) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if group.unblockConfig.isEnabled {
-                VStack(alignment: .leading, spacing: 9) {
-                    Text("\(remainingUnblocks(for: group)) limited unblocks left today")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        unblockButton("5m", seconds: 5 * 60, group: group)
-                        unblockButton("15m", seconds: 15 * 60, group: group)
-                        unblockButton("30m", seconds: 30 * 60, group: group)
-                    }
-                }
+    private var friendRequestButton: some View {
+        if let group, group.friendRequestConfig.isEnabled {
+            Button {
+                AppHaptics.buttonTap()
+                friendRequestGroup = group
+            } label: {
+                Text("Request time from friends")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.12))
+                    )
             }
-
-            if group.friendRequestConfig.isEnabled {
-                Button {
-                    friendRequestGroup = group
-                } label: {
-                    Label("Request friend approval", systemImage: "person.2.badge.gearshape")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.accentColor.opacity(0.12))
-                        )
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .appCardRow(verticalPadding: 10)
+        } else {
+            Button {
+            } label: {
+                Text("Friend request disabled")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.gray.opacity(0.12))
+                    )
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(true)
+            .appCardRow(verticalPadding: 10)
         }
-        .appCardRow()
-    }
-
-    private func remainingUnblocks(for group: BlockGroup) -> Int {
-        BlockingStateResolver.remainingUnblocks(for: group.id, in: model.blockingState)
-    }
-
-    private func unblockButton(_ title: String, seconds: TimeInterval, group: BlockGroup) -> some View {
-        let isDisabled = remainingUnblocks(for: group) == 0 || seconds > group.unblockConfig.maxDurationSeconds
-
-        return Button {
-            if model.startLocalUnblock(groupID: group.id, seconds: seconds) {
-                localStatus = "Dummy App would open for \(BlockingDisplayFormatter.durationLabel(seconds))."
-            }
-        } label: {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .fill(Color.white.opacity(0.72))
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.9), lineWidth: 0.7)
-                }
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.tint)
-        .disabled(isDisabled)
-        .opacity(isDisabled ? 0.45 : 1)
     }
 }
 
@@ -1075,23 +991,28 @@ private struct DummyAppIcon: View {
 }
 #endif
 
-private struct FriendApprovalRequestView: View {
+struct FriendApprovalRequestView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: AppModel
     let group: BlockGroup
     @State private var requestedMinutes = 15
+    @State private var isShowingMinutePicker = false
     @State private var selectedFriendIDs: Set<String> = []
     @State private var message = ""
+
+    private let minuteOptions = [5, 10, 15, 20, 30, 45, 60]
 
     private var friends: [FriendChoice] {
         if model.friendSummaries.isEmpty {
             return [
-                FriendChoice(id: "demo-sam", name: "Sam"),
-                FriendChoice(id: "demo-maya", name: "Maya")
+                FriendChoice(id: "demo-sam", name: "Sam", avatarColorHex: "#1B998B"),
+                FriendChoice(id: "demo-maya", name: "Maya", avatarColorHex: "#E84855")
             ]
         }
 
-        return model.friendSummaries.map { FriendChoice(id: $0.id, name: $0.displayName) }
+        return model.friendSummaries.map {
+            FriendChoice(id: $0.id, name: $0.displayName, avatarColorHex: $0.avatarColorHex)
+        }
     }
 
     var body: some View {
@@ -1099,17 +1020,34 @@ private struct FriendApprovalRequestView: View {
             AppScreenScroll(backgroundStyle: .white) {
                 AppSection("Request") {
                     AppCard {
-                        Picker("Minutes", selection: $requestedMinutes) {
-                            Text("5m").tag(5)
-                            Text("15m").tag(15)
-                            Text("30m").tag(30)
+                        Button {
+                            AppHaptics.buttonTap()
+                            isShowingMinutePicker = true
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Time")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+
+                                    Text(RequestMinuteFormatting.label(requestedMinutes))
+                                        .font(.title3.weight(.semibold).monospacedDigit())
+                                        .foregroundStyle(.primary)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .appCardRow()
                         }
-                        .pickerStyle(.segmented)
-                        .appCardRow()
+                        .buttonStyle(.plain)
 
                         AppCardDivider()
 
-                        TextField("Message", text: $message, axis: .vertical)
+                        TextField("Optional message", text: $message, axis: .vertical)
                             .lineLimit(2...4)
                             .appCardRow()
                     }
@@ -1122,15 +1060,23 @@ private struct FriendApprovalRequestView: View {
                                 AppCardDivider()
                             }
                             Button {
+                                AppHaptics.selectionChanged()
                                 if selectedFriendIDs.contains(friend.id) {
                                     selectedFriendIDs.remove(friend.id)
                                 } else {
                                     selectedFriendIDs.insert(friend.id)
                                 }
                             } label: {
-                                HStack {
+                                HStack(spacing: 12) {
+                                    Avatar(colorHex: friend.avatarColorHex, initials: friend.name.initials)
+                                        .frame(width: 44, height: 44)
+
                                     Text(friend.name)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
+
                                     Spacer()
+
                                     Image(systemName: selectedFriendIDs.contains(friend.id) ? "checkmark.circle.fill" : "circle")
                                         .foregroundStyle(selectedFriendIDs.contains(friend.id) ? Color.accentColor : Color.secondary)
                                 }
@@ -1141,28 +1087,71 @@ private struct FriendApprovalRequestView: View {
                     }
                 }
             }
-            .navigationTitle("Friend Approval")
+            .navigationTitle("Request Time")
+            .safeAreaInset(edge: .bottom) {
+                sendButton
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        AppHaptics.buttonTap()
                         dismiss()
                     }
                 }
-
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Send") {
-                        if model.requestFriendTime(
-                            groupID: group.id,
-                            seconds: TimeInterval(requestedMinutes * 60),
-                            selectedFriendIDs: Array(selectedFriendIDs),
-                            message: message
-                        ) {
-                            dismiss()
-                        }
-                    }
-                    .disabled(selectedFriendIDs.isEmpty)
-                }
             }
+            .sheet(isPresented: $isShowingMinutePicker) {
+                NavigationStack {
+                    RequestMinuteCarouselPicker(minutes: $requestedMinutes, options: minuteOptions)
+                        .navigationTitle("Minutes")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+                .presentationDetents([.height(320)])
+                .presentationDragIndicator(.visible)
+            }
+        }
+    }
+
+    private var canSendRequest: Bool {
+        !selectedFriendIDs.isEmpty
+    }
+
+    private var sendButton: some View {
+        VStack(spacing: 0) {
+            Button {
+                sendRequest()
+            } label: {
+                Text("Send Request")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(canSendRequest ? Color.white : Color.secondary)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(canSendRequest ? Color.accentColor : Color.secondary.opacity(0.18))
+            }
+            .disabled(!canSendRequest)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.regularMaterial)
+    }
+
+    private func sendRequest() {
+        guard canSendRequest else {
+            return
+        }
+
+        if model.requestFriendTime(
+            groupID: group.id,
+            seconds: TimeInterval(requestedMinutes * 60),
+            selectedFriendIDs: Array(selectedFriendIDs),
+            message: message
+        ) {
+            AppHaptics.buttonTap()
+            dismiss()
         }
     }
 }
@@ -1170,6 +1159,47 @@ private struct FriendApprovalRequestView: View {
 private struct FriendChoice: Identifiable {
     let id: String
     let name: String
+    let avatarColorHex: String
+}
+
+private struct RequestMinuteCarouselPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var minutes: Int
+    let options: [Int]
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Picker("Minutes", selection: $minutes) {
+                ForEach(options, id: \.self) { option in
+                    Text(RequestMinuteFormatting.label(option))
+                        .tag(option)
+                }
+            }
+            .pickerStyle(.wheel)
+            .labelsHidden()
+            .frame(height: 210)
+            .clipped()
+            .onChange(of: minutes) {
+                AppHaptics.selectionChanged()
+            }
+        }
+        .padding(.horizontal, 24)
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") {
+                    AppHaptics.buttonTap()
+                    dismiss()
+                }
+            }
+        }
+    }
+}
+
+private enum RequestMinuteFormatting {
+    static func label(_ minutes: Int) -> String {
+        "\(minutes) \(minutes == 1 ? "minute" : "minutes")"
+    }
 }
 
 private struct SnapshotMetrics: View {

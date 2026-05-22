@@ -287,6 +287,43 @@ import Testing
     #expect(BlockingStateResolver.pendingFriendRequests(in: decoded).map(\.id) == ["friend-request"])
 }
 
+@Test func friendRequestsExpireAndCollectAfterApproval() {
+    let now = Date(timeIntervalSince1970: 1_779_236_400)
+    let request = BlockFriendRequest(
+        id: "friend-request",
+        groupID: "social",
+        requestedSeconds: 15 * 60,
+        selectedFriendIDs: ["sam"],
+        message: "Need a minute",
+        requesterID: "me",
+        createdAt: now
+    )
+
+    let pendingExpired = request.expiringIfNeeded(
+        now: now.addingTimeInterval(BlockFriendRequestLifecycle.pendingExpirationSeconds + 1)
+    )
+    #expect(pendingExpired.status == .expired)
+    #expect(pendingExpired.resolvedAt == request.pendingExpiresAt)
+
+    let approvedAt = now.addingTimeInterval(60)
+    let approved = request.resolving(as: .approved, at: approvedAt, approvedByFriendID: "sam")
+    #expect(approved.status == .approved)
+    #expect(approved.resolvedAt == approvedAt)
+    #expect(approved.approvedByFriendID == "sam")
+    #expect(approved.collectionExpiresAt == approvedAt.addingTimeInterval(24 * 3_600))
+
+    let collected = approved.collecting(at: approvedAt.addingTimeInterval(5 * 60))
+    #expect(collected.status == .collected)
+    #expect(collected.collectedAt == approvedAt.addingTimeInterval(5 * 60))
+
+    let approvalExpired = approved.expiringIfNeeded(
+        now: approvedAt.addingTimeInterval(BlockFriendRequestLifecycle.approvedCollectionExpirationSeconds + 1)
+    )
+    #expect(approvalExpired.status == .expired)
+    #expect(approvalExpired.approvedByFriendID == "sam")
+    #expect(approvalExpired.resolvedAt == approvedAt)
+}
+
 @Test func monitorNamesAreDeterministicAndParseable() {
     #expect(BlockingMonitorNameBuilder.dailyAllowanceActivityName(ruleID: "daily.social") == "screenlog.block.allowance.daily-social")
     #expect(BlockingMonitorNameBuilder.dailyAllowanceEventName(ruleID: "daily.social") == "screenlog.block.threshold.daily-social")

@@ -32,10 +32,10 @@ final class ScreenLogShieldActionExtension: ShieldActionDelegate {
     ) {
         switch action {
         case .primaryButtonPressed:
-            let logged = ExtensionBlockingSupport.logExtraTimeRequest(seconds: 15 * 60, matching: token)
-            completionHandler(logged ? .close : .defer)
+            completionHandler(.close)
         case .secondaryButtonPressed:
-            completionHandler(.defer)
+            let queued = ExtensionBlockingSupport.queueFriendRequestDraft(matching: token)
+            completionHandler(queued ? .defer : .none)
         @unknown default:
             completionHandler(.none)
         }
@@ -48,10 +48,10 @@ final class ScreenLogShieldActionExtension: ShieldActionDelegate {
     ) {
         switch action {
         case .primaryButtonPressed:
-            let logged = ExtensionBlockingSupport.logExtraTimeRequest(seconds: 15 * 60, matching: token)
-            completionHandler(logged ? .close : .defer)
+            completionHandler(.close)
         case .secondaryButtonPressed:
-            completionHandler(.defer)
+            let queued = ExtensionBlockingSupport.queueFriendRequestDraft(matching: token)
+            completionHandler(queued ? .defer : .none)
         @unknown default:
             completionHandler(.none)
         }
@@ -64,10 +64,10 @@ final class ScreenLogShieldActionExtension: ShieldActionDelegate {
     ) {
         switch action {
         case .primaryButtonPressed:
-            let logged = ExtensionBlockingSupport.logExtraTimeRequest(seconds: 15 * 60, matching: token)
-            completionHandler(logged ? .close : .defer)
+            completionHandler(.close)
         case .secondaryButtonPressed:
-            completionHandler(.defer)
+            let queued = ExtensionBlockingSupport.queueFriendRequestDraft(matching: token)
+            completionHandler(queued ? .defer : .none)
         @unknown default:
             completionHandler(.none)
         }
