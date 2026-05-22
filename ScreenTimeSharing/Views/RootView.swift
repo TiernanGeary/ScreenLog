@@ -10,7 +10,7 @@ struct RootView: View {
             if model.hasCompletedOnboarding {
                 AppTabs(isShowingActivityPicker: $isShowingActivityPicker)
             } else {
-                OnboardingView(isShowingActivityPicker: $isShowingActivityPicker)
+                OnboardingView()
             }
         }
         .sheet(isPresented: $isShowingActivityPicker, onDismiss: model.persistSelection) {
