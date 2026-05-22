@@ -35,7 +35,8 @@ struct OnboardingView: View {
             VStack(spacing: 0) {
                 TabView(selection: $currentPage) {
                     ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
-                        OnboardingPage(content: page).tag(index)
+                        OnboardingPage(content: page, isActive: currentPage == index)
+                            .tag(index)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
@@ -96,6 +97,9 @@ private struct OnboardingPageContent {
 
 private struct OnboardingPage: View {
     let content: OnboardingPageContent
+    let isActive: Bool
+
+    @State private var entered = false
 
     var body: some View {
         ScrollView {
@@ -105,23 +109,47 @@ private struct OnboardingPage: View {
                 Image(systemName: content.icon)
                     .font(.system(size: 110, weight: .light))
                     .foregroundStyle(.tint)
+                    .symbolEffect(.bounce, options: .nonRepeating, value: entered)
+                    .phaseAnimator([1.0, 1.06]) { view, phase in
+                        view.scaleEffect(phase)
+                    } animation: { _ in
+                        .easeInOut(duration: 1.6)
+                    }
                     .accessibilityHidden(true)
 
                 VStack(spacing: 12) {
                     Text(content.title)
                         .font(.largeTitle.bold())
                         .multilineTextAlignment(.center)
+                        .opacity(entered ? 1 : 0)
+                        .offset(y: entered ? 0 : 14)
+                        .animation(.easeOut(duration: 0.5).delay(0.15), value: entered)
 
                     Text(content.subtitle)
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 16)
+                        .opacity(entered ? 1 : 0)
+                        .offset(y: entered ? 0 : 14)
+                        .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
                 }
 
                 Spacer(minLength: 20)
             }
             .padding(.horizontal, 20)
+        }
+        .onChange(of: isActive, initial: true) { _, nowActive in
+            guard nowActive else {
+                entered = false
+                return
+            }
+
+            entered = false
+            Task {
+                try? await Task.sleep(for: .milliseconds(50))
+                entered = true
+            }
         }
     }
 }
