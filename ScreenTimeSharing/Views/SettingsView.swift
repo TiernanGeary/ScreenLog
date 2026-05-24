@@ -115,6 +115,18 @@ struct SettingsView: View {
                                 .appCardRow()
                         }
                         .buttonStyle(.plain)
+
+                        AppCardDivider()
+
+                        Button {
+                            AppHaptics.buttonTap()
+                            model.resetOnboarding()
+                        } label: {
+                            Label("Replay Onboarding", systemImage: "arrow.counterclockwise")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
                     }
                 }
                 #endif

@@ -245,6 +245,20 @@ enum AppHaptics {
     }
 }
 
+enum Haptics {
+    static func tap() {
+        AppHaptics.buttonTap()
+    }
+
+    static func success() {
+        #if canImport(UIKit)
+        Task { @MainActor in
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+        #endif
+    }
+}
+
 struct Avatar: View {
     let colorHex: String
     let initials: String

@@ -14,7 +14,7 @@ struct RootView: View {
                     isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
                 )
             } else {
-                OnboardingView(isShowingActivityPicker: $isShowingActivityPicker)
+                OnboardingView()
             }
         }
         .sheet(isPresented: $isShowingActivityPicker, onDismiss: model.persistSelection) {

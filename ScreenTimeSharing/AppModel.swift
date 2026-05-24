@@ -279,6 +279,14 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(true, forKey: onboardingKey)
     }
 
+    #if DEBUG
+    func resetOnboarding() {
+        hasCompletedOnboarding = false
+        UserDefaults.standard.set(false, forKey: onboardingKey)
+        message = "Onboarding reset. Relaunch or continue through the setup flow again."
+    }
+    #endif
+
     func setAppearanceMode(_ mode: AppAppearanceMode) {
         guard appearanceMode != mode else {
             return
