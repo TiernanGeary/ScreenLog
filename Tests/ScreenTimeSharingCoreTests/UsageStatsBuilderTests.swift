@@ -70,9 +70,42 @@ import Foundation
 
     #expect(monthBuckets.count == 31)
     #expect(weekBuckets.count == 7)
+    #expect(weekBuckets.first?.id == "2026-05-17")
+    #expect(weekBuckets.last?.id == "2026-05-23")
     #expect(hourlyBuckets.count == 24)
-    #expect(fallbackBuckets.count == 1)
-    #expect(fallbackBuckets.first?.label == "Total")
+    #expect(fallbackBuckets.count == 24)
+    #expect(fallbackBuckets.map(\.duration).allSatisfy { $0 == 0 })
+}
+
+@Test func usageStatsWeekKeepsFullWeekSpaceOnSunday() throws {
+    let calendar = makeCalendar()
+    let sunday = try makeDate(2026, 5, 24, 12, calendar: calendar)
+    let buckets = UsageStatsBuilder.chartBuckets(
+        range: .week,
+        selectedDate: sunday,
+        history: [
+            makeSnapshot(date: sunday, duration: 1_800, pickups: 2, calendar: calendar)
+        ],
+        calendar: calendar
+    )
+
+    #expect(buckets.count == 7)
+    #expect(buckets.first?.id == "2026-05-24")
+    #expect(buckets.last?.id == "2026-05-30")
+    #expect(buckets.map(\.duration) == [1_800, 0, 0, 0, 0, 0, 0])
+}
+
+@Test func usageStatsForwardNavigationUnlocksForEarlierPeriods() throws {
+    let calendar = makeCalendar()
+    let currentSunday = try makeDate(2026, 5, 24, 12, calendar: calendar)
+    let priorWeek = try makeDate(2026, 5, 17, 12, calendar: calendar)
+    let currentMonth = try makeDate(2026, 5, 21, 12, calendar: calendar)
+    let priorMonth = try makeDate(2026, 4, 21, 12, calendar: calendar)
+
+    #expect(!UsageStatsBuilder.canNavigateForward(range: .week, selectedDate: currentSunday, now: currentSunday, calendar: calendar))
+    #expect(UsageStatsBuilder.canNavigateForward(range: .week, selectedDate: priorWeek, now: currentSunday, calendar: calendar))
+    #expect(!UsageStatsBuilder.canNavigateForward(range: .month, selectedDate: currentMonth, now: currentSunday, calendar: calendar))
+    #expect(UsageStatsBuilder.canNavigateForward(range: .month, selectedDate: priorMonth, now: currentSunday, calendar: calendar))
 }
 
 @Test func usageHistoryRoundTripAndSameDayReplacement() throws {

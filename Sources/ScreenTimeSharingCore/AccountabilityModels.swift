@@ -260,7 +260,7 @@ public enum LeaderboardBuilder {
         case .today:
             return UsageDateBoundary.dayInterval(containing: now, calendar: calendar)
         case .week:
-            return calendar.dateInterval(of: .weekOfYear, for: now)
+            return UsageStatsBuilder.periodInterval(for: .week, containing: now, calendar: calendar)
         case .month:
             return calendar.dateInterval(of: .month, for: now)
         case .allTime:

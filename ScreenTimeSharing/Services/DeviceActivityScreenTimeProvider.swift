@@ -4,9 +4,14 @@ import Foundation
 @MainActor
 final class DeviceActivityScreenTimeProvider: ScreenTimeProvider {
     private let calendar: Calendar
+    private let reportDefaults: UserDefaults?
 
-    init(calendar: Calendar = .current) {
+    init(
+        calendar: Calendar = .current,
+        reportDefaults: UserDefaults? = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)
+    ) {
         self.calendar = calendar
+        self.reportDefaults = reportDefaults
     }
 
     func requestAuthorization() async throws {
@@ -14,7 +19,12 @@ final class DeviceActivityScreenTimeProvider: ScreenTimeProvider {
     }
 
     func authorizationLabel() -> String {
-        switch AuthorizationCenter.shared.authorizationStatus {
+        let status = AuthorizationCenter.shared.authorizationStatus
+        if isApprovedStatus(status) {
+            return status.rawValue == 3 ? "Approved with data access" : "Approved"
+        }
+
+        switch status {
         case .notDetermined:
             return "Not requested"
         case .denied:
@@ -22,7 +32,7 @@ final class DeviceActivityScreenTimeProvider: ScreenTimeProvider {
         case .approved:
             return "Approved"
         @unknown default:
-            return "Unknown"
+            return unknownAuthorizationLabel(status)
         }
     }
 
@@ -31,17 +41,17 @@ final class DeviceActivityScreenTimeProvider: ScreenTimeProvider {
         let interval = UsageDateBoundary.dayInterval(containing: now, calendar: calendar)
         let snapshotID = UsageDateBoundary.snapshotID(profileID: profile.id, date: now, calendar: calendar)
 
-        guard selection.hasSelectedActivities else {
-            return unavailableSnapshot(
+        let status = AuthorizationCenter.shared.authorizationStatus
+        if isApprovedStatus(status) {
+            return reportBackedSnapshot(
                 id: snapshotID,
                 profile: profile,
                 date: interval.start,
-                now: now,
-                reason: "Choose at least one app, category, or website before sharing."
+                now: now
             )
         }
 
-        switch AuthorizationCenter.shared.authorizationStatus {
+        switch status {
         case .notDetermined:
             return unavailableSnapshot(
                 id: snapshotID,
@@ -59,12 +69,11 @@ final class DeviceActivityScreenTimeProvider: ScreenTimeProvider {
                 reason: "Screen Time authorization was denied."
             )
         case .approved:
-            return unavailableSnapshot(
+            return reportBackedSnapshot(
                 id: snapshotID,
                 profile: profile,
                 date: interval.start,
-                now: now,
-                reason: "Screen Time usage export requires a Device Activity report extension on a real device. The app will not upload placeholder data."
+                now: now
             )
         @unknown default:
             return unavailableSnapshot(
@@ -72,9 +81,41 @@ final class DeviceActivityScreenTimeProvider: ScreenTimeProvider {
                 profile: profile,
                 date: interval.start,
                 now: now,
-                reason: "Screen Time authorization is in an unknown state."
+                reason: "Screen Time authorization is \(unknownAuthorizationLabel(status))."
             )
         }
+    }
+
+    private func isApprovedStatus(_ status: AuthorizationStatus) -> Bool {
+        status == .approved || status.rawValue == 3
+    }
+
+    private func reportBackedSnapshot(
+        id: String,
+        profile: UserProfile,
+        date: Date,
+        now: Date
+    ) -> DailyUsageSnapshot {
+        if let snapshot = ScreenTimeReportStorage.latestSnapshot(
+            for: profile.id,
+            on: now,
+            defaults: reportDefaults,
+            calendar: calendar
+        ) {
+            return snapshot
+        }
+
+        return unavailableSnapshot(
+            id: id,
+            profile: profile,
+            date: date,
+            now: now,
+            reason: "Live Screen Time reports are shown on Home and Stats."
+        )
+    }
+
+    private func unknownAuthorizationLabel(_ status: AuthorizationStatus) -> String {
+        "Unknown (raw \(status.rawValue), \(status.description))"
     }
 
     private func unavailableSnapshot(
@@ -96,11 +137,5 @@ final class DeviceActivityScreenTimeProvider: ScreenTimeProvider {
             lastUpdated: now,
             capability: .unavailable(reason: reason)
         )
-    }
-}
-
-private extension FamilyActivitySelection {
-    var hasSelectedActivities: Bool {
-        !applicationTokens.isEmpty || !categoryTokens.isEmpty || !webDomainTokens.isEmpty
     }
 }

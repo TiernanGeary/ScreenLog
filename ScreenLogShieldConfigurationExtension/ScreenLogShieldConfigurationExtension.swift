@@ -47,25 +47,25 @@ final class ScreenLogShieldConfigurationExtension: ShieldConfigurationDataSource
 
     private func configuration(copy: ShieldCopy) -> ShieldConfiguration {
         ShieldConfiguration(
-            backgroundBlurStyle: .systemUltraThinMaterialLight,
-            backgroundColor: UIColor(red: 1.0, green: 0.98, blue: 0.95, alpha: 1.0),
+            backgroundBlurStyle: .systemMaterial,
+            backgroundColor: .systemBackground,
             icon: UIImage(systemName: "lock.shield.fill"),
             title: ShieldConfiguration.Label(
                 text: copy.title,
-                color: UIColor.label
+                color: .label
             ),
             subtitle: ShieldConfiguration.Label(
                 text: copy.subtitle,
-                color: UIColor.secondaryLabel
+                color: .secondaryLabel
             ),
             primaryButtonLabel: ShieldConfiguration.Label(
                 text: copy.primaryButton,
-                color: UIColor.white
+                color: .white
             ),
-            primaryButtonBackgroundColor: UIColor.systemBlue,
+            primaryButtonBackgroundColor: .systemBlue,
             secondaryButtonLabel: ShieldConfiguration.Label(
                 text: copy.secondaryButton,
-                color: copy.isFriendRequestEnabled ? UIColor.systemBlue : UIColor.systemGray2
+                color: copy.isFriendRequestEnabled ? .systemBlue : .tertiaryLabel
             )
         )
     }

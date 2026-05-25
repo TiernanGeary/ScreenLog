@@ -1,4 +1,8 @@
 import SwiftUI
+#if canImport(FamilyControls) && canImport(ManagedSettings)
+import FamilyControls
+import ManagedSettings
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -326,19 +330,49 @@ struct ProfileAvatar: View {
 
 struct AppUsageIcon: View {
     let name: String
+    var applicationTokenData: Data? = nil
+    var size: CGFloat = 42
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(iconGradient)
-            .frame(width: 42, height: 42)
-            .overlay {
-                Text(initial)
-                    .font(.headline.bold())
-                    .foregroundStyle(.white)
+        Group {
+            if let token = applicationToken {
+                Label(token)
+                    .labelStyle(.iconOnly)
+                    .frame(width: size, height: size)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground))
+            } else {
+                fallbackIcon
             }
+        }
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
             .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
             .accessibilityHidden(true)
     }
+
+    private var fallbackIcon: some View {
+        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+            .fill(iconGradient)
+            .frame(width: size, height: size)
+            .overlay {
+                Text(initial)
+                    .font(.system(size: size * 0.38, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+    }
+
+    #if canImport(FamilyControls) && canImport(ManagedSettings)
+    private var applicationToken: ApplicationToken? {
+        guard let applicationTokenData else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(ApplicationToken.self, from: applicationTokenData)
+    }
+    #else
+    private var applicationToken: Never? {
+        nil
+    }
+    #endif
 
     private var initial: String {
         guard let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first else {

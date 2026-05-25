@@ -10,17 +10,21 @@ struct BlockingEnforcementService {
 
     private let center: DeviceActivityCenter
     private let store: ManagedSettingsStore
+    private let defaults: UserDefaults?
 
     init(
         center: DeviceActivityCenter = DeviceActivityCenter(),
-        store: ManagedSettingsStore = ManagedSettingsStore(named: Self.storeName)
+        store: ManagedSettingsStore = ManagedSettingsStore(named: Self.storeName),
+        defaults: UserDefaults? = UserDefaults(suiteName: BlockingStoreCodec.suiteName)
     ) {
         self.center = center
         self.store = store
+        self.defaults = defaults
     }
 
     func syncMonitoring(for state: BlockingState) throws {
         center.stopMonitoring()
+        reconcileActiveShields(for: state)
 
         for group in BlockingStateResolver.enabledGroups(in: state) {
             guard let selection = try? BlockingSelectionCodec.decode(group.selectionData),
@@ -44,6 +48,15 @@ struct BlockingEnforcementService {
             .compactMap { try? BlockingSelectionCodec.decode($0.selectionData) }
 
         applyShields(for: selections)
+    }
+
+    private func reconcileActiveShields(for state: BlockingState) {
+        let enabledGroupIDs = Set(BlockingStateResolver.enabledGroups(in: state).map(\.id))
+        let activeGroupIDs = Set(defaults?.stringArray(forKey: BlockingStoreCodec.activeShieldedGroupIDsKey) ?? [])
+        let validActiveGroupIDs = activeGroupIDs.intersection(enabledGroupIDs)
+
+        defaults?.set(Array(validActiveGroupIDs), forKey: BlockingStoreCodec.activeShieldedGroupIDsKey)
+        applyShields(for: validActiveGroupIDs, in: state)
     }
 
     func clearShields() {

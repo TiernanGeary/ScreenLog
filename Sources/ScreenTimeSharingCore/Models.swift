@@ -35,17 +35,20 @@ public struct SharedAppUsage: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var displayName: String
     public var bundleIdentifier: String?
+    public var applicationTokenData: Data?
     public var duration: TimeInterval
 
     public init(
         id: String,
         displayName: String,
         bundleIdentifier: String?,
+        applicationTokenData: Data? = nil,
         duration: TimeInterval
     ) {
         self.id = id
         self.displayName = displayName
         self.bundleIdentifier = bundleIdentifier
+        self.applicationTokenData = applicationTokenData
         self.duration = duration
     }
 }
@@ -97,6 +100,12 @@ public struct DailyUsageSnapshot: Codable, Equatable, Identifiable, Sendable {
         var copy = self
         if !capability.allowsPerAppRows {
             copy.appRows = []
+        } else {
+            copy.appRows = copy.appRows.map { row in
+                var sanitized = row
+                sanitized.applicationTokenData = nil
+                return sanitized
+            }
         }
         return copy
     }
@@ -207,6 +216,330 @@ public struct UsageChartBucket: Codable, Equatable, Identifiable, Sendable {
         self.start = start
         self.end = end
         self.duration = duration
+    }
+}
+
+public struct ScreenTimeReportSegmentInput: Equatable, Sendable {
+    public var dateInterval: DateInterval
+    public var totalActivityDuration: TimeInterval
+    public var pickupCount: Int
+    public var appRows: [SharedAppUsage]
+
+    public init(
+        dateInterval: DateInterval,
+        totalActivityDuration: TimeInterval,
+        pickupCount: Int,
+        appRows: [SharedAppUsage]
+    ) {
+        self.dateInterval = dateInterval
+        self.totalActivityDuration = totalActivityDuration
+        self.pickupCount = pickupCount
+        self.appRows = appRows
+    }
+}
+
+public struct ScreenTimeLiveReportConfiguration: Equatable, Sendable {
+    public var generatedAt: Date
+    public var totalDuration: TimeInterval
+    public var pickupCount: Int
+    public var buckets: [UsageChartBucket]
+    public var appRows: [SharedAppUsage]
+
+    public init(
+        generatedAt: Date,
+        totalDuration: TimeInterval,
+        pickupCount: Int,
+        buckets: [UsageChartBucket],
+        appRows: [SharedAppUsage]
+    ) {
+        self.generatedAt = generatedAt
+        self.totalDuration = totalDuration
+        self.pickupCount = pickupCount
+        self.buckets = buckets
+        self.appRows = appRows
+    }
+}
+
+public enum ScreenTimeLiveReportBucketGranularity: Equatable, Sendable {
+    case segment
+    case hourlyDay
+    case week
+    case day
+    case month
+}
+
+public enum ScreenTimeLiveReportBuilder {
+    public static func configuration(
+        segments: [ScreenTimeReportSegmentInput],
+        generatedAt: Date = Date(),
+        calendar: Calendar = .current,
+        bucketGranularity: ScreenTimeLiveReportBucketGranularity = .segment
+    ) -> ScreenTimeLiveReportConfiguration {
+        let totalDuration = segments.reduce(0) { partial, segment in
+            partial + max(0, segment.totalActivityDuration)
+        }
+        let pickupCount = segments.reduce(0) { partial, segment in
+            partial + max(0, segment.pickupCount)
+        }
+
+        return ScreenTimeLiveReportConfiguration(
+            generatedAt: generatedAt,
+            totalDuration: totalDuration,
+            pickupCount: pickupCount,
+            buckets: mergedBuckets(from: segments, calendar: calendar, granularity: bucketGranularity),
+            appRows: mergedAppRows(from: segments)
+        )
+    }
+
+    private static func mergedBuckets(
+        from segments: [ScreenTimeReportSegmentInput],
+        calendar: Calendar,
+        granularity: ScreenTimeLiveReportBucketGranularity
+    ) -> [UsageChartBucket] {
+        if granularity == .hourlyDay {
+            return mergedHourlyDayBuckets(from: segments, calendar: calendar)
+        }
+
+        if granularity == .week {
+            return mergedWeekBuckets(from: segments, calendar: calendar)
+        }
+
+        if granularity == .day {
+            return mergedDayBuckets(from: segments, calendar: calendar)
+        }
+
+        if granularity == .month {
+            return mergedMonthBuckets(from: segments, calendar: calendar)
+        }
+
+        var bucketsByID: [String: UsageChartBucket] = [:]
+
+        for segment in segments {
+            let id = bucketID(for: segment.dateInterval, calendar: calendar)
+            let existing = bucketsByID[id]
+            bucketsByID[id] = UsageChartBucket(
+                id: id,
+                label: bucketLabel(for: segment.dateInterval, calendar: calendar),
+                date: segment.dateInterval.start,
+                start: segment.dateInterval.start,
+                end: segment.dateInterval.end,
+                duration: (existing?.duration ?? 0) + max(0, segment.totalActivityDuration)
+            )
+        }
+
+        return bucketsByID.values.sorted { $0.start < $1.start }
+    }
+
+    private static func mergedHourlyDayBuckets(
+        from segments: [ScreenTimeReportSegmentInput],
+        calendar: Calendar
+    ) -> [UsageChartBucket] {
+        guard let firstSegmentStart = segments.map(\.dateInterval.start).min() else {
+            return []
+        }
+
+        let dayInterval = UsageDateBoundary.dayInterval(containing: firstSegmentStart, calendar: calendar)
+        let dayID = UsageDateBoundary.localDayKey(date: dayInterval.start, calendar: calendar)
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "ha"
+
+        var durationsByHour: [Int: TimeInterval] = [:]
+        for segment in segments where segment.dateInterval.duration <= 3_700 {
+            let hour = calendar.component(.hour, from: segment.dateInterval.start)
+            durationsByHour[hour, default: 0] += max(0, segment.totalActivityDuration)
+        }
+
+        return (0..<24).compactMap { hour in
+            guard let start = calendar.date(byAdding: .hour, value: hour, to: dayInterval.start),
+                  let end = calendar.date(byAdding: .hour, value: 1, to: start) else {
+                return nil
+            }
+
+            return UsageChartBucket(
+                id: "\(dayID)-\(hour)",
+                label: formatter.string(from: start),
+                date: start,
+                start: start,
+                end: end,
+                duration: durationsByHour[hour] ?? 0
+            )
+        }
+    }
+
+    private static func mergedWeekBuckets(
+        from segments: [ScreenTimeReportSegmentInput],
+        calendar: Calendar
+    ) -> [UsageChartBucket] {
+        guard let firstSegmentStart = segments.map(\.dateInterval.start).min() else {
+            return []
+        }
+
+        var durationsByDayID: [String: TimeInterval] = [:]
+        for segment in segments {
+            let dayID = UsageDateBoundary.localDayKey(date: segment.dateInterval.start, calendar: calendar)
+            durationsByDayID[dayID, default: 0] += max(0, segment.totalActivityDuration)
+        }
+
+        let weekInterval = UsageStatsBuilder.periodInterval(for: .week, containing: firstSegmentStart, calendar: calendar)
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "EEE"
+
+        var buckets: [UsageChartBucket] = []
+        var cursor = weekInterval.start
+        while cursor < weekInterval.end {
+            let dayInterval = UsageDateBoundary.dayInterval(containing: cursor, calendar: calendar)
+            let dayID = UsageDateBoundary.localDayKey(date: cursor, calendar: calendar)
+            buckets.append(
+                UsageChartBucket(
+                    id: dayID,
+                    label: formatter.string(from: cursor),
+                    date: cursor,
+                    start: dayInterval.start,
+                    end: dayInterval.end,
+                    duration: durationsByDayID[dayID] ?? 0
+                )
+            )
+
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else {
+                break
+            }
+            cursor = next
+        }
+
+        return buckets
+    }
+
+    private static func mergedDayBuckets(
+        from segments: [ScreenTimeReportSegmentInput],
+        calendar: Calendar
+    ) -> [UsageChartBucket] {
+        var bucketsByID: [String: UsageChartBucket] = [:]
+
+        for segment in segments {
+            let dayInterval = UsageDateBoundary.dayInterval(containing: segment.dateInterval.start, calendar: calendar)
+            let id = UsageDateBoundary.localDayKey(date: dayInterval.start, calendar: calendar)
+            let existing = bucketsByID[id]
+            bucketsByID[id] = UsageChartBucket(
+                id: id,
+                label: "",
+                date: dayInterval.start,
+                start: dayInterval.start,
+                end: dayInterval.end,
+                duration: (existing?.duration ?? 0) + max(0, segment.totalActivityDuration)
+            )
+        }
+
+        let sortedBuckets = bucketsByID.values.sorted { $0.start < $1.start }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = sortedBuckets.count > 10 ? "d" : "EEE"
+
+        return sortedBuckets.map { bucket in
+            UsageChartBucket(
+                id: bucket.id,
+                label: formatter.string(from: bucket.start),
+                date: bucket.date,
+                start: bucket.start,
+                end: bucket.end,
+                duration: bucket.duration
+            )
+        }
+    }
+
+    private static func mergedMonthBuckets(
+        from segments: [ScreenTimeReportSegmentInput],
+        calendar: Calendar
+    ) -> [UsageChartBucket] {
+        guard let firstSegmentStart = segments.map(\.dateInterval.start).min(),
+              let monthInterval = calendar.dateInterval(of: .month, for: firstSegmentStart) else {
+            return []
+        }
+
+        var durationsByDayID: [String: TimeInterval] = [:]
+        for segment in segments {
+            let dayID = UsageDateBoundary.localDayKey(date: segment.dateInterval.start, calendar: calendar)
+            durationsByDayID[dayID, default: 0] += max(0, segment.totalActivityDuration)
+        }
+
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "d"
+
+        var buckets: [UsageChartBucket] = []
+        var cursor = monthInterval.start
+        while cursor < monthInterval.end {
+            let dayInterval = UsageDateBoundary.dayInterval(containing: cursor, calendar: calendar)
+            let dayID = UsageDateBoundary.localDayKey(date: cursor, calendar: calendar)
+            buckets.append(
+                UsageChartBucket(
+                    id: dayID,
+                    label: formatter.string(from: cursor),
+                    date: cursor,
+                    start: dayInterval.start,
+                    end: dayInterval.end,
+                    duration: durationsByDayID[dayID] ?? 0
+                )
+            )
+
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else {
+                break
+            }
+            cursor = next
+        }
+
+        return buckets
+    }
+
+    private static func mergedAppRows(from segments: [ScreenTimeReportSegmentInput]) -> [SharedAppUsage] {
+        var rowsByID: [String: SharedAppUsage] = [:]
+
+        for segment in segments {
+            for row in segment.appRows {
+                let key = row.bundleIdentifier ?? row.id
+                let existing = rowsByID[key]
+                rowsByID[key] = SharedAppUsage(
+                    id: key,
+                    displayName: existing?.displayName ?? row.displayName,
+                    bundleIdentifier: existing?.bundleIdentifier ?? row.bundleIdentifier,
+                    applicationTokenData: existing?.applicationTokenData ?? row.applicationTokenData,
+                    duration: (existing?.duration ?? 0) + max(0, row.duration)
+                )
+            }
+        }
+
+        return rowsByID.values.sorted { lhs, rhs in
+            if lhs.duration != rhs.duration {
+                return lhs.duration > rhs.duration
+            }
+
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    private static func bucketID(for interval: DateInterval, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.hour], from: interval.start, to: interval.end)
+        if (components.hour ?? 0) <= 1 {
+            let hour = calendar.component(.hour, from: interval.start)
+            return "\(UsageDateBoundary.localDayKey(date: interval.start, calendar: calendar))-\(hour)"
+        }
+
+        return UsageDateBoundary.localDayKey(date: interval.start, calendar: calendar)
+    }
+
+    private static func bucketLabel(for interval: DateInterval, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+
+        let components = calendar.dateComponents([.hour], from: interval.start, to: interval.end)
+        formatter.dateFormat = (components.hour ?? 0) <= 1 ? "ha" : "EEE"
+        return formatter.string(from: interval.start)
     }
 }
 
@@ -672,6 +1005,7 @@ public enum UsageStatsBuilder {
                     id: key,
                     displayName: existing?.displayName ?? row.displayName,
                     bundleIdentifier: existing?.bundleIdentifier ?? row.bundleIdentifier,
+                    applicationTokenData: existing?.applicationTokenData ?? row.applicationTokenData,
                     duration: (existing?.duration ?? 0) + max(0, row.duration)
                 )
             }
@@ -696,8 +1030,7 @@ public enum UsageStatsBuilder {
             return calendar.dateInterval(of: .month, for: date)
                 ?? UsageDateBoundary.dayInterval(containing: date, calendar: calendar)
         case .week:
-            return calendar.dateInterval(of: .weekOfYear, for: date)
-                ?? UsageDateBoundary.dayInterval(containing: date, calendar: calendar)
+            return sundayWeekInterval(containing: date, calendar: calendar)
         case .day:
             return UsageDateBoundary.dayInterval(containing: date, calendar: calendar)
         }
@@ -729,7 +1062,7 @@ public enum UsageStatsBuilder {
         case .month:
             return calendar.date(byAdding: .month, value: value, to: date)
         case .week:
-            return calendar.date(byAdding: .weekOfYear, value: value, to: date)
+            return calendar.date(byAdding: .day, value: value * 7, to: date)
         case .day:
             return calendar.date(byAdding: .day, value: value, to: date)
         }
@@ -827,21 +1160,6 @@ public enum UsageStatsBuilder {
                     duration: max(0, hourlyDurations.indices.contains(hour) ? hourlyDurations[hour] : 0)
                 )
             }
-        }
-
-        if let snapshot = snapshot(for: interval.start, in: history, calendar: calendar),
-           let totalDuration = snapshot.totalDuration,
-           totalDuration > 0 {
-            return [
-                UsageChartBucket(
-                    id: "\(key)-total",
-                    label: "Total",
-                    date: interval.start,
-                    start: interval.start,
-                    end: interval.end,
-                    duration: totalDuration
-                )
-            ]
         }
 
         return (0..<24).compactMap { hour in
@@ -955,5 +1273,19 @@ public enum UsageStatsBuilder {
         shortFormatter.timeZone = calendar.timeZone
         shortFormatter.dateFormat = "MMM d"
         return "\(shortFormatter.string(from: interval.start))-\(shortFormatter.string(from: lastDay)), \(yearFormatter.string(from: lastDay))"
+    }
+
+    private static func sundayWeekInterval(
+        containing date: Date,
+        calendar: Calendar
+    ) -> DateInterval {
+        let dayStart = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: dayStart)
+        let daysSinceSunday = max(0, weekday - 1)
+        let start = calendar.date(byAdding: .day, value: -daysSinceSunday, to: dayStart)
+            ?? dayStart.addingTimeInterval(TimeInterval(-daysSinceSunday * 86_400))
+        let end = calendar.date(byAdding: .day, value: 7, to: start)
+            ?? start.addingTimeInterval(7 * 86_400)
+        return DateInterval(start: start, end: end)
     }
 }

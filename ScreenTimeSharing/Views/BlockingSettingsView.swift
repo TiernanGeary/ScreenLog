@@ -1285,9 +1285,9 @@ struct BlockingSettingsView: View {
             }
         }
         .sheet(item: $passwordAction) { action in
-            PasswordPromptView(action: action) { resolvedAction, group in
+            PasswordPromptView(action: action) { resolvedAction, group, verifiedPassword in
                 passwordAction = nil
-                handleUnlockedAction(resolvedAction, group: group)
+                handleUnlockedAction(resolvedAction, group: group, verifiedPassword: verifiedPassword)
             } onSetPassword: { group in
                 passwordAction = nil
                 editorDraft = BlockGroupDraft(group: group)
@@ -1565,6 +1565,17 @@ struct BlockingSettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if let reset = group.passwordReset {
+                        TimelineView(.periodic(from: Date(), by: 60)) { context in
+                            Label(
+                                PasswordResetDisplayFormatter.statusLabel(for: reset, now: context.date),
+                                systemImage: "clock.badge.exclamationmark"
+                            )
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.yellow)
+                            .lineLimit(1)
+                        }
+                    }
                 }
 
                 Spacer()
@@ -1579,18 +1590,10 @@ struct BlockingSettingsView: View {
                 .foregroundStyle(.tint)
                 .accessibilityLabel("Edit group")
 
-                Button {
-                    beginProtectedAction(.toggleEnabled, group: group)
-                } label: {
-                    Image(systemName: group.isEnabled ? "pause.circle" : "play.circle")
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
-                .accessibilityLabel(group.isEnabled ? "Pause group" : "Resume group")
             }
 
             HStack(spacing: 8) {
+                pill(group.isEnabled ? "Active" : "Inactive", systemImage: group.isEnabled ? "checkmark.circle" : "pause.circle")
                 pill("\(selectionCount(for: group)) selected", systemImage: "app.badge")
                 if group.unblockConfig.isEnabled {
                     pill("\(group.unblockConfig.unblocksPerDay)x unblocks", systemImage: "lock.open")
@@ -1647,28 +1650,32 @@ struct BlockingSettingsView: View {
             return
         }
 
-        if model.isGroupUnlocked(group) {
-            handleUnlockedAction(kind, group: group)
-        } else {
-            passwordAction = PasswordProtectedAction(kind: kind, groupID: group.id)
-        }
+        passwordAction = PasswordProtectedAction(kind: kind, groupID: group.id)
     }
 
-    private func handleUnlockedAction(_ kind: PasswordProtectedAction.Kind, group: BlockGroup) {
+    private func handleUnlockedAction(
+        _ kind: PasswordProtectedAction.Kind,
+        group: BlockGroup,
+        verifiedPassword: String?
+    ) {
         switch kind {
         case .edit:
             editorDraft = BlockGroupDraft(group: group)
         case .toggleEnabled:
-            _ = model.toggleBlockGroup(group)
+            _ = model.toggleBlockGroup(group, password: verifiedPassword)
         case .delete:
-            _ = model.deleteBlockGroup(group)
+            _ = model.deleteBlockGroup(group, password: verifiedPassword)
         }
     }
 
-    private func pill(_ title: String, systemImage: String) -> some View {
+    private func pill(
+        _ title: String,
+        systemImage: String,
+        foregroundStyle: Color = .secondary
+    ) -> some View {
         Label(title, systemImage: systemImage)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(foregroundStyle)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
             .background(pillBackground, in: Capsule())
@@ -1747,18 +1754,88 @@ struct PasswordProtectedAction: Identifiable {
     let groupID: String
 }
 
+private enum PasswordResetDisplayFormatter {
+    static func statusLabel(for reset: BlockPasswordResetState, now: Date = Date()) -> String {
+        guard !reset.isAvailable(now: now) else {
+            return "Recovery ready"
+        }
+
+        return "Recovery in \(remainingLabel(for: reset, now: now))"
+    }
+
+    static func detailLabel(for reset: BlockPasswordResetState, now: Date = Date()) -> String {
+        guard !reset.isAvailable(now: now) else {
+            return "Recovery ready. Set a new password."
+        }
+
+        return "Recovery unlocks in \(remainingLabel(for: reset, now: now))"
+    }
+
+    private static func remainingLabel(for reset: BlockPasswordResetState, now: Date) -> String {
+        let remaining = max(0, reset.availableAt.timeIntervalSince(now))
+        let totalMinutes = max(1, Int(ceil(remaining / 60)))
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+
+        if hours > 0, minutes > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        if hours > 0 {
+            return "\(hours)h"
+        }
+        return "\(minutes)m"
+    }
+}
+
 struct PasswordPromptView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: AppModel
     let action: PasswordProtectedAction
-    let onUnlocked: (PasswordProtectedAction.Kind, BlockGroup) -> Void
+    let onUnlocked: (PasswordProtectedAction.Kind, BlockGroup, String?) -> Void
     let onSetPassword: (BlockGroup) -> Void
 
     @State private var password = ""
     @State private var newPassword = ""
+    @State private var isConfirmingPasswordRecovery = false
 
     private var group: BlockGroup? {
         model.blockingState.groups.first { $0.id == action.groupID }
+    }
+
+    private var navigationTitle: String {
+        switch action.kind {
+        case .delete:
+            return "Delete Group"
+        case .edit, .toggleEnabled:
+            return "Unlock Group"
+        }
+    }
+
+    private var submitLabel: String {
+        switch action.kind {
+        case .delete:
+            return "Delete"
+        case .edit, .toggleEnabled:
+            return "Unlock"
+        }
+    }
+
+    private var submitSystemImage: String {
+        switch action.kind {
+        case .delete:
+            return "trash"
+        case .edit, .toggleEnabled:
+            return "lock.open"
+        }
+    }
+
+    private var submitColor: Color {
+        switch action.kind {
+        case .delete:
+            return Color(red: 0.86, green: 0.24, blue: 0.22)
+        case .edit, .toggleEnabled:
+            return Color.accentColor
+        }
     }
 
     var body: some View {
@@ -1789,14 +1866,14 @@ struct PasswordPromptView: View {
                                     Button {
                                         if model.verifyPassword(for: group, password: password) {
                                             AppHaptics.buttonTap()
-                                            onUnlocked(action.kind, group)
+                                            onUnlocked(action.kind, group, password)
                                         }
                                     } label: {
-                                        Label("Unlock", systemImage: "lock.open")
+                                        Label(submitLabel, systemImage: submitSystemImage)
                                             .font(.subheadline.weight(.semibold))
                                     }
                                     .buttonStyle(.plain)
-                                    .foregroundStyle(.tint)
+                                    .foregroundStyle(submitColor)
                                 }
                                 .appCardRow()
                             }
@@ -1809,9 +1886,14 @@ struct PasswordPromptView: View {
                         AppCard {
                             if let reset = group.passwordReset {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    Text(reset.isAvailable() ? "Reset is available." : "Reset will unlock after 24 hours.")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
+                                    TimelineView(.periodic(from: Date(), by: 60)) { context in
+                                        Label(
+                                            PasswordResetDisplayFormatter.detailLabel(for: reset, now: context.date),
+                                            systemImage: "clock.badge.exclamationmark"
+                                        )
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(reset.isAvailable(now: context.date) ? Color.green : Color.yellow)
+                                    }
 
                                     if reset.isAvailable() {
                                         SecureField("New passcode", text: $newPassword)
@@ -1820,7 +1902,7 @@ struct PasswordPromptView: View {
                                             if model.completePasswordReset(for: group, newPassword: newPassword),
                                                let updatedGroup = model.blockingState.groups.first(where: { $0.id == group.id }) {
                                                 AppHaptics.buttonTap()
-                                                onUnlocked(action.kind, updatedGroup)
+                                                onUnlocked(action.kind, updatedGroup, newPassword)
                                             }
                                         } label: {
                                             Label("Reset Passcode", systemImage: "key.fill")
@@ -1833,19 +1915,19 @@ struct PasswordPromptView: View {
                             } else {
                                 Button {
                                     AppHaptics.buttonTap()
-                                    model.requestPasswordReset(for: group)
+                                    isConfirmingPasswordRecovery = true
                                 } label: {
                                     Label("Forgot Password", systemImage: "clock.badge.exclamationmark")
                                         .appCardRow()
                                 }
                                 .buttonStyle(.plain)
-                                .foregroundStyle(.tint)
+                                .foregroundStyle(.yellow)
                             }
                         }
                     }
                 }
             }
-            .navigationTitle("Unlock Group")
+            .navigationTitle(navigationTitle)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -1853,6 +1935,18 @@ struct PasswordPromptView: View {
                         dismiss()
                     }
                 }
+            }
+            .alert("Start Password Recovery?", isPresented: $isConfirmingPasswordRecovery) {
+                Button("Cancel", role: .cancel) {}
+                Button("Start Recovery") {
+                    guard let group else {
+                        return
+                    }
+                    AppHaptics.buttonTap()
+                    model.requestPasswordReset(for: group)
+                }
+            } message: {
+                Text("This starts a recovery timer. You will need to wait about 1 minute before you can set a new password for this block group.")
             }
         }
     }
@@ -1865,6 +1959,8 @@ struct BlockGroupConfigurationView: View {
 
     @State private var passwordAction: PasswordProtectedAction?
     @State private var editorDraft: BlockGroupDraft?
+    @State private var isConfirmingDelete = false
+    @State private var pendingDeletePassword: String?
 
     private var group: BlockGroup? {
         model.blockingState.groups.first { $0.id == groupID }
@@ -1875,6 +1971,12 @@ struct BlockGroupConfigurationView: View {
             AppScreenScroll(backgroundStyle: .white) {
                 if let group {
                     header(for: group)
+
+                    AppSection("Status") {
+                        AppCard {
+                            activeToggle(for: group)
+                        }
+                    }
 
                     AppSection("Apps & Websites") {
                         AppCard {
@@ -1934,9 +2036,22 @@ struct BlockGroupConfigurationView: View {
                         AppCard {
                             configurationRow(
                                 title: "Passcode",
-                                value: group.requiresPasswordSetup ? "Needs setup" : "Required",
+                                value: passcodeStatus(for: group),
                                 systemImage: "key"
                             )
+
+                            if let reset = group.passwordReset {
+                                AppCardDivider()
+
+                                TimelineView(.periodic(from: Date(), by: 60)) { context in
+                                    configurationRow(
+                                        title: "Recovery",
+                                        value: PasswordResetDisplayFormatter.statusLabel(for: reset, now: context.date),
+                                        systemImage: "clock.badge.exclamationmark",
+                                        tint: .yellow
+                                    )
+                                }
+                            }
                         }
                     }
                 } else {
@@ -1952,7 +2067,7 @@ struct BlockGroupConfigurationView: View {
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) {
                 if let group {
-                    editButton(for: group)
+                    footerActions(for: group)
                 }
             }
             .toolbar {
@@ -1964,10 +2079,16 @@ struct BlockGroupConfigurationView: View {
                 }
             }
             .sheet(item: $passwordAction) { action in
-                PasswordPromptView(action: action) { resolvedAction, group in
+                PasswordPromptView(action: action) { resolvedAction, group, verifiedPassword in
                     passwordAction = nil
-                    if case .edit = resolvedAction {
+                    switch resolvedAction {
+                    case .edit:
                         editorDraft = BlockGroupDraft(group: group)
+                    case .toggleEnabled:
+                        _ = model.toggleBlockGroup(group, password: verifiedPassword)
+                    case .delete:
+                        pendingDeletePassword = verifiedPassword
+                        isConfirmingDelete = true
                     }
                 } onSetPassword: { group in
                     passwordAction = nil
@@ -1983,7 +2104,57 @@ struct BlockGroupConfigurationView: View {
                     }
                 }
             }
+            .alert("Delete Block Group?", isPresented: $isConfirmingDelete) {
+                Button("Cancel", role: .cancel) {
+                    pendingDeletePassword = nil
+                }
+                Button("Delete", role: .destructive) {
+                    guard let group else {
+                        return
+                    }
+
+                    AppHaptics.buttonTap()
+                    if model.deleteBlockGroup(group, password: pendingDeletePassword) {
+                        pendingDeletePassword = nil
+                        dismiss()
+                    }
+                }
+            } message: {
+                Text("This removes the block group, its requests, and unblock history.")
+            }
         }
+    }
+
+    private func activeToggle(for group: BlockGroup) -> some View {
+        Button {
+            beginPasscodeToggle(for: group)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: group.isEnabled ? "checkmark.circle.fill" : "pause.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(group.isEnabled ? "Active" : "Inactive")
+                        .font(.subheadline.weight(.semibold))
+                    Text(group.isEnabled ? "This block group is currently enforcing." : "This block group is paused.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                Toggle("", isOn: .constant(group.isEnabled))
+                    .labelsHidden()
+                    .disabled(true)
+                    .allowsHitTesting(false)
+                    .tint(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .opacity(0.72)
+        .appCardRow(verticalPadding: 12)
     }
 
     private func header(for group: BlockGroup) -> some View {
@@ -2034,10 +2205,15 @@ struct BlockGroupConfigurationView: View {
         }
     }
 
-    private func configurationRow(title: String, value: String, systemImage: String) -> some View {
+    private func configurationRow(
+        title: String,
+        value: String,
+        systemImage: String,
+        tint: Color = .secondary
+    ) -> some View {
         HStack(spacing: 12) {
             Image(systemName: systemImage)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(tint)
                 .frame(width: 24)
 
             Text(title)
@@ -2056,13 +2232,21 @@ struct BlockGroupConfigurationView: View {
         .appCardRow(verticalPadding: 12)
     }
 
-    private func editButton(for group: BlockGroup) -> some View {
-        VStack(spacing: 0) {
+    private func passcodeStatus(for group: BlockGroup) -> String {
+        if group.requiresPasswordSetup {
+            return "Needs setup"
+        }
+
+        return "Required"
+    }
+
+    private func footerActions(for group: BlockGroup) -> some View {
+        VStack(spacing: 10) {
             Button {
                 AppHaptics.buttonTap()
                 beginPasscodeEdit(for: group)
             } label: {
-                Label(group.requiresPasswordSetup ? "Set Passcode to Edit" : "Edit with Passcode", systemImage: "lock.open")
+                Label(editButtonTitle(for: group), systemImage: "lock.open")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
@@ -2073,11 +2257,41 @@ struct BlockGroupConfigurationView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.accentColor)
             }
+
+            if isUnlockedForDisplay(group) {
+                Button(role: .destructive) {
+                    AppHaptics.buttonTap()
+                    passwordAction = PasswordProtectedAction(kind: .delete, groupID: group.id)
+                } label: {
+                    Text("Delete Block Group")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.white)
+                .background {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color(red: 0.86, green: 0.24, blue: 0.22))
+                }
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background(.regularMaterial)
+    }
+
+    private func editButtonTitle(for group: BlockGroup) -> String {
+        if group.requiresPasswordSetup {
+            return "Set Passcode to Edit"
+        }
+
+        return "Edit with Passcode"
+    }
+
+    private func isUnlockedForDisplay(_ group: BlockGroup) -> Bool {
+        model.groupUnlockExpirations[group.id, default: .distantPast] > Date()
     }
 
     private func beginPasscodeEdit(for group: BlockGroup) {
@@ -2086,6 +2300,11 @@ struct BlockGroupConfigurationView: View {
         } else {
             passwordAction = PasswordProtectedAction(kind: .edit, groupID: group.id)
         }
+    }
+
+    private func beginPasscodeToggle(for group: BlockGroup) {
+        AppHaptics.buttonTap()
+        passwordAction = PasswordProtectedAction(kind: .toggleEnabled, groupID: group.id)
     }
 
     private func selectionCount(for group: BlockGroup) -> Int {
@@ -2102,6 +2321,8 @@ struct BlockGroupEditorView: View {
     @State private var draft: BlockGroupDraft
     @State private var isShowingActivityPicker = false
     @State private var unblockPicker: UnblockPicker?
+    @State private var passwordSetupGroup: BlockGroup?
+    @State private var saveError: String?
     let onSave: (BlockGroup, String?) -> Void
 
     init(initialDraft: BlockGroupDraft, onSave: @escaping (BlockGroup, String?) -> Void) {
@@ -2111,6 +2332,33 @@ struct BlockGroupEditorView: View {
 
     var body: some View {
         AppScreenScroll(backgroundStyle: .white) {
+            AppSection("Status") {
+                AppCard {
+                    Toggle(
+                        isOn: $draft.isEnabled
+                    ) {
+                        HStack(spacing: 12) {
+                            Image(systemName: draft.isEnabled ? "checkmark.circle.fill" : "pause.circle.fill")
+                                .foregroundStyle(draft.isEnabled ? Color.green : Color.secondary)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(draft.isEnabled ? "Active" : "Inactive")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(draft.isEnabled ? "This block group is currently enforcing." : "This block group is paused.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .tint(.green)
+                    .appCardRow(verticalPadding: 12)
+                    .onChange(of: draft.isEnabled) {
+                        AppHaptics.selectionChanged()
+                    }
+                }
+            }
+
             AppSection("Apps & Websites To Block") {
                 AppCard {
                     Button {
@@ -2191,35 +2439,23 @@ struct BlockGroupEditorView: View {
                 }
             }
 
-            if draft.requiresPassword {
-                AppSection("Passcode") {
-                    AppCard {
-                        SecureField("Group passcode", text: $draft.password)
-                            .textContentType(.newPassword)
-                            .appCardRow()
-
-                        AppCardDivider()
-
-                        SecureField("Confirm passcode", text: $draft.confirmPassword)
-                            .textContentType(.newPassword)
-                            .appCardRow()
-                    }
-                }
+            if let saveError {
+                Text(saveError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            saveButton
+        }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
                     AppHaptics.buttonTap()
                     dismiss()
-                }
-            }
-
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
-                    AppHaptics.buttonTap()
-                    save()
                 }
             }
 
@@ -2259,6 +2495,37 @@ struct BlockGroupEditorView: View {
                 }
             }
         }
+        .sheet(item: $passwordSetupGroup) { group in
+            NavigationStack {
+                BlockGroupPasswordSetupView(groupName: group.name) { password in
+                    onSave(group, password)
+                }
+            }
+        }
+    }
+
+    private var saveButton: some View {
+        VStack(spacing: 0) {
+            Button {
+                AppHaptics.buttonTap()
+                save()
+            } label: {
+                Text("Save")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.white)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.accentColor)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.regularMaterial)
     }
 
     private var scheduledEditor: some View {
@@ -2342,20 +2609,173 @@ struct BlockGroupEditorView: View {
     }
 
     private func save() {
-        guard !draft.requiresPassword || !draft.password.isEmpty else {
-            return
-        }
-
-        guard draft.password == draft.confirmPassword else {
-            return
-        }
-
         do {
             let group = try draft.makeGroup()
-            onSave(group, draft.requiresPassword ? draft.password : nil)
+            saveError = nil
+            if draft.requiresPassword {
+                passwordSetupGroup = group
+            } else {
+                onSave(group, nil)
+            }
         } catch {
+            saveError = "Could not save this block group. Please check the settings and try again."
+        }
+    }
+}
+
+private struct BlockGroupPasswordSetupView: View {
+    @Environment(\.dismiss) private var dismiss
+    let groupName: String
+    let onSave: (String) -> Void
+
+    @State private var password = ""
+    @State private var confirmPassword = ""
+    @State private var validationMessage: String?
+
+    var body: some View {
+        AppScreenScroll(backgroundStyle: .white) {
+            VStack(alignment: .leading, spacing: 14) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 38, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+
+                Text("Set a Password")
+                    .font(.title2.bold())
+
+                Text("This password is required before \(groupName) can be edited, disabled, or deleted.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            AppSection("How It Works") {
+                AppCard {
+                    passwordInfoRow(
+                        systemImage: "lock.fill",
+                        title: "Protects this group",
+                        message: Text("You will need this password to change the block group later.")
+                    )
+
+                    AppCardDivider()
+
+                    passwordInfoRow(
+                        systemImage: "clock.badge.exclamationmark",
+                        title: "Forgot password delay",
+                        message: Text("If you forget it, reset takes ")
+                            + Text("about 1 minute before it unlocks.").bold(),
+                        iconColor: .yellow
+                    )
+
+                    AppCardDivider()
+
+                    passwordInfoRow(
+                        systemImage: "square.and.arrow.down",
+                        title: "Store it safely",
+                        message: Text("Pick something difficult to casually remember and keep it somewhere safe.")
+                    )
+                }
+            }
+
+            AppSection("Password") {
+                AppCard {
+                    SecureField("Password", text: $password)
+                        .textContentType(.newPassword)
+                        .appCardRow()
+
+                    AppCardDivider()
+
+                    SecureField("Confirm password", text: $confirmPassword)
+                        .textContentType(.newPassword)
+                        .appCardRow()
+                }
+            }
+
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+        }
+        .navigationTitle("Password")
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            bottomSaveButton
+        }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Back") {
+                    AppHaptics.buttonTap()
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private var bottomSaveButton: some View {
+        VStack(spacing: 0) {
+            Button {
+                save()
+            } label: {
+                Text("Save Block Group")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.white)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.accentColor)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.regularMaterial)
+    }
+
+    private func passwordInfoRow(
+        systemImage: String,
+        title: String,
+        message: Text,
+        iconColor: Color = Color.accentColor
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(iconColor)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+
+                message
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .appCardRow(verticalPadding: 12)
+    }
+
+    private func save() {
+        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPassword.isEmpty else {
+            validationMessage = "Enter a password before saving."
             return
         }
+
+        guard password == confirmPassword else {
+            validationMessage = "Passwords do not match."
+            return
+        }
+
+        validationMessage = nil
+        AppHaptics.buttonTap()
+        onSave(password)
     }
 }
 

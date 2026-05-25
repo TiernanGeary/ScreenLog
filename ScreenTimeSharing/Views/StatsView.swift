@@ -6,9 +6,10 @@ import UIKit
 
 struct StatsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var selectedRange: StatsRange = .week
+    @State private var selectedRange: StatsRange = .day
     @State private var selectedDate = Date()
     @State private var selectedChartBucketID: String?
+    @State private var mountedReportKeys: Set<StatsReportKey> = []
 
     private var summary: UsageStatsSummary {
         UsageStatsBuilder.summary(
@@ -55,6 +56,22 @@ struct StatsView: View {
         )
     }
 
+    private var currentReportKey: StatsReportKey {
+        StatsReportKey(range: selectedRange, selectedDate: selectedDate)
+    }
+
+    private var reportDisplayKeys: [StatsReportKey] {
+        var keys = mountedReportKeys
+        keys.insert(currentReportKey)
+        return keys.sorted { lhs, rhs in
+            if lhs.range.rawValue != rhs.range.rawValue {
+                return lhs.range.rawValue < rhs.range.rawValue
+            }
+
+            return lhs.selectedDate < rhs.selectedDate
+        }
+    }
+
     var body: some View {
         NavigationStack {
             AppScreenScroll {
@@ -72,42 +89,97 @@ struct StatsView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    UsageSummaryCard(
-                        summary: summary,
-                        selectedBucket: selectedChartBucket,
-                        selectedPickupCount: selectedChartSnapshot?.pickupCount,
-                        requestCount: personalEntry?.requestCount ?? 0
+                if model.hasScreenTimeAuthorization {
+                    AppCard(cornerRadius: 24, opacity: 0.78) {
+                        ZStack {
+                            ForEach(reportDisplayKeys) { key in
+                                ScreenTimeLiveStatsReport(
+                                    range: key.range,
+                                    selectedDate: key.selectedDate
+                                )
+                                .opacity(key == currentReportKey ? 1 : 0)
+                                .allowsHitTesting(key == currentReportKey)
+                                .accessibilityHidden(key != currentReportKey)
+                            }
+                        }
+                        .frame(height: liveReportHeight)
+                        .appCardRow(verticalPadding: 14)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        UsageSummaryCard(
+                            summary: summary,
+                            selectedBucket: selectedChartBucket,
+                            selectedPickupCount: selectedChartSnapshot?.pickupCount,
+                            requestCount: personalEntry?.requestCount ?? 0
+                        )
+                    }
+
+                    UsageChartSection(
+                        range: selectedRange,
+                        buckets: chartBuckets,
+                        selectedBucketID: $selectedChartBucketID
+                    )
+
+                    MostUsedAppsSection(
+                        range: selectedRange,
+                        apps: appUsageRows,
+                        hasScreenTimeData: summary.hasScreenTimeData
                     )
                 }
-
-                UsageChartSection(
-                    range: selectedRange,
-                    buckets: chartBuckets,
-                    selectedBucketID: $selectedChartBucketID
-                )
-
-                MostUsedAppsSection(
-                    range: selectedRange,
-                    apps: appUsageRows,
-                    hasScreenTimeData: summary.hasScreenTimeData
-                )
             }
             .navigationTitle("Stats")
             .onAppear {
+                model.reloadUsageHistoryFromSharedStorage()
                 model.setLeaderboardWindow(selectedRange.leaderboardWindow)
+                rememberCurrentReportKey()
             }
             .onChange(of: selectedRange) { _, newRange in
+                model.reloadUsageHistoryFromSharedStorage()
                 model.setLeaderboardWindow(newRange.leaderboardWindow)
                 if newRange == .day {
                     selectedDate = Date()
                 }
                 selectedChartBucketID = nil
+                rememberCurrentReportKey()
             }
             .onChange(of: selectedDate) {
+                model.reloadUsageHistoryFromSharedStorage()
                 selectedChartBucketID = nil
+                rememberCurrentReportKey()
             }
         }
+    }
+
+    private func rememberCurrentReportKey() {
+        mountedReportKeys.insert(currentReportKey)
+    }
+
+    private var liveReportHeight: CGFloat {
+        switch selectedRange {
+        case .day:
+            return 560
+        case .week, .month:
+            return 580
+        }
+    }
+}
+
+private struct StatsReportKey: Hashable, Identifiable {
+    let range: StatsRange
+    let selectedDate: Date
+
+    var id: String {
+        "\(range.rawValue)-\(selectedDate.timeIntervalSinceReferenceDate)"
+    }
+
+    init(range: StatsRange, selectedDate: Date, calendar: Calendar = .current) {
+        self.range = range
+        self.selectedDate = UsageStatsBuilder.periodInterval(
+            for: range,
+            containing: selectedDate,
+            calendar: calendar
+        ).start
     }
 }
 
@@ -208,13 +280,13 @@ private struct PeriodNavigator: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.bold())
                     .frame(width: 30, height: 30)
-                    .foregroundStyle(canMoveForward ? Color.primary : Color.secondary.opacity(0.7))
-                    .background(Color.white.opacity(canMoveForward ? 0.82 : 0.52), in: Circle())
+                    .foregroundStyle(canMoveForward ? Color.white : Color.secondary.opacity(0.7))
+                    .background(canMoveForward ? Color.blue : Color.secondary.opacity(0.16), in: Circle())
                     .overlay {
                         Circle()
-                            .strokeBorder(Color.white.opacity(0.86), lineWidth: 0.7)
+                            .strokeBorder(canMoveForward ? Color.clear : Color.secondary.opacity(0.18), lineWidth: 0.7)
                     }
-                    .shadow(color: Color.black.opacity(canMoveForward ? 0.05 : 0), radius: 6, x: 0, y: 3)
+                    .shadow(color: Color.blue.opacity(canMoveForward ? 0.14 : 0), radius: 6, x: 0, y: 3)
             }
             .buttonStyle(.plain)
             .disabled(!canMoveForward)
@@ -242,44 +314,38 @@ private struct DayDateStrip: View {
     private let calendar = Calendar.current
 
     private var dates: [Date] {
-        guard let week = calendar.dateInterval(of: .weekOfYear, for: selectedDate) else {
-            return [selectedDate]
-        }
-
         let today = calendar.startOfDay(for: Date())
-        var result: [Date] = []
-        var cursor = week.start
-        while cursor < week.end, cursor <= today {
-            result.append(cursor)
-            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else {
-                break
-            }
-            cursor = next
+        let start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        return (0..<7).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: start)
         }
-        return result
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(dates, id: \.self) { date in
-                DayDateChip(
-                    date: date,
-                    isSelected: calendar.isDate(date, inSameDayAs: selectedDate)
-                ) {
-                    if !calendar.isDate(date, inSameDayAs: selectedDate) {
-                        AppHaptics.selectionChanged()
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                ForEach(dates, id: \.self) { date in
+                    DayDateChip(
+                        date: date,
+                        isSelected: calendar.isDate(date, inSameDayAs: selectedDate)
+                    ) {
+                        if !calendar.isDate(date, inSameDayAs: selectedDate) {
+                            AppHaptics.selectionChanged()
+                        }
+                        selectedDate = date
                     }
-                    selectedDate = date
+                    .frame(width: 42)
                 }
-                .frame(maxWidth: .infinity)
             }
         }
+        .scrollIndicators(.hidden)
         .frame(height: 42)
         .frame(maxWidth: .infinity)
     }
 }
 
 private struct DayDateChip: View {
+    @Environment(\.colorScheme) private var colorScheme
     let date: Date
     let isSelected: Bool
     let action: () -> Void
@@ -296,12 +362,12 @@ private struct DayDateChip: View {
                     .font(.caption.bold().monospacedDigit())
                     .foregroundStyle(isSelected ? .white : .primary)
                     .frame(width: 30, height: 30)
-                    .background(isSelected ? Color.blue : Color.white.opacity(0.74), in: Circle())
+                    .background(dayBackground, in: Circle())
                     .overlay {
                         Circle()
-                            .strokeBorder(Color.white.opacity(0.86), lineWidth: 0.8)
+                            .strokeBorder(dayBorder, lineWidth: 0.8)
                     }
-                    .shadow(color: Color.black.opacity(isSelected ? 0.05 : 0.035), radius: 6, x: 0, y: 3)
+                    .shadow(color: dayShadow, radius: isSelected ? 6 : 0, x: 0, y: 3)
             }
             .lineLimit(1)
             .minimumScaleFactor(0.7)
@@ -324,6 +390,34 @@ private struct DayDateChip: View {
         formatter.calendar = calendar
         formatter.dateFormat = "d"
         return formatter.string(from: date)
+    }
+
+    private var dayBackground: Color {
+        if isSelected {
+            return .blue
+        }
+
+        return colorScheme == .dark
+            ? Color.white.opacity(0.08)
+            : Color.white.opacity(0.74)
+    }
+
+    private var dayBorder: Color {
+        if isSelected {
+            return Color.white.opacity(colorScheme == .dark ? 0.12 : 0.24)
+        }
+
+        return colorScheme == .dark
+            ? Color.white.opacity(0.10)
+            : Color.white.opacity(0.86)
+    }
+
+    private var dayShadow: Color {
+        guard isSelected else {
+            return .clear
+        }
+
+        return Color.blue.opacity(colorScheme == .dark ? 0.22 : 0.14)
     }
 
     private var accessibilityLabel: String {
@@ -349,6 +443,7 @@ private struct UsageSummaryCard: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Text(primaryDuration)
                         .font(.system(size: 40, weight: .bold).monospacedDigit())
@@ -359,6 +454,9 @@ private struct UsageSummaryCard: View {
                     Text(primaryCaption)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if summary.range == .day {
@@ -556,7 +654,7 @@ private struct MostUsedAppRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 24, alignment: .leading)
 
-            AppUsageIcon(name: app.displayName)
+            AppUsageIcon(name: app.displayName, applicationTokenData: app.applicationTokenData)
 
             VStack(alignment: .leading, spacing: 7) {
                 HStack(alignment: .firstTextBaseline) {

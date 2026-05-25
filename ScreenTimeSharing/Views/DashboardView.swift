@@ -8,18 +8,28 @@ import UIKit
 
 struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var isShowingActivityPicker: Bool
     @Binding var isShowingBlockingActivityPicker: Bool
+
+    private var engagementSummary: HomeEngagementSummary {
+        HomeEngagementBuilder.summary(history: model.usageHistory)
+    }
 
     var body: some View {
         NavigationStack {
             AppScreenScroll {
-                TodayScreenTimeCard(snapshot: model.localSnapshot)
-
-                HomeROICard(
-                    summary: HomeEngagementBuilder.summary(history: model.usageHistory),
-                    snapshot: model.localSnapshot
+                TodayScreenTimeCard(
+                    snapshot: model.localSnapshot,
+                    usesLiveReport: model.hasScreenTimeAuthorization,
+                    hasLoadedLiveReport: model.hasCompletedScreenTimeReport
                 )
+
+                if shouldShowHomeROICard(engagementSummary) {
+                    HomeROICard(
+                        summary: engagementSummary,
+                        snapshot: model.localSnapshot
+                    )
+                    .transition(.scale(scale: 0.98).combined(with: .opacity))
+                }
 
                 AppSection("Blocking") {
                     BlockingOverviewCard(
@@ -41,8 +51,13 @@ struct DashboardView: View {
                             .appCardRow(verticalPadding: 10)
                     }
                 }
+
             }
             .navigationTitle("Home")
+            .animation(.snappy(duration: 0.22), value: shouldShowHomeROICard(engagementSummary))
+            .onAppear {
+                model.reloadUsageHistoryFromSharedStorage()
+            }
             .overlay {
                 if model.isWorking {
                     ProgressView()
@@ -51,10 +66,22 @@ struct DashboardView: View {
             }
         }
     }
+
+    private func shouldShowHomeROICard(_ summary: HomeEngagementSummary) -> Bool {
+        switch summary.baselineStatus {
+        case .ready:
+            return summary.comparisonDayCount > 0
+        case .building, .unavailable:
+            return false
+        }
+    }
 }
 
 private struct TodayScreenTimeCard: View {
     let snapshot: DailyUsageSnapshot?
+    let usesLiveReport: Bool
+    let hasLoadedLiveReport: Bool
+    @State private var didReleaseLiveReportFallback = false
 
     private var topApps: [SharedAppUsage] {
         Array(
@@ -71,6 +98,40 @@ private struct TodayScreenTimeCard: View {
     }
 
     var body: some View {
+        if usesLiveReport {
+            liveReportContent
+        } else {
+            fallbackContent
+        }
+    }
+
+    private var liveReportContent: some View {
+        ZStack {
+            HomeCard(cornerRadius: 24) {
+                ScreenTimeLiveTodayReport()
+                    .frame(minHeight: 156)
+                    .appCardRow(verticalPadding: 14)
+            }
+            .opacity(shouldShowLiveReport ? 1 : 0)
+            .scaleEffect(shouldShowLiveReport ? 1 : 0.98)
+
+            if !shouldShowLiveReport {
+                TodaySummaryLoadingScroll()
+                    .transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.24), value: shouldShowLiveReport)
+        .task(id: hasLoadedLiveReport) {
+            await releaseLiveReportAfterFallbackDelayIfNeeded()
+        }
+        .onChange(of: hasLoadedLiveReport) { _, hasLoaded in
+            if hasLoaded {
+                didReleaseLiveReportFallback = true
+            }
+        }
+    }
+
+    private var fallbackContent: some View {
         HomeCard(cornerRadius: 24) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Today")
@@ -114,12 +175,104 @@ private struct TodayScreenTimeCard: View {
         }
     }
 
+    private var shouldShowLiveReport: Bool {
+        hasLoadedLiveReport || hasSnapshotData || didReleaseLiveReportFallback
+    }
+
+    private var hasSnapshotData: Bool {
+        guard let snapshot else {
+            return false
+        }
+
+        return snapshot.totalDuration != nil
+            || snapshot.pickupCount != nil
+            || !snapshot.appRows.isEmpty
+    }
+
     private var pickupLabel: String {
         guard let pickupCount = snapshot?.pickupCount else {
             return "--"
         }
 
         return "\(pickupCount)"
+    }
+
+    private func releaseLiveReportAfterFallbackDelayIfNeeded() async {
+        guard !shouldShowLiveReport else {
+            return
+        }
+
+        try? await Task.sleep(for: .seconds(3))
+        guard !Task.isCancelled else {
+            return
+        }
+
+        await MainActor.run {
+            didReleaseLiveReportFallback = true
+        }
+    }
+}
+
+private struct TodaySummaryLoadingScroll: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+
+                Text("Loading today's Screen Time")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 2)
+
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
+                    ForEach(0..<4, id: \.self) { index in
+                        TodayLoadingTile(width: index == 0 ? 176 : 148)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Loading today's Screen Time")
+    }
+}
+
+private struct TodayLoadingTile: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let width: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Capsule()
+                .fill(placeholderColor)
+                .frame(width: width * 0.52, height: 11)
+
+            Capsule()
+                .fill(placeholderColor.opacity(0.82))
+                .frame(width: width * 0.76, height: 28)
+
+            Capsule()
+                .fill(placeholderColor.opacity(0.68))
+                .frame(width: width * 0.44, height: 10)
+        }
+        .frame(width: width, alignment: .leading)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(uiColor: colorScheme == .dark ? .secondarySystemGroupedBackground : .systemBackground))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.8)
+                }
+        )
+    }
+
+    private var placeholderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.11)
     }
 }
 
@@ -572,7 +725,7 @@ private struct TopAppUsageTile: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            AppUsageIcon(name: app.displayName)
+            AppUsageIcon(name: app.displayName, applicationTokenData: app.applicationTokenData)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.displayName)
@@ -660,7 +813,7 @@ private struct TopAppEmptyTile: View {
     }
 
     private var emptySubtitle: String {
-        capability?.reason ?? "Refresh after selecting apps."
+        capability?.reason ?? "Open apps, then refresh."
     }
 }
 

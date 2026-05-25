@@ -6,13 +6,11 @@ import UIKit
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var isShowingActivityPicker: Bool
     @State private var isShowingShareSheet = false
     @State private var isEditingDisplayName = false
     @State private var draftDisplayName = ""
     @State private var selectedProfilePhotoItem: PhotosPickerItem?
     @State private var profilePhotoCropItem: ProfilePhotoCropItem?
-    var onShowActivityPicker: (() -> Void)?
     var onShowBlockingActivityPicker: (() -> Void)?
 
     var body: some View {
@@ -28,22 +26,6 @@ struct SettingsView: View {
                             isShowingShareSheet = true
                         } label: {
                             Label("Invite Friends", systemImage: "square.and.arrow.up")
-                                .appCardRow()
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-
-                        AppCardDivider()
-
-                        Button {
-                            AppHaptics.buttonTap()
-                            if let onShowActivityPicker {
-                                onShowActivityPicker()
-                            } else {
-                                isShowingActivityPicker = true
-                            }
-                        } label: {
-                            Label("Change Selected Apps", systemImage: "app.badge")
                                 .appCardRow()
                         }
                         .buttonStyle(.plain)
@@ -71,6 +53,35 @@ struct SettingsView: View {
                     AppCard {
                         LabeledContent("Screen Time", value: model.screenTimeAuthorization)
                             .appCardRow()
+                        AppCardDivider()
+                        LabeledContent("Report", value: model.screenTimeReportStatus)
+                            .appCardRow()
+                        AppCardDivider()
+                        if !model.hasScreenTimeAuthorization {
+                            Button {
+                                AppHaptics.buttonTap()
+                                Task {
+                                    await model.requestScreenTimeAuthorization()
+                                }
+                            } label: {
+                                Label("Request Screen Time Access", systemImage: "hourglass.badge.plus")
+                                    .appCardRow()
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tint)
+                            AppCardDivider()
+                        }
+                        Button {
+                            AppHaptics.buttonTap()
+                            Task {
+                                await model.refreshAndPublish()
+                            }
+                        } label: {
+                            Label("Refresh Screen Time", systemImage: "arrow.clockwise")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
                         AppCardDivider()
                         LabeledContent("iCloud", value: model.cloudAvailability.label)
                             .appCardRow()

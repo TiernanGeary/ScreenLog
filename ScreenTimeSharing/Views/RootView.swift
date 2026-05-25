@@ -3,33 +3,16 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var isShowingActivityPicker = false
     @State private var isShowingBlockingActivityPicker = false
 
     var body: some View {
         Group {
             if model.hasCompletedOnboarding {
                 AppTabs(
-                    isShowingActivityPicker: $isShowingActivityPicker,
                     isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
                 )
             } else {
                 OnboardingView()
-            }
-        }
-        .sheet(isPresented: $isShowingActivityPicker, onDismiss: model.persistSelection) {
-            NavigationStack {
-                FamilyActivityPicker(selection: $model.selection)
-                    .navigationTitle("Selected Apps")
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") {
-                                AppHaptics.buttonTap()
-                                model.persistSelection()
-                                isShowingActivityPicker = false
-                            }
-                        }
-                }
             }
         }
         .sheet(isPresented: $isShowingBlockingActivityPicker, onDismiss: model.saveSuggestedSocialBlockGroup) {
@@ -64,9 +47,9 @@ struct RootView: View {
 
 private struct AppTabs: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var isShowingActivityPicker: Bool
     @Binding var isShowingBlockingActivityPicker: Bool
     @State private var selection: AppTab = .today
+    @State private var visitedTabs: Set<AppTab> = [.today]
     @State private var highlightedFeedRequestID: String?
 
     private var requestFeedAttentionCount: Int {
@@ -78,9 +61,14 @@ private struct AppTabs: View {
 
     var body: some View {
         ZStack {
-            selectedView
-                .id(selection)
-                .transition(.opacity)
+            ForEach(AppTab.allCases) { tab in
+                if visitedTabs.contains(tab) {
+                    tabView(for: tab)
+                        .opacity(selection == tab ? 1 : 0)
+                        .allowsHitTesting(selection == tab)
+                        .accessibilityHidden(selection != tab)
+                }
+            }
         }
         .animation(.snappy(duration: 0.22), value: selection)
         .safeAreaInset(edge: .bottom) {
@@ -101,6 +89,7 @@ private struct AppTabs: View {
             model.clearFocusedFriendRequestLog()
         }
         .onChange(of: selection) { _, newSelection in
+            visitedTabs.insert(newSelection)
             if newSelection != .feed {
                 highlightedFeedRequestID = nil
             }
@@ -108,11 +97,10 @@ private struct AppTabs: View {
     }
 
     @ViewBuilder
-    private var selectedView: some View {
-        switch selection {
+    private func tabView(for tab: AppTab) -> some View {
+        switch tab {
         case .today:
             DashboardView(
-                isShowingActivityPicker: $isShowingActivityPicker,
                 isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
             )
         case .stats:
@@ -128,10 +116,6 @@ private struct AppTabs: View {
             FriendsView()
         case .settings:
             SettingsView(
-                isShowingActivityPicker: $isShowingActivityPicker,
-                onShowActivityPicker: {
-                    isShowingActivityPicker = true
-                },
                 onShowBlockingActivityPicker: {
                     isShowingBlockingActivityPicker = true
                 }

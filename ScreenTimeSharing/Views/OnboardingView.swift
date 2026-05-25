@@ -6,10 +6,9 @@ struct OnboardingView: View {
     @State private var currentPage: Int = 0
     @State private var age: Double = 25
     @State private var avgScreenTime: Double = 4
-    @State private var selectedApps: Set<String> = []
     @State private var isAuthorizing = false
 
-    private let totalPages = 6
+    private let totalPages = 5
     private var lastPage: Int { totalPages - 1 }
 
     private var primaryTitle: String {
@@ -18,10 +17,6 @@ struct OnboardingView: View {
         case 2: return "Get Started"
         default: return "Continue"
         }
-    }
-
-    private var primaryDisabled: Bool {
-        currentPage == 4 && selectedApps.count != 3
     }
 
     var body: some View {
@@ -35,8 +30,7 @@ struct OnboardingView: View {
                         ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
                         WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
                         FriendMonitorPage(isActive: currentPage == 3).tag(3)
-                        AppPickerPage(selected: $selectedApps, isActive: currentPage == 4).tag(4)
-                        FinalPage(isActive: currentPage == 5).tag(5)
+                        FinalPage(isActive: currentPage == 4).tag(4)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .animation(.easeInOut, value: currentPage)
@@ -95,6 +89,7 @@ struct OnboardingView: View {
                     await model.requestScreenTimeAuthorization()
                     isAuthorizing = false
                     model.completeOnboarding()
+                    model.requestScreenTimeReportRefresh()
                 }
             }
         } label: {
@@ -103,7 +98,6 @@ struct OnboardingView: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
-        .disabled(primaryDisabled)
     }
 }
 
@@ -373,130 +367,6 @@ private struct FriendMonitorPage: View {
                 entered = true
             }
         }
-    }
-}
-
-// MARK: - App picker
-
-private struct AppPickerPage: View {
-    @Binding var selected: Set<String>
-    let isActive: Bool
-
-    @State private var entered = false
-
-    private let apps: [(name: String, icon: String, tint: Color)] = [
-        ("Instagram", "camera.aperture", .pink),
-        ("TikTok", "music.note", .black),
-        ("YouTube", "play.rectangle.fill", .red),
-        ("Snapchat", "bubble.middle.bottom.fill", .yellow),
-        ("X", "bird.fill", .blue),
-        ("Reddit", "antenna.radiowaves.left.and.right", .orange),
-        ("Netflix", "tv.fill", .red),
-        ("Discord", "bubble.left.and.bubble.right.fill", .indigo),
-        ("Spotify", "music.note.list", .green)
-    ]
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                Spacer(minLength: 32)
-
-                VStack(spacing: 8) {
-                    Text("Your top 3 time wasters")
-                        .font(.largeTitle.bold())
-                        .multilineTextAlignment(.center)
-                    Text("Pick the apps you want help cutting back on.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .opacity(entered ? 1 : 0)
-                .offset(y: entered ? 0 : 14)
-                .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: 3), spacing: 14) {
-                    ForEach(apps, id: \.name) { app in
-                        OnboardingAppCard(
-                            name: app.name,
-                            icon: app.icon,
-                            tint: app.tint,
-                            isSelected: selected.contains(app.name),
-                            isAtLimit: selected.count >= 3 && !selected.contains(app.name)
-                        ) {
-                            Haptics.tap()
-                            if selected.contains(app.name) {
-                                selected.remove(app.name)
-                            } else if selected.count < 3 {
-                                selected.insert(app.name)
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-                .opacity(entered ? 1 : 0)
-                .animation(.easeOut(duration: 0.5).delay(0.25), value: entered)
-
-                Text("\(selected.count)/3 selected")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
-                    .animation(.snappy, value: selected.count)
-
-                Spacer(minLength: 20)
-            }
-        }
-        .onChange(of: isActive, initial: true) { _, nowActive in
-            entered = false
-            guard nowActive else { return }
-            Task {
-                try? await Task.sleep(for: .milliseconds(50))
-                entered = true
-            }
-        }
-    }
-}
-
-private struct OnboardingAppCard: View {
-    let name: String
-    let icon: String
-    let tint: Color
-    let isSelected: Bool
-    let isAtLimit: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 30, weight: .regular))
-                    .foregroundStyle(isSelected ? Color.white : tint)
-                    .frame(width: 56, height: 56)
-                    .background(isSelected ? tint : tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
-                    .overlay(alignment: .topTrailing) {
-                        if isSelected {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.white, tint)
-                                .font(.title3)
-                                .offset(x: 6, y: -6)
-                        }
-                    }
-                Text(name)
-                    .font(.caption.bold())
-                    .foregroundStyle(.primary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(.quaternary.opacity(isSelected ? 0.55 : 0.3), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(isSelected ? tint : .clear, lineWidth: 2)
-            )
-            .opacity(isAtLimit ? 0.4 : 1)
-            .scaleEffect(isSelected ? 1.03 : 1.0)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSelected)
-        }
-        .buttonStyle(.plain)
-        .disabled(isAtLimit)
     }
 }
 

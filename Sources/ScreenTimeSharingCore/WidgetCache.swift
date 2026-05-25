@@ -66,7 +66,7 @@ public struct WidgetCachePayload: Codable, Equatable, Sendable {
 }
 
 public enum WidgetCacheCodec {
-    public static let suiteName = "group.com.jdco.ScreenTimeSharing"
+    public static let suiteName = "group.com.jdco.ScreenLog"
     public static let storageKey = "WidgetFriendCache.v1"
 
     public static func encode(_ payload: WidgetCachePayload) throws -> Data {

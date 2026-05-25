@@ -83,6 +83,42 @@ import Foundation
     #expect(allTime[0].requestedExtraSeconds == 30 * 60)
 }
 
+@Test func leaderboardWeekUsesSundayToSaturdayWindow() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+    let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 5, day: 20, hour: 12)))
+    let sunday = try #require(calendar.date(from: DateComponents(year: 2026, month: 5, day: 17, hour: 12)))
+    let priorSaturday = try #require(calendar.date(from: DateComponents(year: 2026, month: 5, day: 16, hour: 12)))
+    let participant = AccountabilityParticipant(id: "sam", displayName: "Sam", avatarColorHex: "#1B998B")
+    let events = [
+        AccountabilityEvent(
+            id: "included",
+            userID: "sam",
+            kind: .extraTimeRequested,
+            occurredAt: sunday,
+            seconds: 20 * 60
+        ),
+        AccountabilityEvent(
+            id: "excluded",
+            userID: "sam",
+            kind: .extraTimeRequested,
+            occurredAt: priorSaturday,
+            seconds: 40 * 60
+        )
+    ]
+
+    let entries = LeaderboardBuilder.entries(
+        participants: [participant],
+        events: events,
+        window: .week,
+        now: now,
+        calendar: calendar
+    )
+
+    #expect(LeaderboardWindow.week.label == "This Week")
+    #expect(entries[0].requestedExtraSeconds == 20 * 60)
+}
+
 @Test func leaderboardUsesEmergencyUnlocksAndStreakAsTieBreakers() throws {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))

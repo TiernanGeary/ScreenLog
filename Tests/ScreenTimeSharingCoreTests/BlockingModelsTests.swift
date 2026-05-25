@@ -225,15 +225,15 @@ import Testing
     #expect(days == [.monday, .wednesday])
 }
 
-@Test func passwordHashVerifiesAndResetWaitsTwentyFourHours() {
+@Test func passwordHashVerifiesAndResetWaitsForRecoveryDelay() {
     let now = Date(timeIntervalSince1970: 1_779_236_400)
     let password = BlockingPasswordHasher.makePassword("focus", now: now, salt: "salt")
     let reset = BlockPasswordResetState(requestedAt: now)
 
     #expect(BlockingPasswordHasher.verify("focus", against: password))
     #expect(!BlockingPasswordHasher.verify("wrong", against: password))
-    #expect(!reset.isAvailable(now: now.addingTimeInterval(23 * 3_600 + 59 * 60)))
-    #expect(reset.isAvailable(now: now.addingTimeInterval(24 * 3_600)))
+    #expect(!reset.isAvailable(now: now.addingTimeInterval(BlockPasswordResetState.recoveryDelay - 1)))
+    #expect(reset.isAvailable(now: now.addingTimeInterval(BlockPasswordResetState.recoveryDelay)))
 }
 
 @Test func unblockQuotaAndSuppressionUseTodaysSessions() {

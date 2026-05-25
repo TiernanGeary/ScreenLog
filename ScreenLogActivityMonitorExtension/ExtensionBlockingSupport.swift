@@ -1,9 +1,9 @@
 import FamilyControls
 import Foundation
 import ManagedSettings
+import UserNotifications
 
 enum ExtensionBlockingSupport {
-    private static let activeGroupIDsKey = "ActiveShieldedBlockGroupIDs.v1"
     private static var defaults: UserDefaults? {
         UserDefaults(suiteName: BlockingStoreCodec.suiteName)
     }
@@ -37,7 +37,7 @@ enum ExtensionBlockingSupport {
             activeGroupIDs.remove(groupID)
         }
 
-        defaults?.set(Array(activeGroupIDs), forKey: activeGroupIDsKey)
+        defaults?.set(Array(activeGroupIDs), forKey: BlockingStoreCodec.activeShieldedGroupIDsKey)
         applyShields(for: activeGroupIDs, state: state)
     }
 
@@ -96,6 +96,7 @@ enum ExtensionBlockingSupport {
 
         defaults?.set(groupID, forKey: BlockingFriendRequestIntentStore.groupIDKey)
         defaults?.set(Date(), forKey: BlockingFriendRequestIntentStore.createdAtKey)
+        scheduleRequestNotification()
         return true
     }
 
@@ -113,6 +114,17 @@ enum ExtensionBlockingSupport {
         }
 
         let hasFriendRequest = groups.contains { $0.friendRequestConfig.isEnabled }
+        let hasQueuedFriendRequest = groups.contains { $0.id == pendingFriendRequestDraftGroupID() }
+
+        if hasQueuedFriendRequest {
+            return ShieldCopy(
+                title: "Request ready",
+                subtitle: "Open ScreenLog to finish your photo request for \(restrictedItemName).",
+                primaryButton: "OK",
+                secondaryButton: "Notification sent",
+                isFriendRequestEnabled: false
+            )
+        }
 
         return ShieldCopy(
             title: "Restricted",
@@ -123,13 +135,51 @@ enum ExtensionBlockingSupport {
         )
     }
 
+    private static func pendingFriendRequestDraftGroupID(now: Date = Date()) -> String? {
+        guard let groupID = defaults?.string(forKey: BlockingFriendRequestIntentStore.groupIDKey) else {
+            return nil
+        }
+
+        let createdAt = defaults?.object(forKey: BlockingFriendRequestIntentStore.createdAtKey) as? Date
+        if let createdAt,
+           now.timeIntervalSince(createdAt) <= BlockingFriendRequestIntentStore.expirationSeconds {
+            return groupID
+        }
+
+        return nil
+    }
+
+    private static func scheduleRequestNotification() {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                let content = UNMutableNotificationContent()
+                content.title = "Finish time request"
+                content.body = "Tap to open ScreenLog and send your request."
+                content.sound = .default
+
+                let request = UNNotificationRequest(
+                    identifier: "screenlog-shield-request-ready",
+                    content: content,
+                    trigger: nil
+                )
+
+                center.removePendingNotificationRequests(withIdentifiers: [request.identifier])
+                center.add(request)
+            default:
+                break
+            }
+        }
+    }
+
     private static func normalizedItemName(_ itemName: String?) -> String {
         let trimmed = itemName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? "this app" : trimmed
     }
 
     private static func activeShieldedGroupIDs() -> Set<String> {
-        Set(defaults?.stringArray(forKey: activeGroupIDsKey) ?? [])
+        Set(defaults?.stringArray(forKey: BlockingStoreCodec.activeShieldedGroupIDsKey) ?? [])
     }
 
     private static func applyShields(for groupIDs: Set<String>, state: BlockingState) {

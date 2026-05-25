@@ -239,12 +239,14 @@ public struct BlockGroupPassword: Codable, Equatable, Sendable {
 }
 
 public struct BlockPasswordResetState: Codable, Equatable, Sendable {
+    public static let recoveryDelay: TimeInterval = 60
+
     public var requestedAt: Date
     public var availableAt: Date
 
     public init(requestedAt: Date, availableAt: Date? = nil) {
         self.requestedAt = requestedAt
-        self.availableAt = availableAt ?? requestedAt.addingTimeInterval(24 * 3_600)
+        self.availableAt = availableAt ?? requestedAt.addingTimeInterval(Self.recoveryDelay)
     }
 
     public func isAvailable(now: Date = Date()) -> Bool {
@@ -802,8 +804,9 @@ public enum BlockingStateMigrator {
 }
 
 public enum BlockingStoreCodec {
-    public static let suiteName = "group.com.jdco.ScreenTimeSharing"
+    public static let suiteName = "group.com.jdco.ScreenLog"
     public static let storageKey = "BlockingState.v1"
+    public static let activeShieldedGroupIDsKey = "ActiveShieldedBlockGroupIDs.v1"
 
     public static func encode(_ state: BlockingState) throws -> Data {
         let encoder = JSONEncoder()

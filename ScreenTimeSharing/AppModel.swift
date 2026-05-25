@@ -151,6 +151,14 @@ enum FriendRequestDemoPhotoFactory {
 }
 #endif
 
+private struct UsageHistorySignature: Equatable {
+    let snapshotCount: Int
+    let latestSnapshotUpdate: Date?
+    let totalDuration: TimeInterval
+    let hourlyDayCount: Int
+    let hourlyDuration: TimeInterval
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var profile: UserProfile
@@ -166,6 +174,9 @@ final class AppModel: ObservableObject {
     @Published var leaderboardWindow: LeaderboardWindow = .week
     @Published var cloudAvailability: CloudAvailability = .checking
     @Published var screenTimeAuthorization = "Not requested"
+    @Published var screenTimeReportRefreshID = UUID()
+    @Published var screenTimeReportStatus = "Waiting for Screen Time setup."
+    @Published var screenTimeReportLastGeneratedAt: Date?
     @Published var message: String?
     @Published var isWorking = false
     @Published var hasCompletedOnboarding: Bool
@@ -210,8 +221,11 @@ final class AppModel: ObservableObject {
         self.blockingEnforcementService = blockingEnforcementService
         self.friendRequestNotificationService = friendRequestNotificationService
         self.friendRequestPhotoStore = friendRequestPhotoStore
-        self.usageHistoryDefaults = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)
-        self.profile = profileStore.load()
+        let sharedDefaults = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)
+        let loadedProfile = profileStore.load()
+        self.usageHistoryDefaults = sharedDefaults
+        self.profile = loadedProfile
+        ScreenTimeReportStorage.saveProfileID(loadedProfile.id, defaults: sharedDefaults)
         self.appearanceMode = AppAppearanceMode(
             rawValue: UserDefaults.standard.string(forKey: Self.appearanceKey) ?? ""
         ) ?? .dark
@@ -220,6 +234,13 @@ final class AppModel: ObservableObject {
         self.blockingSelection = FamilyActivitySelection()
         self.hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingKey)
         self.screenTimeAuthorization = screenTimeProvider.authorizationLabel()
+        self.screenTimeReportLastGeneratedAt = sharedDefaults?.object(
+            forKey: ScreenTimeReportStorage.lastGeneratedAtKey
+        ) as? Date
+        self.screenTimeReportStatus = Self.screenTimeReportStatusLabel(
+            authorization: self.screenTimeAuthorization,
+            defaults: sharedDefaults
+        )
         loadUsageHistory()
         expireStaleFriendRequests()
         loadPendingShieldFriendRequest()
@@ -241,6 +262,14 @@ final class AppModel: ObservableObject {
 
     var selectedBlockingActivityCount: Int {
         blockingSelection.applicationTokens.count + blockingSelection.categoryTokens.count + blockingSelection.webDomainTokens.count
+    }
+
+    var hasScreenTimeAuthorization: Bool {
+        Self.isScreenTimeAuthorizationApproved(screenTimeAuthorization)
+    }
+
+    var hasCompletedScreenTimeReport: Bool {
+        screenTimeReportLastGeneratedAt != nil || !usageHistory.isEmpty
     }
 
     var activeBlockingRulesCount: Int {
@@ -272,6 +301,7 @@ final class AppModel: ObservableObject {
         await reloadFriends()
         syncFriendRequestNotifications()
         syncBlockingEnforcement()
+        requestScreenTimeReportRefresh()
     }
 
     func completeOnboarding() {
@@ -311,6 +341,7 @@ final class AppModel: ObservableObject {
 
         profile.updatedAt = Date()
         profileStore.save(profile)
+        ScreenTimeReportStorage.saveProfileID(profile.id, defaults: usageHistoryDefaults)
     }
 
     func friendRequestPhotoData(for request: BlockFriendRequest) -> Data? {
@@ -323,6 +354,55 @@ final class AppModel: ObservableObject {
 
     func persistSelection() {
         selectionStore.save(selection)
+        requestScreenTimeReportRefresh()
+    }
+
+    func requestScreenTimeReportRefresh() {
+        refreshScreenTimeReportStatus()
+        screenTimeReportRefreshID = UUID()
+    }
+
+    func refreshScreenTimeReportStatus() {
+        screenTimeReportLastGeneratedAt = usageHistoryDefaults?.object(
+            forKey: ScreenTimeReportStorage.lastGeneratedAtKey
+        ) as? Date
+        screenTimeReportStatus = Self.screenTimeReportStatusLabel(
+            authorization: screenTimeAuthorization,
+            defaults: usageHistoryDefaults
+        )
+    }
+
+    @discardableResult
+    func reloadUsageHistoryFromSharedStorage() -> Bool {
+        let previousHistorySignature = usageHistorySignature()
+        let previousSnapshotID = localSnapshot?.id
+        let previousLastUpdated = localSnapshot?.lastUpdated
+        loadUsageHistory()
+        refreshLocalSnapshotFromHistory()
+
+        let didChange = usageHistorySignature() != previousHistorySignature
+            || localSnapshot?.id != previousSnapshotID
+            || localSnapshot?.lastUpdated != previousLastUpdated
+        refreshScreenTimeReportStatus()
+        if didChange {
+            message = "Screen Time updated."
+            writeWidgetCacheSnapshot()
+        }
+        return didChange
+    }
+
+    private func usageHistorySignature() -> UsageHistorySignature {
+        UsageHistorySignature(
+            snapshotCount: usageHistory.count,
+            latestSnapshotUpdate: usageHistory.map(\.lastUpdated).max(),
+            totalDuration: usageHistory.reduce(TimeInterval(0)) { partial, snapshot in
+                partial + max(0, snapshot.totalDuration ?? 0)
+            },
+            hourlyDayCount: hourlyUsageByDayID.count,
+            hourlyDuration: hourlyUsageByDayID.values.reduce(TimeInterval(0)) { partial, values in
+                partial + values.reduce(TimeInterval(0)) { $0 + max(0, $1) }
+            }
+        )
     }
 
     func saveSuggestedSocialBlockGroup() {
@@ -395,7 +475,7 @@ final class AppModel: ObservableObject {
             return false
         }
 
-        guard canEditGroup(blockingState.groups[index], password: password) else {
+        guard canVerifyGroupPassword(blockingState.groups[index], password: password) else {
             message = "Enter this group password before changing it."
             return false
         }
@@ -506,7 +586,7 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func deleteBlockGroup(_ group: BlockGroup, password: String? = nil) -> Bool {
-        guard canEditGroup(group, password: password) else {
+        guard canVerifyGroupPassword(group, password: password) else {
             message = "Enter this group password before deleting it."
             return false
         }
@@ -545,7 +625,7 @@ final class AppModel: ObservableObject {
         }
 
         blockingState.groups[index].passwordReset = BlockPasswordResetState(requestedAt: Date())
-        saveBlockingStateWithStatus("Password reset started. You can reset it after 24 hours.")
+        saveBlockingStateWithStatus("Password reset started. You can reset it after 1 minute.")
     }
 
     @discardableResult
@@ -785,6 +865,7 @@ final class AppModel: ObservableObject {
         do {
             try await screenTimeProvider.requestAuthorization()
             screenTimeAuthorization = screenTimeProvider.authorizationLabel()
+            requestScreenTimeReportRefresh()
             message = "Screen Time authorization updated."
         } catch {
             screenTimeAuthorization = screenTimeProvider.authorizationLabel()
@@ -798,14 +879,33 @@ final class AppModel: ObservableObject {
 
         persistSelection()
         screenTimeAuthorization = screenTimeProvider.authorizationLabel()
+        if !hasScreenTimeAuthorization {
+            do {
+                try await screenTimeProvider.requestAuthorization()
+                screenTimeAuthorization = screenTimeProvider.authorizationLabel()
+            } catch {
+                screenTimeAuthorization = screenTimeProvider.authorizationLabel()
+                message = "Screen Time authorization failed: \(error.localizedDescription)"
+                screenTimeReportStatus = message ?? "Screen Time authorization failed."
+                return
+            }
+        }
+
         cloudAvailability = await snapshotStore.cloudAvailability()
+        message = "Refreshing Screen Time reports..."
+        requestScreenTimeReportRefresh()
+        try? await Task.sleep(for: .seconds(2))
+        reloadUsageHistoryFromSharedStorage()
 
         let snapshot = await screenTimeProvider.loadTodayUsage(selection: selection, profile: profile)
         localSnapshot = snapshot
-        persistUsageSnapshot(snapshot)
+        if snapshot.capability.allowsUpload {
+            persistUsageSnapshot(snapshot)
+        }
 
         guard snapshot.capability.allowsUpload else {
-            message = snapshot.capability.reason ?? "Screen Time unavailable. No usage was uploaded."
+            message = "Screen Time reports refreshed. Home and Stats load directly from iOS Screen Time."
+            refreshScreenTimeReportStatus()
             return
         }
 
@@ -895,6 +995,19 @@ final class AppModel: ObservableObject {
         return didVerify
     }
 
+    private func canVerifyGroupPassword(_ group: BlockGroup, password: String?) -> Bool {
+        guard let currentGroup = blockingState.groups.first(where: { $0.id == group.id }),
+              let storedPassword = currentGroup.password else {
+            return false
+        }
+
+        guard let password, !password.isEmpty else {
+            return false
+        }
+
+        return BlockingPasswordHasher.verify(password, against: storedPassword)
+    }
+
     private func unlockGroup(id: String, now: Date = Date()) {
         groupUnlockExpirations[id] = now.addingTimeInterval(5 * 60)
     }
@@ -908,6 +1021,10 @@ final class AppModel: ObservableObject {
         usageHistoryDefaults?.removeObject(forKey: BlockingFriendRequestIntentStore.groupIDKey)
         usageHistoryDefaults?.removeObject(forKey: BlockingFriendRequestIntentStore.createdAtKey)
         pendingShieldFriendRequestGroupID = nil
+    }
+
+    func refreshPendingShieldFriendRequest() {
+        loadPendingShieldFriendRequest()
     }
 
     private func loadPendingShieldFriendRequest(now: Date = Date()) {
@@ -966,6 +1083,39 @@ final class AppModel: ObservableObject {
 
         usageHistory = payload.snapshots
         hourlyUsageByDayID = payload.hourlyDurationsByDayID
+    }
+
+    private func refreshLocalSnapshotFromHistory(now: Date = Date()) {
+        localSnapshot = UsageStatsBuilder.snapshot(for: now, in: usageHistory)
+            ?? usageHistory.sorted { $0.date > $1.date }.first
+    }
+
+    private static func screenTimeReportStatusLabel(
+        authorization: String,
+        defaults: UserDefaults?
+    ) -> String {
+        guard isScreenTimeAuthorizationApproved(authorization) else {
+            return "Screen Time is \(authorization.lowercased())."
+        }
+
+        if let error = defaults?.string(forKey: ScreenTimeReportStorage.lastErrorKey), !error.isEmpty {
+            return "Screen Time report error: \(error)"
+        }
+
+        if let lastGeneratedAt = defaults?.object(forKey: ScreenTimeReportStorage.lastGeneratedAtKey) as? Date {
+            if let summary = defaults?.string(forKey: ScreenTimeReportStorage.lastSummaryKey) {
+                return "\(UsageFormatting.lastUpdated(lastGeneratedAt)) (\(summary))"
+            }
+
+            return UsageFormatting.lastUpdated(lastGeneratedAt)
+        }
+
+        return "Live reports ready for all activity."
+    }
+
+    private static func isScreenTimeAuthorizationApproved(_ authorization: String) -> Bool {
+        authorization.localizedCaseInsensitiveCompare("Approved") == .orderedSame
+            || authorization.localizedCaseInsensitiveContains("approved")
     }
 
     private func persistUsageSnapshot(_ snapshot: DailyUsageSnapshot) {
@@ -1484,7 +1634,7 @@ final class AppModel: ObservableObject {
         }
 
         let today = calendar.startOfDay(for: now)
-        let currentWeek = calendar.dateInterval(of: .weekOfYear, for: now)
+        let currentWeek = UsageStatsBuilder.periodInterval(for: .week, containing: now, calendar: calendar)
         let currentWeekMinutes = [421, 360, 238, 297, 312, 248, 184]
         let monthPatternMinutes = [510, 485, 462, 438, 506, 472, 449, 330, 300, 285, 260, 310, 275, 255, 290, 270]
         var snapshots: [DailyUsageSnapshot] = []
@@ -1494,8 +1644,7 @@ final class AppModel: ObservableObject {
 
         while cursor <= today {
             let minutes: Int
-            if let currentWeek,
-               currentWeek.contains(cursor),
+            if currentWeek.contains(cursor),
                let offset = calendar.dateComponents([.day], from: currentWeek.start, to: cursor).day,
                currentWeekMinutes.indices.contains(offset) {
                 minutes = currentWeekMinutes[offset]

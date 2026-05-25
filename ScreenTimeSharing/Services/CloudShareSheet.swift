@@ -6,37 +6,30 @@ struct CloudShareSheet: UIViewControllerRepresentable {
     let store: CloudKitUsageSnapshotStore
     let profile: UserProfile
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let itemProvider = NSItemProvider()
+        let container = CKContainer(identifier: AppConfiguration.cloudKitContainerIdentifier)
+        let sharingOptions = CKAllowedSharingOptions(
+            allowedParticipantPermissionOptions: .readOnly,
+            allowedParticipantAccessOptions: .any
+        )
 
-    func makeUIViewController(context: Context) -> UICloudSharingController {
-        let controller = UICloudSharingController { _, completion in
-            Task {
-                do {
-                    let result = try await store.prepareProfileShare(profile: profile)
-                    completion(result.share, result.container, nil)
-                } catch {
-                    completion(nil, nil, error)
-                }
-            }
+        itemProvider.registerCKShare(
+            container: container,
+            allowedSharingOptions: sharingOptions
+        ) {
+            let result = try await store.prepareProfileShare(profile: profile)
+            return result.share
         }
-        controller.delegate = context.coordinator
-        controller.availablePermissions = [.allowReadOnly]
+
+        let configuration = UIActivityItemsConfiguration(itemProviders: [itemProvider])
+        configuration.metadataProvider = { key in
+            key == .title ? "Screen Time Sharing" : nil
+        }
+
+        let controller = UIActivityViewController(activityItemsConfiguration: configuration)
         return controller
     }
 
-    func updateUIViewController(_ uiViewController: UICloudSharingController, context: Context) {}
-
-    final class Coordinator: NSObject, UICloudSharingControllerDelegate {
-        func itemTitle(for csc: UICloudSharingController) -> String? {
-            "Screen Time Sharing"
-        }
-
-        func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {}
-
-        func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {}
-
-        func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) {}
-    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

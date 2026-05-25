@@ -5,6 +5,7 @@ import UIKit
 @main
 struct ScreenTimeSharingApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = AppModel()
 
     var body: some Scene {
@@ -24,6 +25,15 @@ struct ScreenTimeSharingApp: App {
                 }
                 .task {
                     await model.load()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    guard phase == .active else {
+                        return
+                    }
+
+                    model.reloadUsageHistoryFromSharedStorage()
+                    model.requestScreenTimeReportRefresh()
+                    model.refreshPendingShieldFriendRequest()
                 }
         }
     }

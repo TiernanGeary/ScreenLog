@@ -76,3 +76,33 @@ import Foundation
 
     #expect(decoded == snapshot)
 }
+
+@Test func fullDetailUploadStripsLocalApplicationTokenData() throws {
+    let snapshot = DailyUsageSnapshot(
+        id: "profile-1-2026-05-20",
+        ownerProfileID: "profile-1",
+        date: Date(timeIntervalSince1970: 1_779_232_800),
+        calendarIdentifier: "gregorian",
+        timeZoneIdentifier: "America/New_York",
+        totalDuration: 10_800,
+        selectedAppDuration: 3_600,
+        pickupCount: 22,
+        appRows: [
+            SharedAppUsage(
+                id: "app-1",
+                displayName: "Example",
+                bundleIdentifier: "com.example.app",
+                applicationTokenData: Data([1, 2, 3]),
+                duration: 1_800
+            )
+        ],
+        lastUpdated: Date(timeIntervalSince1970: 1_779_236_400),
+        capability: .fullAppDetail
+    )
+
+    let payload = try #require(try SnapshotRecordPayloadMapper.payload(from: snapshot))
+    let decoded = try SnapshotRecordPayloadMapper.snapshot(from: payload)
+
+    #expect(decoded.appRows.first?.displayName == "Example")
+    #expect(decoded.appRows.first?.applicationTokenData == nil)
+}
