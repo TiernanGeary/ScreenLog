@@ -34,6 +34,9 @@ struct ScreenTimeSharingApp: App {
                     model.reloadUsageHistoryFromSharedStorage()
                     model.requestScreenTimeReportRefresh()
                     model.refreshPendingShieldFriendRequest()
+                    Task {
+                        await model.syncFriendRequests()
+                    }
                 }
         }
     }

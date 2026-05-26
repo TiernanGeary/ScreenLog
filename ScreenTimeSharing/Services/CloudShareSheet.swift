@@ -10,7 +10,7 @@ struct CloudShareSheet: UIViewControllerRepresentable {
         let itemProvider = NSItemProvider()
         let container = CKContainer(identifier: AppConfiguration.cloudKitContainerIdentifier)
         let sharingOptions = CKAllowedSharingOptions(
-            allowedParticipantPermissionOptions: .readOnly,
+            allowedParticipantPermissionOptions: .readWrite,
             allowedParticipantAccessOptions: .any
         )
 

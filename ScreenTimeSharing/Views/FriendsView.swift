@@ -6,6 +6,7 @@ import UIKit
 struct FriendsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var selectedLeaderboardWindow: LeaderboardWindow = .week
+    @State private var isShowingShareSheet = false
 
     private var leaderboardEntries: [LeaderboardEntry] {
         let friendEntries = model.leaderboardEntries.filter { $0.userID != model.profile.id }
@@ -36,7 +37,7 @@ struct FriendsView: View {
                             ContentUnavailableView(
                                 "No Friends Yet",
                                 systemImage: "person.2.slash",
-                                description: Text("Accept a CloudKit share or invite a friend from Settings.")
+                                description: Text("Invite a friend or accept their invite to start sharing requests.")
                             )
                             .appCardRow(verticalPadding: 16)
                         }
@@ -57,8 +58,21 @@ struct FriendsView: View {
                 AppCard {
                     Button {
                         AppHaptics.buttonTap()
+                        isShowingShareSheet = true
+                    } label: {
+                        Label("Invite Friend", systemImage: "person.crop.circle.badge.plus")
+                            .appCardRow()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+
+                    AppCardDivider()
+
+                    Button {
+                        AppHaptics.buttonTap()
                         Task {
                             await model.reloadFriends()
+                            await model.syncFriendRequests()
                         }
                     } label: {
                         Label("Refresh Friends", systemImage: "arrow.clockwise")
@@ -76,11 +90,14 @@ struct FriendsView: View {
             .onChange(of: selectedLeaderboardWindow) { _, newWindow in
                 model.setLeaderboardWindow(newWindow)
             }
+            .sheet(isPresented: $isShowingShareSheet) {
+                CloudShareSheet(store: model.snapshotStore, profile: model.profile)
+            }
         }
     }
 
     private func seedDemoFriendsIfNeeded() {
-        #if DEBUG
+        #if DEBUG && targetEnvironment(simulator)
         if model.friendSummaries.isEmpty {
             model.seedDemoFriends(showsStatusMessage: false)
         }

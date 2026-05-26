@@ -287,12 +287,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var currentFriendIdentityIDs: Set<String> {
+        [profile.id, "profile-\(profile.id)"]
+    }
+
     func load() async {
         screenTimeAuthorization = screenTimeProvider.authorizationLabel()
         expireStaleFriendRequests()
         loadPendingShieldFriendRequest()
         cloudAvailability = await snapshotStore.cloudAvailability()
         await reloadFriends()
+        await syncFriendRequests()
         syncFriendRequestNotifications()
         syncBlockingEnforcement()
         requestScreenTimeReportRefresh()
@@ -695,6 +700,9 @@ final class AppModel: ObservableObject {
         saveBlockingStateWithStatus("Friend request sent.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
+        Task {
+            await publishFriendRequestToCloud(request, photoData: photoJPEGData)
+        }
         return true
     }
 
@@ -707,21 +715,25 @@ final class AppModel: ObservableObject {
         }
 
         let request = blockingState.friendRequests[index]
-        guard request.isReceived(by: profile.id), request.status == .pending else {
+        guard request.isReceived(byAny: currentFriendIdentityIDs), request.status == .pending else {
             message = "Only pending received requests can be approved."
             return false
         }
 
         let now = Date()
-        blockingState.friendRequests[index] = request.resolving(
+        let resolvedRequest = request.resolving(
             as: .approved,
             at: now,
             approvedByFriendID: profile.id
         )
+        blockingState.friendRequests[index] = resolvedRequest
         friendRequestNotificationService.clearNotification(for: id)
         saveBlockingStateWithStatus("Request approved.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
+        Task {
+            await publishFriendRequestUpdateToCloud(resolvedRequest)
+        }
         return true
     }
 
@@ -734,16 +746,20 @@ final class AppModel: ObservableObject {
         }
 
         let request = blockingState.friendRequests[index]
-        guard request.isReceived(by: profile.id), request.status == .pending else {
+        guard request.isReceived(byAny: currentFriendIdentityIDs), request.status == .pending else {
             message = "Only pending received requests can be denied."
             return false
         }
 
-        blockingState.friendRequests[index] = request.resolving(as: .denied, at: Date())
+        let resolvedRequest = request.resolving(as: .denied, at: Date())
+        blockingState.friendRequests[index] = resolvedRequest
         friendRequestNotificationService.clearNotification(for: id)
         saveBlockingStateWithStatus("Request denied.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
+        Task {
+            await publishFriendRequestUpdateToCloud(resolvedRequest)
+        }
         return true
     }
 
@@ -756,7 +772,7 @@ final class AppModel: ObservableObject {
         }
 
         let request = blockingState.friendRequests[index]
-        guard request.isSent(by: profile.id), request.status == .approved else {
+        guard request.isSent(byAny: currentFriendIdentityIDs), request.status == .approved else {
             message = "Only approved sent requests can be collected."
             return false
         }
@@ -787,10 +803,14 @@ final class AppModel: ObservableObject {
             ),
             at: 0
         )
-        blockingState.friendRequests[index] = request.collecting(at: now)
+        let collectedRequest = request.collecting(at: now)
+        blockingState.friendRequests[index] = collectedRequest
         saveBlockingStateWithStatus("Collected \(BlockingDisplayFormatter.durationLabel(duration)) of approved time.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
+        Task {
+            await publishFriendRequestUpdateToCloud(collectedRequest)
+        }
         return true
     }
 
@@ -878,6 +898,7 @@ final class AppModel: ObservableObject {
             try await snapshotStore.publish(profile: profile, snapshot: snapshot)
             message = "Usage snapshot uploaded."
             await reloadFriends()
+            await syncFriendRequests()
         } catch {
             message = "CloudKit upload failed: \(error.localizedDescription)"
         }
@@ -888,13 +909,14 @@ final class AppModel: ObservableObject {
             try await snapshotStore.acceptShare(metadata: metadata)
             message = "Friend share accepted."
             await reloadFriends()
+            await syncFriendRequests()
         } catch {
             message = "Could not accept share: \(error.localizedDescription)"
         }
     }
 
     func reloadFriends() async {
-        #if DEBUG
+        #if DEBUG && targetEnvironment(simulator)
         if UserDefaults.standard.bool(forKey: demoFriendsKey) {
             seedDemoFriends()
             return
@@ -914,6 +936,94 @@ final class AppModel: ObservableObject {
         } catch {
             message = "Could not refresh friends: \(error.localizedDescription)"
         }
+    }
+
+    func syncFriendRequests() async {
+        do {
+            let cloudRequests = try await snapshotStore.fetchFriendRequests { [friendRequestPhotoStore] id, data in
+                try friendRequestPhotoStore.saveJPEGData(data, id: id)
+            }
+            guard mergeCloudFriendRequests(cloudRequests) else {
+                return
+            }
+            try persistBlockingState()
+            refreshLocalAccountabilityStats()
+            syncFriendRequestNotifications()
+            writeWidgetCacheSnapshot()
+        } catch {
+            message = "Could not sync friend requests: \(error.localizedDescription)"
+        }
+    }
+
+    private func publishFriendRequestToCloud(_ request: BlockFriendRequest, photoData: Data?) async {
+        let availability = await snapshotStore.cloudAvailability()
+        cloudAvailability = availability
+        guard availability.allowsCloudWrites else {
+            message = "\(availability.label). Friend request saved only on this device."
+            return
+        }
+
+        do {
+            try await snapshotStore.publishFriendRequest(request, profile: profile, photoData: photoData)
+        } catch {
+            message = "Friend request saved locally. Cloud sync failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func publishFriendRequestUpdateToCloud(_ request: BlockFriendRequest) async {
+        let availability = await snapshotStore.cloudAvailability()
+        cloudAvailability = availability
+        guard availability.allowsCloudWrites else {
+            return
+        }
+
+        do {
+            try await snapshotStore.updateFriendRequest(request)
+        } catch {
+            message = "Request updated locally. Cloud sync failed: \(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    private func mergeCloudFriendRequests(_ cloudRequests: [BlockFriendRequest]) -> Bool {
+        guard !cloudRequests.isEmpty else {
+            return false
+        }
+
+        var mergedByID = Dictionary(uniqueKeysWithValues: blockingState.friendRequests.map { ($0.id, $0) })
+        for cloudRequest in cloudRequests {
+            if let localRequest = mergedByID[cloudRequest.id] {
+                mergedByID[cloudRequest.id] = mergedFriendRequest(local: localRequest, cloud: cloudRequest)
+            } else {
+                mergedByID[cloudRequest.id] = cloudRequest
+            }
+        }
+
+        let mergedRequests = mergedByID.values.sorted { lhs, rhs in
+            friendRequestSortDate(lhs) > friendRequestSortDate(rhs)
+        }
+        guard mergedRequests != blockingState.friendRequests else {
+            return false
+        }
+
+        blockingState.friendRequests = mergedRequests
+        return true
+    }
+
+    private func mergedFriendRequest(local: BlockFriendRequest, cloud: BlockFriendRequest) -> BlockFriendRequest {
+        let localDate = friendRequestSortDate(local)
+        let cloudDate = friendRequestSortDate(cloud)
+        var merged = cloudDate >= localDate ? cloud : local
+
+        if merged.photoReference == nil {
+            merged.photoReference = local.photoReference ?? cloud.photoReference
+        }
+
+        return merged
+    }
+
+    private func friendRequestSortDate(_ request: BlockFriendRequest) -> Date {
+        request.collectedAt ?? request.resolvedAt ?? request.createdAt
     }
 
     private func updateGroupMode(groupID: String, mode: BlockGroupMode, status: String) {
@@ -1238,7 +1348,7 @@ final class AppModel: ObservableObject {
 
     private func syncFriendRequestNotifications() {
         for request in blockingState.friendRequests {
-            guard request.isReceived(by: profile.id) else {
+            guard request.isReceived(byAny: currentFriendIdentityIDs) else {
                 continue
             }
 
@@ -1261,7 +1371,7 @@ final class AppModel: ObservableObject {
         leaderboardWindow = window
         refreshLocalAccountabilityStats()
 
-        #if DEBUG
+        #if DEBUG && targetEnvironment(simulator)
         if UserDefaults.standard.bool(forKey: demoFriendsKey) {
             seedDemoFriends()
         }

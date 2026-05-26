@@ -443,6 +443,34 @@ import Testing
     #expect(ids == ["newer-incoming", "older-incoming"])
 }
 
+@Test func pendingReceivedFriendRequestsMatchLegacyProfileAliases() {
+    let now = Date(timeIntervalSince1970: 1_779_236_400)
+    let incoming = BlockFriendRequest(
+        id: "incoming",
+        groupID: "social",
+        requestedSeconds: 10 * 60,
+        selectedFriendIDs: ["profile-me"],
+        message: "",
+        requesterID: "sam",
+        createdAt: now
+    )
+    let sent = BlockFriendRequest(
+        id: "sent",
+        groupID: "social",
+        requestedSeconds: 10 * 60,
+        selectedFriendIDs: ["sam"],
+        message: "",
+        requesterID: "profile-me",
+        createdAt: now
+    )
+    let state = BlockingState(friendRequests: [incoming, sent], lastUpdated: now)
+    let currentIDs: Set<String> = ["me", "profile-me"]
+
+    #expect(incoming.isReceived(byAny: currentIDs))
+    #expect(sent.isSent(byAny: currentIDs))
+    #expect(BlockingStateResolver.pendingReceivedFriendRequests(forAny: currentIDs, in: state).map(\.id) == ["incoming"])
+}
+
 @Test func friendRequestsExpireAndCollectAfterApproval() {
     let now = Date(timeIntervalSince1970: 1_779_236_400)
     let request = BlockFriendRequest(

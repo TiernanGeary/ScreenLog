@@ -1,3 +1,5 @@
+import FamilyControls
+import ManagedSettings
 import SwiftUI
 #if canImport(AVFoundation)
 import AVFoundation
@@ -828,6 +830,7 @@ private struct BlockingOverviewCard: View {
     @EnvironmentObject private var model: AppModel
     @State private var newGroupDraft: BlockGroupDraft?
     @State private var viewedGroup: BlockGroup?
+    @State private var unblockConfirmationGroup: BlockGroup?
 
     private var groups: [BlockGroup] {
         model.blockingState.groups
@@ -876,6 +879,9 @@ private struct BlockingOverviewCard: View {
         }
         .sheet(item: $viewedGroup) { group in
             BlockGroupConfigurationView(groupID: group.id)
+        }
+        .sheet(item: $unblockConfirmationGroup) { group in
+            UnblockConfirmationView(groupID: group.id)
         }
         .sheet(item: $newGroupDraft) { draft in
             NavigationStack {
@@ -997,14 +1003,8 @@ private struct BlockingOverviewCard: View {
         let isDisabled = totalUnblocks == 0 || remainingUnblocks == 0 || hasActiveUnblock
 
         return Button {
-            if model.startLocalUnblock(
-                groupID: group.id,
-                seconds: group.unblockConfig.maxDurationSeconds
-            ) {
-                AppHaptics.buttonTap()
-            } else {
-                AppHaptics.selectionChanged()
-            }
+            AppHaptics.buttonTap()
+            unblockConfirmationGroup = group
         } label: {
             Text("Unblock \(remainingUnblocks)/\(totalUnblocks)")
                 .font(.caption.weight(.semibold))
@@ -1023,6 +1023,264 @@ private struct BlockingOverviewCard: View {
         .accessibilityLabel("Unblock \(group.name), \(remainingUnblocks) of \(totalUnblocks) left today")
     }
 
+}
+
+private struct UnblockConfirmationView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: AppModel
+    let groupID: String
+
+    private var group: BlockGroup? {
+        model.blockingState.groups.first { $0.id == groupID }
+    }
+
+    private var selection: FamilyActivitySelection? {
+        guard let group else {
+            return nil
+        }
+
+        return try? BlockingSelectionCodec.decode(group.selectionData)
+    }
+
+    private var applicationTokens: [ApplicationToken] {
+        Array(selection?.applicationTokens ?? [])
+    }
+
+    private var categoryTokens: [ActivityCategoryToken] {
+        Array(selection?.categoryTokens ?? [])
+    }
+
+    private var webDomainTokens: [WebDomainToken] {
+        Array(selection?.webDomainTokens ?? [])
+    }
+
+    private var hasSelectionItems: Bool {
+        !applicationTokens.isEmpty || !categoryTokens.isEmpty || !webDomainTokens.isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            AppScreenScroll(backgroundStyle: .white) {
+                if let group {
+                    header(for: group)
+
+                    AppSection("Apps to Unblock") {
+                        AppCard {
+                            selectedItemsList
+                        }
+                    }
+
+                    AppSection("Duration") {
+                        AppCard {
+                            durationRow(for: group)
+                        }
+                    }
+                } else {
+                    AppCard {
+                        Text("This block group is no longer available.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .appCardRow()
+                    }
+                }
+            }
+            .navigationTitle("Confirm Unblock")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                if let group {
+                    bottomButton(for: group)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        AppHaptics.buttonTap()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func header(for group: BlockGroup) -> some View {
+        AppCard(cornerRadius: 24, opacity: 0.78) {
+            HStack(spacing: 14) {
+                Circle()
+                    .fill(Color(hex: group.colorHex))
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        Image(systemName: "lock.open.fill")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                    }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(group.name)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    Text("Stop blocking this group temporarily.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 8)
+            }
+            .appCardRow(verticalPadding: 16)
+        }
+    }
+
+    @ViewBuilder
+    private var selectedItemsList: some View {
+        if hasSelectionItems {
+            VStack(spacing: 0) {
+                ForEach(Array(applicationTokens.enumerated()), id: \.element) { index, token in
+                    if index > 0 {
+                        AppCardDivider()
+                    }
+                    tokenRow(token, fallbackTitle: "App", detail: "App")
+                }
+
+                ForEach(Array(categoryTokens.enumerated()), id: \.element) { index, token in
+                    if !applicationTokens.isEmpty || index > 0 {
+                        AppCardDivider()
+                    }
+                    tokenRow(token, fallbackTitle: "Category", detail: "Category")
+                }
+
+                ForEach(Array(webDomainTokens.enumerated()), id: \.element) { index, token in
+                    if !applicationTokens.isEmpty || !categoryTokens.isEmpty || index > 0 {
+                        AppCardDivider()
+                    }
+                    tokenRow(token, fallbackTitle: "Website", detail: "Website")
+                }
+            }
+        } else {
+            Label("No apps selected", systemImage: "app.badge")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .appCardRow()
+        }
+    }
+
+    private func tokenRow(_ token: ApplicationToken, fallbackTitle: String, detail: String) -> some View {
+        HStack(spacing: 12) {
+            Label(token)
+                .labelStyle(.iconOnly)
+                .frame(width: 34, height: 34)
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Label(token)
+                    .labelStyle(.titleOnly)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+        }
+        .appCardRow(verticalPadding: 11)
+        .accessibilityLabel(fallbackTitle)
+    }
+
+    private func tokenRow(_ token: ActivityCategoryToken, fallbackTitle: String, detail: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "square.grid.2x2.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Label(token)
+                    .labelStyle(.titleOnly)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+        }
+        .appCardRow(verticalPadding: 11)
+        .accessibilityLabel(fallbackTitle)
+    }
+
+    private func tokenRow(_ token: WebDomainToken, fallbackTitle: String, detail: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "globe")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Label(token)
+                    .labelStyle(.titleOnly)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+        }
+        .appCardRow(verticalPadding: 11)
+        .accessibilityLabel(fallbackTitle)
+    }
+
+    private func durationRow(for group: BlockGroup) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "timer")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            Text("Unblock duration")
+                .font(.subheadline)
+
+            Spacer(minLength: 12)
+
+            Text(BlockingDisplayFormatter.fullDurationLabel(group.unblockConfig.maxDurationSeconds))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+        }
+        .appCardRow(verticalPadding: 12)
+    }
+
+    private func bottomButton(for group: BlockGroup) -> some View {
+        Button {
+            if model.startLocalUnblock(groupID: group.id, seconds: group.unblockConfig.maxDurationSeconds) {
+                AppHaptics.buttonTap()
+                dismiss()
+            } else {
+                AppHaptics.selectionChanged()
+            }
+        } label: {
+            Text("Stop Blocking")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.white)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.blue)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background(.regularMaterial)
+    }
 }
 
 #if DEBUG
@@ -1256,12 +1514,14 @@ struct FriendApprovalRequestView: View {
     private let minuteOptions = [5, 10, 15, 20, 30, 45, 60]
 
     private var friends: [FriendChoice] {
+        #if DEBUG && targetEnvironment(simulator)
         if model.friendSummaries.isEmpty {
             return [
                 FriendChoice(id: "demo-sam", name: "Sam", avatarColorHex: "#1B998B"),
                 FriendChoice(id: "demo-maya", name: "Maya", avatarColorHex: "#E84855")
             ]
         }
+        #endif
 
         return model.friendSummaries.map {
             FriendChoice(id: $0.id, name: $0.displayName, avatarColorHex: $0.avatarColorHex)
@@ -1419,34 +1679,43 @@ struct FriendApprovalRequestView: View {
 
             AppSection("Friends") {
                 AppCard {
-                    ForEach(Array(friends.enumerated()), id: \.element.id) { index, friend in
-                        if index > 0 {
-                            AppCardDivider()
-                        }
-                        Button {
-                            AppHaptics.selectionChanged()
-                            if selectedFriendIDs.contains(friend.id) {
-                                selectedFriendIDs.remove(friend.id)
-                            } else {
-                                selectedFriendIDs.insert(friend.id)
+                    if friends.isEmpty {
+                        ContentUnavailableView(
+                            "No Friends Yet",
+                            systemImage: "person.2.slash",
+                            description: Text("Invite a friend before sending a time request.")
+                        )
+                        .appCardRow(verticalPadding: 16)
+                    } else {
+                        ForEach(Array(friends.enumerated()), id: \.element.id) { index, friend in
+                            if index > 0 {
+                                AppCardDivider()
                             }
-                        } label: {
-                            HStack(spacing: 12) {
-                                Avatar(colorHex: friend.avatarColorHex, initials: friend.name.initials)
-                                    .frame(width: 44, height: 44)
+                            Button {
+                                AppHaptics.selectionChanged()
+                                if selectedFriendIDs.contains(friend.id) {
+                                    selectedFriendIDs.remove(friend.id)
+                                } else {
+                                    selectedFriendIDs.insert(friend.id)
+                                }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Avatar(colorHex: friend.avatarColorHex, initials: friend.name.initials)
+                                        .frame(width: 44, height: 44)
 
-                                Text(friend.name)
-                                    .font(.subheadline.weight(.medium))
-                                    .lineLimit(1)
+                                    Text(friend.name)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
 
-                                Spacer()
+                                    Spacer()
 
-                                Image(systemName: selectedFriendIDs.contains(friend.id) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selectedFriendIDs.contains(friend.id) ? Color.accentColor : Color.secondary)
+                                    Image(systemName: selectedFriendIDs.contains(friend.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(selectedFriendIDs.contains(friend.id) ? Color.accentColor : Color.secondary)
+                                }
+                                .appCardRow()
                             }
-                            .appCardRow()
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }

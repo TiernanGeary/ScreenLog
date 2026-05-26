@@ -34,9 +34,13 @@ private struct AppTabs: View {
 
     private var requestFeedAttentionCount: Int {
         model.blockingState.friendRequests.filter { request in
-            (request.isReceived(by: model.profile.id) && request.status == .pending)
-                || (request.isSent(by: model.profile.id) && request.status == .approved)
+            (request.isReceived(byAny: currentFriendIdentityIDs) && request.status == .pending)
+                || (request.isSent(byAny: currentFriendIdentityIDs) && request.status == .approved)
         }.count
+    }
+
+    private var currentFriendIdentityIDs: Set<String> {
+        [model.profile.id, "profile-\(model.profile.id)"]
     }
 
     var body: some View {

@@ -16,7 +16,13 @@ struct RequestFeedView: View {
     @State private var isShowingNoRequestGroupAlert = false
 
     private var pendingReceivedRequests: [BlockFriendRequest] {
-        BlockingStateResolver.pendingReceivedFriendRequests(for: model.profile.id, in: model.blockingState)
+        model.blockingState.friendRequests
+            .filter { $0.isReceived(byAny: currentFriendIdentityIDs) && $0.status == .pending }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private var currentFriendIdentityIDs: Set<String> {
+        [model.profile.id, "profile-\(model.profile.id)"]
     }
 
     private var eligibleRequestGroups: [BlockGroup] {
@@ -31,7 +37,15 @@ struct RequestFeedView: View {
 
     private var friendRequestLogs: [BlockFriendRequest] {
         model.blockingState.friendRequests
-            .sorted { $0.createdAt > $1.createdAt }
+            .sorted { first, second in
+                let firstIsCollectable = isCollectableLog(first)
+                let secondIsCollectable = isCollectableLog(second)
+                if firstIsCollectable != secondIsCollectable {
+                    return firstIsCollectable
+                }
+
+                return logSortDate(first) > logSortDate(second)
+            }
     }
 
     private var recentQuickRequests: [BlockingRequestListItem] {
@@ -72,6 +86,9 @@ struct RequestFeedView: View {
         .onAppear {
             model.expireStaleFriendRequests()
             syncSelectedPhotoRequest(preferredID: highlightedFriendRequestID)
+            Task {
+                await model.syncFriendRequests()
+            }
         }
         .onChange(of: highlightedFriendRequestID) { _, newValue in
             syncSelectedPhotoRequest(preferredID: newValue)
@@ -328,7 +345,15 @@ struct RequestFeedView: View {
     }
 
     private func direction(for request: BlockFriendRequest) -> FriendRequestDirection {
-        request.isSent(by: model.profile.id) ? .sent : .received
+        request.isSent(byAny: currentFriendIdentityIDs) ? .sent : .received
+    }
+
+    private func isCollectableLog(_ request: BlockFriendRequest) -> Bool {
+        request.isSent(byAny: currentFriendIdentityIDs) && request.status == .approved
+    }
+
+    private func logSortDate(_ request: BlockFriendRequest) -> Date {
+        isCollectableLog(request) ? (request.resolvedAt ?? request.createdAt) : request.createdAt
     }
 
     private func groupName(for groupID: String) -> String {
@@ -848,10 +873,14 @@ private struct FriendRequestDetailView: View {
         model.blockingState.friendRequests.first { $0.id == requestID }
     }
 
+    private var currentFriendIdentityIDs: Set<String> {
+        [model.profile.id, "profile-\(model.profile.id)"]
+    }
+
     var body: some View {
         AppScreenScroll(backgroundStyle: .white) {
             if let request {
-                let direction = FriendRequestFeedDisplay.direction(for: request, currentUserID: model.profile.id)
+                let direction = FriendRequestFeedDisplay.direction(for: request, currentUserIDs: currentFriendIdentityIDs)
                 let participantName = FriendRequestFeedDisplay.participantName(
                     for: request,
                     direction: direction,
@@ -1050,8 +1079,8 @@ private struct FriendRequestDetailView: View {
 }
 
 private enum FriendRequestFeedDisplay {
-    static func direction(for request: BlockFriendRequest, currentUserID: String) -> FriendRequestDirection {
-        request.isSent(by: currentUserID) ? .sent : .received
+    static func direction(for request: BlockFriendRequest, currentUserIDs: Set<String>) -> FriendRequestDirection {
+        request.isSent(byAny: currentUserIDs) ? .sent : .received
     }
 
     static func participantName(
@@ -1313,15 +1342,19 @@ struct BlockingSettingsView: View {
         model.blockingState.groups.filter { !$0.isEnabled }
     }
 
+    private var currentFriendIdentityIDs: Set<String> {
+        [model.profile.id, "profile-\(model.profile.id)"]
+    }
+
     private var sentFriendRequests: [BlockFriendRequest] {
         model.blockingState.friendRequests
-            .filter { $0.isSent(by: model.profile.id) }
+            .filter { $0.isSent(byAny: currentFriendIdentityIDs) }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
     private var receivedFriendRequests: [BlockFriendRequest] {
         model.blockingState.friendRequests
-            .filter { $0.isReceived(by: model.profile.id) }
+            .filter { $0.isReceived(byAny: currentFriendIdentityIDs) }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
@@ -1523,7 +1556,7 @@ struct BlockingSettingsView: View {
     }
 
     private func direction(for request: BlockFriendRequest) -> FriendRequestDirection {
-        request.isSent(by: model.profile.id) ? .sent : .received
+        request.isSent(byAny: currentFriendIdentityIDs) ? .sent : .received
     }
 
     private func groupListCard(_ groups: [BlockGroup], isMuted: Bool = false) -> some View {

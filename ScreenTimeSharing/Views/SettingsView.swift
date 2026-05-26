@@ -274,8 +274,8 @@ struct SettingsView: View {
     private var acceptedPhotoItems: [AcceptedRequestPhotoItem] {
         model.blockingState.friendRequests
             .compactMap { request in
-                guard request.isReceived(by: model.profile.id),
-                      request.approvedByFriendID == model.profile.id,
+                guard request.isReceived(byAny: currentFriendIdentityIDs),
+                      request.approvedByFriendID.map(currentFriendIdentityIDs.contains) == true,
                       let photoData = model.friendRequestPhotoData(for: request) else {
                     return nil
                 }
@@ -290,6 +290,10 @@ struct SettingsView: View {
                 )
             }
             .sorted { $0.approvedAt > $1.approvedAt }
+    }
+
+    private var currentFriendIdentityIDs: Set<String> {
+        [model.profile.id, "profile-\(model.profile.id)"]
     }
 
     private func senderName(for request: BlockFriendRequest) -> String {

@@ -679,11 +679,28 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
     }
 
     public func isSent(by userID: String) -> Bool {
-        requesterID == nil || requesterID == userID
+        isSent(byAny: [userID])
     }
 
     public func isReceived(by userID: String) -> Bool {
-        requesterID != nil && requesterID != userID && selectedFriendIDs.contains(userID)
+        isReceived(byAny: [userID])
+    }
+
+    public func isSent(byAny userIDs: Set<String>) -> Bool {
+        guard let requesterID else {
+            return true
+        }
+
+        return userIDs.contains(requesterID)
+    }
+
+    public func isReceived(byAny userIDs: Set<String>) -> Bool {
+        guard let requesterID,
+              !userIDs.contains(requesterID) else {
+            return false
+        }
+
+        return selectedFriendIDs.contains { userIDs.contains($0) }
     }
 }
 
@@ -1030,8 +1047,15 @@ public enum BlockingStateResolver {
         for userID: String,
         in state: BlockingState
     ) -> [BlockFriendRequest] {
+        pendingReceivedFriendRequests(forAny: [userID], in: state)
+    }
+
+    public static func pendingReceivedFriendRequests(
+        forAny userIDs: Set<String>,
+        in state: BlockingState
+    ) -> [BlockFriendRequest] {
         state.friendRequests
-            .filter { $0.isReceived(by: userID) && $0.status == .pending }
+            .filter { $0.isReceived(byAny: userIDs) && $0.status == .pending }
             .sorted { $0.createdAt > $1.createdAt }
     }
 

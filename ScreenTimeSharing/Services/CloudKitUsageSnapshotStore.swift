@@ -41,6 +41,7 @@ final class CloudKitUsageSnapshotStore {
     private enum RecordType {
         static let userProfile = "UserProfile"
         static let dailyUsageSnapshot = "DailyUsageSnapshot"
+        static let friendTimeRequest = "FriendTimeRequest"
     }
 
     private enum Field {
@@ -59,6 +60,21 @@ final class CloudKitUsageSnapshotStore {
         static let capabilityStatus = "capabilityStatus"
         static let capabilityReason = "capabilityReason"
         static let profileReference = "profileReference"
+        static let requestID = "requestID"
+        static let groupID = "groupID"
+        static let requestedSeconds = "requestedSeconds"
+        static let selectedFriendIDs = "selectedFriendIDs"
+        static let message = "message"
+        static let requesterID = "requesterID"
+        static let requesterDisplayName = "requesterDisplayName"
+        static let approvedByFriendID = "approvedByFriendID"
+        static let status = "status"
+        static let createdAt = "createdAt"
+        static let resolvedAt = "resolvedAt"
+        static let collectedAt = "collectedAt"
+        static let expiresAt = "expiresAt"
+        static let approvedExpiresAt = "approvedExpiresAt"
+        static let photoAsset = "photoAsset"
     }
 
     private let container: CKContainer?
@@ -164,6 +180,85 @@ final class CloudKitUsageSnapshotStore {
         return (share, container)
     }
 
+    func publishFriendRequest(
+        _ request: BlockFriendRequest,
+        profile: UserProfile,
+        photoData: Data?
+    ) async throws {
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
+        try await ensurePrivateZone(in: container)
+
+        let profileRecord = makeProfileRecord(profile)
+        let requestRecord = try makeFriendRequestRecord(
+            request,
+            profileRecordID: profileRecord.recordID,
+            existingRecord: nil,
+            photoData: photoData
+        )
+
+        let result = try await container.privateCloudDatabase.modifyRecords(
+            saving: [profileRecord, requestRecord.record],
+            deleting: [],
+            savePolicy: .changedKeys,
+            atomically: true
+        )
+
+        try requestRecord.cleanup()
+        for saveResult in result.saveResults.values {
+            _ = try saveResult.get()
+        }
+    }
+
+    func updateFriendRequest(_ request: BlockFriendRequest) async throws {
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
+        try await ensurePrivateZone(in: container)
+
+        if try await updateFriendRequest(request, database: container.privateCloudDatabase, zoneID: privateZoneID) {
+            return
+        }
+
+        for zoneID in sharedZoneStore.load() {
+            if try await updateFriendRequest(request, database: container.sharedCloudDatabase, zoneID: zoneID) {
+                return
+            }
+        }
+    }
+
+    func fetchFriendRequests(
+        savePhotoData: (String, Data) throws -> BlockFriendRequestPhotoReference
+    ) async throws -> [BlockFriendRequest] {
+        guard let container else {
+            return []
+        }
+
+        try await ensurePrivateZone(in: container)
+
+        var requests: [BlockFriendRequest] = []
+        requests.append(
+            contentsOf: try await friendRequestRecords(in: container.privateCloudDatabase, zoneID: privateZoneID)
+                .compactMap { record in
+                    makeFriendRequest(record: record, savePhotoData: savePhotoData)
+                }
+        )
+
+        for zoneID in sharedZoneStore.load() {
+            requests.append(
+                contentsOf: try await friendRequestRecords(in: container.sharedCloudDatabase, zoneID: zoneID)
+                    .compactMap { record in
+                        makeFriendRequest(record: record, savePhotoData: savePhotoData)
+                    }
+            )
+        }
+
+        return requests.sorted { friendRequestSortDate($0) > friendRequestSortDate($1) }
+    }
+
     func acceptShare(metadata: CKShare.Metadata) async throws {
         guard container != nil else {
             throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
@@ -199,10 +294,10 @@ final class CloudKitUsageSnapshotStore {
                 sortedBy: Field.lastUpdated
             )
 
-            guard let profileRecord = try await profileRecords.first,
-                  let snapshotRecord = try await snapshotRecords.first else {
+            guard let profileRecord = try await profileRecords.first else {
                 continue
             }
+            let snapshotRecord = try? await snapshotRecords.first
 
             let summary = makeFriendSummary(
                 profileRecord: profileRecord,
@@ -242,6 +337,7 @@ final class CloudKitUsageSnapshotStore {
     private func makeProfileRecord(_ profile: UserProfile) -> CKRecord {
         let recordID = CKRecord.ID(recordName: "profile-\(profile.id)", zoneID: privateZoneID)
         let record = CKRecord(recordType: RecordType.userProfile, recordID: recordID)
+        record[Field.ownerProfileID] = profile.id as CKRecordValue
         record[Field.displayName] = profile.displayName as CKRecordValue
         record[Field.avatarColorHex] = profile.avatarColorHex as CKRecordValue
         record[Field.shareStatus] = profile.shareStatus.rawValue as CKRecordValue
@@ -304,22 +400,236 @@ final class CloudKitUsageSnapshotStore {
         }
     }
 
+    private func friendRequestRecords(in database: CKDatabase, zoneID: CKRecordZone.ID) async throws -> [CKRecord] {
+        let query = CKQuery(recordType: RecordType.friendTimeRequest, predicate: NSPredicate(value: true))
+
+        do {
+            let response = try await database.records(
+                matching: query,
+                inZoneWith: zoneID,
+                desiredKeys: nil,
+                resultsLimit: 100
+            )
+
+            return try response.matchResults.map { _, result in
+                try result.get()
+            }
+        } catch {
+            if isUnknownItemError(error) {
+                return []
+            }
+            throw error
+        }
+    }
+
+    private func updateFriendRequest(
+        _ request: BlockFriendRequest,
+        database: CKDatabase,
+        zoneID: CKRecordZone.ID
+    ) async throws -> Bool {
+        guard let existingRecord = try await friendRequestRecord(id: request.id, database: database, zoneID: zoneID) else {
+            return false
+        }
+
+        let updatedRecord = try makeFriendRequestRecord(
+            request,
+            profileRecordID: existingRecord.parent?.recordID,
+            existingRecord: existingRecord,
+            photoData: nil
+        )
+        let result = try await database.modifyRecords(
+            saving: [updatedRecord.record],
+            deleting: [],
+            savePolicy: .changedKeys,
+            atomically: true
+        )
+
+        try updatedRecord.cleanup()
+        for saveResult in result.saveResults.values {
+            _ = try saveResult.get()
+        }
+        return true
+    }
+
+    private func friendRequestRecord(
+        id: String,
+        database: CKDatabase,
+        zoneID: CKRecordZone.ID
+    ) async throws -> CKRecord? {
+        let recordID = CKRecord.ID(recordName: "friend-request-\(id)", zoneID: zoneID)
+        let response = try await database.records(for: [recordID])
+
+        guard let result = response[recordID] else {
+            return nil
+        }
+
+        do {
+            return try result.get()
+        } catch {
+            if isUnknownItemError(error) {
+                return nil
+            }
+            throw error
+        }
+    }
+
+    private struct PreparedFriendRequestRecord {
+        let record: CKRecord
+        let temporaryAssetURL: URL?
+
+        func cleanup() throws {
+            if let temporaryAssetURL {
+                try? FileManager.default.removeItem(at: temporaryAssetURL)
+            }
+        }
+    }
+
+    private func makeFriendRequestRecord(
+        _ request: BlockFriendRequest,
+        profileRecordID: CKRecord.ID?,
+        existingRecord: CKRecord?,
+        photoData: Data?
+    ) throws -> PreparedFriendRequestRecord {
+        let record = existingRecord ?? CKRecord(
+            recordType: RecordType.friendTimeRequest,
+            recordID: CKRecord.ID(recordName: "friend-request-\(request.id)", zoneID: privateZoneID)
+        )
+
+        if let profileRecordID {
+            record.parent = CKRecord.Reference(recordID: profileRecordID, action: .none)
+            record[Field.profileReference] = CKRecord.Reference(recordID: profileRecordID, action: .none)
+        }
+
+        record[Field.requestID] = request.id as CKRecordValue
+        record[Field.groupID] = request.groupID as CKRecordValue
+        record[Field.requestedSeconds] = NSNumber(value: request.requestedSeconds)
+        record[Field.selectedFriendIDs] = request.selectedFriendIDs as NSArray
+        record[Field.message] = request.message as CKRecordValue
+        record[Field.status] = request.status.rawValue as CKRecordValue
+        record[Field.createdAt] = request.createdAt as CKRecordValue
+
+        setOptionalString(request.requesterID, for: Field.requesterID, on: record)
+        setOptionalString(request.requesterDisplayName, for: Field.requesterDisplayName, on: record)
+        setOptionalString(request.approvedByFriendID, for: Field.approvedByFriendID, on: record)
+        setOptionalDate(request.resolvedAt, for: Field.resolvedAt, on: record)
+        setOptionalDate(request.collectedAt, for: Field.collectedAt, on: record)
+        setOptionalDate(request.expiresAt, for: Field.expiresAt, on: record)
+        setOptionalDate(request.approvedExpiresAt, for: Field.approvedExpiresAt, on: record)
+
+        let temporaryURL: URL?
+        if let photoData, !photoData.isEmpty {
+            let assetURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("friend-request-\(request.id)-\(UUID().uuidString).jpg")
+            try photoData.write(to: assetURL, options: [.atomic])
+            record[Field.photoAsset] = CKAsset(fileURL: assetURL)
+            temporaryURL = assetURL
+        } else {
+            temporaryURL = nil
+        }
+
+        return PreparedFriendRequestRecord(record: record, temporaryAssetURL: temporaryURL)
+    }
+
+    private func makeFriendRequest(
+        record: CKRecord,
+        savePhotoData: (String, Data) throws -> BlockFriendRequestPhotoReference
+    ) -> BlockFriendRequest? {
+        guard let id = record[Field.requestID] as? String,
+              let groupID = record[Field.groupID] as? String,
+              let requestedSeconds = (record[Field.requestedSeconds] as? NSNumber)?.doubleValue,
+              let statusRaw = record[Field.status] as? String,
+              let status = BlockRequestStatus(rawValue: statusRaw),
+              let createdAt = record[Field.createdAt] as? Date else {
+            return nil
+        }
+        let selectedFriendIDs = Self.stringArray(from: record[Field.selectedFriendIDs])
+
+        let photoReference: BlockFriendRequestPhotoReference?
+        if let asset = record[Field.photoAsset] as? CKAsset,
+           let fileURL = asset.fileURL,
+           let data = try? Data(contentsOf: fileURL) {
+            photoReference = try? savePhotoData(id, data)
+        } else {
+            photoReference = nil
+        }
+
+        return BlockFriendRequest(
+            id: id,
+            groupID: groupID,
+            requestedSeconds: requestedSeconds,
+            selectedFriendIDs: selectedFriendIDs,
+            message: record[Field.message] as? String ?? "",
+            requesterID: record[Field.requesterID] as? String,
+            requesterDisplayName: record[Field.requesterDisplayName] as? String,
+            approvedByFriendID: record[Field.approvedByFriendID] as? String,
+            status: status,
+            createdAt: createdAt,
+            resolvedAt: record[Field.resolvedAt] as? Date,
+            collectedAt: record[Field.collectedAt] as? Date,
+            expiresAt: record[Field.expiresAt] as? Date,
+            approvedExpiresAt: record[Field.approvedExpiresAt] as? Date,
+            photoReference: photoReference
+        )
+    }
+
+    private func setOptionalString(_ value: String?, for key: String, on record: CKRecord) {
+        if let value {
+            record[key] = value as CKRecordValue
+        } else {
+            record[key] = nil
+        }
+    }
+
+    private func setOptionalDate(_ value: Date?, for key: String, on record: CKRecord) {
+        if let value {
+            record[key] = value as CKRecordValue
+        } else {
+            record[key] = nil
+        }
+    }
+
+    private static func stringArray(from value: CKRecordValue?) -> [String] {
+        if let strings = value as? [String] {
+            return strings
+        }
+
+        if let strings = value as? [NSString] {
+            return strings.map { String($0) }
+        }
+
+        if let array = value as? NSArray {
+            return array.compactMap { $0 as? String }
+        }
+
+        return []
+    }
+
+    private func isUnknownItemError(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else {
+            return false
+        }
+
+        return ckError.code == .unknownItem
+    }
+
     private func makeFriendSummary(
         profileRecord: CKRecord,
-        snapshotRecord: CKRecord,
+        snapshotRecord: CKRecord?,
         now: Date
     ) -> FriendUsageSummary {
+        let profileID = profileRecord[Field.ownerProfileID] as? String
+            ?? profileRecord.recordID.recordName.replacingOccurrences(of: "profile-", with: "")
         let displayName = profileRecord[Field.displayName] as? String ?? "Friend"
         let avatarColorHex = profileRecord[Field.avatarColorHex] as? String ?? AppConfiguration.defaultAvatarColor
-        let totalDuration = (snapshotRecord[Field.totalDuration] as? NSNumber)?.doubleValue
-        let selectedAppDuration = (snapshotRecord[Field.selectedAppDuration] as? NSNumber)?.doubleValue
-        let lastUpdated = snapshotRecord[Field.lastUpdated] as? Date
-        let statusRaw = snapshotRecord[Field.capabilityStatus] as? String
+        let totalDuration = (snapshotRecord?[Field.totalDuration] as? NSNumber)?.doubleValue
+        let selectedAppDuration = (snapshotRecord?[Field.selectedAppDuration] as? NSNumber)?.doubleValue
+        let lastUpdated = snapshotRecord?[Field.lastUpdated] as? Date
+        let statusRaw = snapshotRecord?[Field.capabilityStatus] as? String
         let status = statusRaw.flatMap(ScreenTimeCapabilityStatus.init(rawValue:)) ?? .unavailable
-        let reason = snapshotRecord[Field.capabilityReason] as? String
+        let reason = (snapshotRecord?[Field.capabilityReason] as? String) ?? "Waiting for Screen Time"
 
         return FriendUsageSummary(
-            id: profileRecord.recordID.recordName,
+            id: profileID,
             displayName: displayName,
             avatarColorHex: avatarColorHex,
             totalDuration: totalDuration,
@@ -328,6 +638,10 @@ final class CloudKitUsageSnapshotStore {
             lastUpdated: lastUpdated,
             isStale: lastUpdated.map { now.timeIntervalSince($0) > 3_600 } ?? true
         )
+    }
+
+    private func friendRequestSortDate(_ request: BlockFriendRequest) -> Date {
+        request.collectedAt ?? request.resolvedAt ?? request.createdAt
     }
 }
 
