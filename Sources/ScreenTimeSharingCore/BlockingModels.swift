@@ -690,22 +690,54 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
 public struct BlockUnblockSession: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var groupID: String
+    public var selectionData: Data?
     public var durationSeconds: TimeInterval
     public var startedAt: Date
     public var expiresAt: Date
 
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case groupID
+        case selectionData
+        case durationSeconds
+        case startedAt
+        case expiresAt
+    }
+
     public init(
         id: String,
         groupID: String,
+        selectionData: Data? = nil,
         durationSeconds: TimeInterval,
         startedAt: Date,
         expiresAt: Date
     ) {
         self.id = id
         self.groupID = groupID
+        self.selectionData = selectionData
         self.durationSeconds = durationSeconds
         self.startedAt = startedAt
         self.expiresAt = expiresAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        groupID = try container.decode(String.self, forKey: .groupID)
+        selectionData = try container.decodeIfPresent(Data.self, forKey: .selectionData)
+        durationSeconds = try container.decode(TimeInterval.self, forKey: .durationSeconds)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(groupID, forKey: .groupID)
+        try container.encodeIfPresent(selectionData, forKey: .selectionData)
+        try container.encode(durationSeconds, forKey: .durationSeconds)
+        try container.encode(startedAt, forKey: .startedAt)
+        try container.encode(expiresAt, forKey: .expiresAt)
     }
 
     public func isActive(now: Date = Date()) -> Bool {
@@ -807,6 +839,11 @@ public enum BlockingStoreCodec {
     public static let suiteName = "group.com.jdco.ScreenLog"
     public static let storageKey = "BlockingState.v1"
     public static let activeShieldedGroupIDsKey = "ActiveShieldedBlockGroupIDs.v1"
+    public static let shieldIndexKey = "BlockingShieldIndex.v1"
+    public static let shieldFriendRequestGroupIDKey = "BlockingShieldFriendRequestGroupID.v1"
+    public static let shieldFriendRequestEnabledKey = "BlockingShieldFriendRequestEnabled.v1"
+    public static let shieldRuntimeUpdatedAtKey = "BlockingShieldRuntimeUpdatedAt.v1"
+    public static let blockingEnforcementSignatureKey = "BlockingEnforcementSignature.v1"
 
     public static func encode(_ state: BlockingState) throws -> Data {
         let encoder = JSONEncoder()
@@ -818,6 +855,112 @@ public enum BlockingStoreCodec {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(BlockingState.self, from: data)
+    }
+}
+
+public struct BlockingShieldIndexGroup: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var isEnabled: Bool
+    public var isFriendRequestEnabled: Bool
+
+    public init(
+        id: String,
+        name: String,
+        isEnabled: Bool,
+        isFriendRequestEnabled: Bool
+    ) {
+        self.id = id
+        self.name = name
+        self.isEnabled = isEnabled
+        self.isFriendRequestEnabled = isFriendRequestEnabled
+    }
+}
+
+public struct BlockingShieldIndex: Codable, Equatable, Sendable {
+    public var activeGroupIDs: [String]
+    public var groups: [BlockingShieldIndexGroup]
+    public var lastUpdated: Date
+
+    public init(
+        activeGroupIDs: [String] = [],
+        groups: [BlockingShieldIndexGroup] = [],
+        lastUpdated: Date = Date()
+    ) {
+        self.activeGroupIDs = activeGroupIDs
+        self.groups = groups
+        self.lastUpdated = lastUpdated
+    }
+
+    public init(state: BlockingState, activeGroupIDs: Set<String>, now: Date = Date()) {
+        let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state, now: now)
+        let enabledGroupIDs = Set(BlockingStateResolver.enabledGroups(in: state).map(\.id))
+        self.activeGroupIDs = Array(activeGroupIDs.subtracting(suppressedGroupIDs).intersection(enabledGroupIDs)).sorted()
+        self.groups = state.groups.map { group in
+            BlockingShieldIndexGroup(
+                id: group.id,
+                name: group.name,
+                isEnabled: group.isEnabled && group.mode.isValid,
+                isFriendRequestEnabled: group.friendRequestConfig.isEnabled
+            )
+        }
+        self.lastUpdated = now
+    }
+
+    public var activeGroups: [BlockingShieldIndexGroup] {
+        let activeIDSet = Set(activeGroupIDs)
+        let active = groups.filter { group in
+            group.isEnabled && activeIDSet.contains(group.id)
+        }
+
+        if !active.isEmpty {
+            return active
+        }
+
+        return groups.filter(\.isEnabled)
+    }
+
+    public var friendRequestGroupID: String? {
+        activeGroups.first { $0.isFriendRequestEnabled }?.id
+    }
+}
+
+public struct BlockingShieldIndexStore {
+    private let defaults: UserDefaults?
+    private let key: String
+
+    public init(
+        defaults: UserDefaults? = UserDefaults(suiteName: BlockingStoreCodec.suiteName),
+        key: String = BlockingStoreCodec.shieldIndexKey
+    ) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    public func load() -> BlockingShieldIndex {
+        guard let data = defaults?.data(forKey: key),
+              let index = try? JSONDecoder().decode(BlockingShieldIndex.self, from: data) else {
+            return BlockingShieldIndex()
+        }
+
+        return index
+    }
+
+    public func save(_ index: BlockingShieldIndex) {
+        guard let data = try? JSONEncoder().encode(index) else {
+            return
+        }
+
+        defaults?.set(data, forKey: key)
+        defaults?.set(index.friendRequestGroupID != nil, forKey: BlockingStoreCodec.shieldFriendRequestEnabledKey)
+        defaults?.set(index.lastUpdated, forKey: BlockingStoreCodec.shieldRuntimeUpdatedAtKey)
+
+        if let groupID = index.friendRequestGroupID {
+            defaults?.set(groupID, forKey: BlockingStoreCodec.shieldFriendRequestGroupIDKey)
+        } else {
+            defaults?.removeObject(forKey: BlockingStoreCodec.shieldFriendRequestGroupIDKey)
+        }
+        defaults?.synchronize()
     }
 }
 
@@ -845,6 +988,7 @@ public struct BlockingStateStore {
     public func save(_ state: BlockingState) throws {
         let data = try BlockingStoreCodec.encode(state)
         defaults?.set(data, forKey: key)
+        defaults?.synchronize()
     }
 }
 

@@ -164,7 +164,6 @@ final class AppModel: ObservableObject {
     @Published var profile: UserProfile
     @Published var appearanceMode: AppAppearanceMode
     @Published var selection: FamilyActivitySelection
-    @Published var blockingSelection: FamilyActivitySelection
     @Published var blockingState: BlockingState
     @Published var localSnapshot: DailyUsageSnapshot?
     @Published var usageHistory: [DailyUsageSnapshot] = []
@@ -197,7 +196,7 @@ final class AppModel: ObservableObject {
     private let usageHistoryDefaults: UserDefaults?
     private let onboardingKey = "HasCompletedOnboarding.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
-    #if DEBUG && targetEnvironment(simulator)
+    #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
 
@@ -231,7 +230,6 @@ final class AppModel: ObservableObject {
         ) ?? .dark
         self.selection = selectionStore.load()
         self.blockingState = blockingStore.load()
-        self.blockingSelection = FamilyActivitySelection()
         self.hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingKey)
         self.screenTimeAuthorization = screenTimeProvider.authorizationLabel()
         self.screenTimeReportLastGeneratedAt = sharedDefaults?.object(
@@ -258,10 +256,6 @@ final class AppModel: ObservableObject {
 
     var selectedActivityCount: Int {
         selection.applicationTokens.count + selection.categoryTokens.count + selection.webDomainTokens.count
-    }
-
-    var selectedBlockingActivityCount: Int {
-        blockingSelection.applicationTokens.count + blockingSelection.categoryTokens.count + blockingSelection.webDomainTokens.count
     }
 
     var hasScreenTimeAuthorization: Bool {
@@ -403,42 +397,6 @@ final class AppModel: ObservableObject {
                 partial + values.reduce(TimeInterval(0)) { $0 + max(0, $1) }
             }
         )
-    }
-
-    func saveSuggestedSocialBlockGroup() {
-        guard !blockingSelection.isEmpty else {
-            return
-        }
-
-        do {
-            let now = Date()
-            let selectionData = try BlockingSelectionCodec.encode(blockingSelection)
-            let existingIndex = blockingState.groups.firstIndex {
-                $0.name.localizedCaseInsensitiveCompare("Social") == .orderedSame
-            }
-            if let existingIndex {
-                blockingState.groups[existingIndex].selectionData = selectionData
-                blockingState.groups[existingIndex].isEnabled = true
-                blockingState.groups[existingIndex].updatedAt = now
-            } else {
-                blockingState.groups.append(
-                    BlockGroup(
-                        id: "social",
-                        name: "Social",
-                        colorHex: "#E84855",
-                        selectionData: selectionData,
-                        createdAt: now,
-                        updatedAt: now
-                    )
-                )
-            }
-
-            blockingState.lastUpdated = now
-            try persistBlockingState()
-            message = "Social block group saved."
-        } catch {
-            message = "Could not save block group: \(error.localizedDescription)"
-        }
     }
 
     func addDailyAllowanceRule(groupID: String, seconds: TimeInterval) {
@@ -676,6 +634,7 @@ final class AppModel: ObservableObject {
             BlockUnblockSession(
                 id: UUID().uuidString,
                 groupID: groupID,
+                selectionData: group.selectionData,
                 durationSeconds: duration,
                 startedAt: now,
                 expiresAt: now.addingTimeInterval(duration)
@@ -811,7 +770,7 @@ final class AppModel: ObservableObject {
             return false
         }
 
-        guard BlockingStateResolver.group(for: request.groupID, in: blockingState) != nil else {
+        guard let group = BlockingStateResolver.group(for: request.groupID, in: blockingState) else {
             message = "Block group no longer exists."
             return false
         }
@@ -821,6 +780,7 @@ final class AppModel: ObservableObject {
             BlockUnblockSession(
                 id: UUID().uuidString,
                 groupID: request.groupID,
+                selectionData: group.selectionData,
                 durationSeconds: duration,
                 startedAt: now,
                 expiresAt: now.addingTimeInterval(duration)
@@ -934,7 +894,7 @@ final class AppModel: ObservableObject {
     }
 
     func reloadFriends() async {
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG
         if UserDefaults.standard.bool(forKey: demoFriendsKey) {
             seedDemoFriends()
             return
@@ -1020,6 +980,7 @@ final class AppModel: ObservableObject {
     func clearPendingShieldFriendRequest() {
         usageHistoryDefaults?.removeObject(forKey: BlockingFriendRequestIntentStore.groupIDKey)
         usageHistoryDefaults?.removeObject(forKey: BlockingFriendRequestIntentStore.createdAtKey)
+        usageHistoryDefaults?.synchronize()
         pendingShieldFriendRequestGroupID = nil
     }
 
@@ -1300,17 +1261,17 @@ final class AppModel: ObservableObject {
         leaderboardWindow = window
         refreshLocalAccountabilityStats()
 
-        #if DEBUG && targetEnvironment(simulator)
+        #if DEBUG
         if UserDefaults.standard.bool(forKey: demoFriendsKey) {
             seedDemoFriends()
         }
         #endif
     }
 
-    #if DEBUG && targetEnvironment(simulator)
+    #if DEBUG
     func seedDemoScreenTime() {
         seedDemoUsageHistory()
-        message = "Demo Screen Time added for simulator testing."
+        message = "Demo Screen Time added for debug testing."
     }
 
     private func seedDemoUsageHistory(now: Date = Date()) {
@@ -1337,7 +1298,7 @@ final class AppModel: ObservableObject {
                 currentUserID: profile.id
             )
             if showsStatusMessage {
-                message = "Demo friends added for simulator testing."
+                message = "Demo friends added for debug testing."
             }
         } catch {
             message = "Could not write demo widget cache: \(error.localizedDescription)"
@@ -1455,6 +1416,7 @@ final class AppModel: ObservableObject {
             "demo-request-received-pending",
             "demo-request-received-pending-maya",
             "demo-request-received-denied",
+            "demo-request-received-approved",
             "demo-request-sent-pending",
             "demo-request-sent-approved",
             "demo-request-sent-collected"
@@ -1493,6 +1455,21 @@ final class AppModel: ObservableObject {
                 status: .denied,
                 createdAt: now.addingTimeInterval(-55 * 60),
                 resolvedAt: now.addingTimeInterval(-47 * 60),
+                photoReference: rileyPhoto
+            ),
+            BlockFriendRequest(
+                id: "demo-request-received-approved",
+                groupID: groupID,
+                requestedSeconds: 15 * 60,
+                selectedFriendIDs: [profile.id],
+                message: "Please let this one through.",
+                requesterID: "demo-riley",
+                requesterDisplayName: "Riley Park",
+                approvedByFriendID: profile.id,
+                status: .approved,
+                createdAt: now.addingTimeInterval(-42 * 60),
+                resolvedAt: now.addingTimeInterval(-36 * 60),
+                approvedExpiresAt: BlockFriendRequestLifecycle.approvedExpirationDate(approvedAt: now.addingTimeInterval(-36 * 60)),
                 photoReference: rileyPhoto
             ),
             BlockFriendRequest(

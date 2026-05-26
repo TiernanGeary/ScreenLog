@@ -146,13 +146,16 @@ enum AppScreenBackgroundStyle {
 
 struct AppScreenScroll<Content: View>: View {
     var backgroundStyle: AppScreenBackgroundStyle
+    var isScrollDisabled: Bool
     let content: Content
 
     init(
         backgroundStyle: AppScreenBackgroundStyle = .gradient,
+        isScrollDisabled: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         self.backgroundStyle = backgroundStyle
+        self.isScrollDisabled = isScrollDisabled
         self.content = content()
     }
 
@@ -169,6 +172,7 @@ struct AppScreenScroll<Content: View>: View {
                 .padding(.bottom, 128)
             }
             .scrollIndicators(.hidden)
+            .scrollDisabled(isScrollDisabled)
             .mask(alignment: .top) {
                 VStack(spacing: 0) {
                     LinearGradient(
@@ -232,10 +236,16 @@ extension View {
 }
 
 enum AppHaptics {
+    #if canImport(UIKit)
+    @MainActor private static let buttonTapGenerator = UIImpactFeedbackGenerator(style: .light)
+    @MainActor private static let selectionGenerator = UISelectionFeedbackGenerator()
+    #endif
+
     static func buttonTap() {
         #if canImport(UIKit)
         Task { @MainActor in
-            UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.68)
+            buttonTapGenerator.impactOccurred(intensity: 0.68)
+            buttonTapGenerator.prepare()
         }
         #endif
     }
@@ -243,7 +253,8 @@ enum AppHaptics {
     static func selectionChanged() {
         #if canImport(UIKit)
         Task { @MainActor in
-            UISelectionFeedbackGenerator().selectionChanged()
+            selectionGenerator.selectionChanged()
+            selectionGenerator.prepare()
         }
         #endif
     }
@@ -332,22 +343,36 @@ struct AppUsageIcon: View {
     let name: String
     var applicationTokenData: Data? = nil
     var size: CGFloat = 42
+    var showsContainer: Bool = true
 
     var body: some View {
         Group {
             if let token = applicationToken {
-                Label(token)
-                    .labelStyle(.iconOnly)
-                    .frame(width: size, height: size)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground))
+                tokenIcon(token)
             } else {
                 fallbackIcon
             }
         }
             .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
-            .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
+            .shadow(color: showsContainer ? .black.opacity(0.08) : .clear, radius: 8, x: 0, y: 4)
             .accessibilityHidden(true)
     }
+
+    #if canImport(FamilyControls) && canImport(ManagedSettings)
+    @ViewBuilder
+    private func tokenIcon(_ token: ApplicationToken) -> some View {
+        if showsContainer {
+            Label(token)
+                .labelStyle(.iconOnly)
+                .frame(width: size, height: size)
+                .background(Color(uiColor: .secondarySystemGroupedBackground))
+        } else {
+            Label(token)
+                .labelStyle(.iconOnly)
+                .frame(width: size, height: size)
+        }
+    }
+    #endif
 
     private var fallbackIcon: some View {
         RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)

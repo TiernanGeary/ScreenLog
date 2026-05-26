@@ -1,7 +1,6 @@
 import FamilyControls
 import Foundation
 import ManagedSettings
-import UserNotifications
 
 enum ExtensionBlockingSupport {
     private static var defaults: UserDefaults? {
@@ -38,55 +37,43 @@ enum ExtensionBlockingSupport {
         }
 
         defaults?.set(Array(activeGroupIDs), forKey: BlockingStoreCodec.activeShieldedGroupIDsKey)
+        saveShieldIndex(activeGroupIDs: activeGroupIDs, state: state)
+        applyShields(for: activeGroupIDs, state: state)
+    }
+
+    static func refreshActiveShields(state: BlockingState) {
+        let enabledGroupIDs = Set(BlockingStateResolver.enabledGroups(in: state).map(\.id))
+        let activeGroupIDs = activeShieldedGroupIDs().intersection(enabledGroupIDs)
+        defaults?.set(Array(activeGroupIDs), forKey: BlockingStoreCodec.activeShieldedGroupIDsKey)
+        saveShieldIndex(activeGroupIDs: activeGroupIDs, state: state)
         applyShields(for: activeGroupIDs, state: state)
     }
 
     @discardableResult
-    static func queueFriendRequestDraft(matching token: ApplicationToken? = nil) -> Bool {
-        let state = state()
-        return queueFriendRequestDraft(groupID: requestGroupID(matching: token, in: state))
+    static func queueFriendRequestDraft(matching _: ApplicationToken? = nil) -> Bool {
+        queueFriendRequestDraft(groupID: shieldIndex().friendRequestGroupID)
     }
 
     @discardableResult
-    static func queueFriendRequestDraft(matching token: ActivityCategoryToken? = nil) -> Bool {
-        let state = state()
-        return queueFriendRequestDraft(groupID: requestGroupID(matching: token, in: state))
+    static func queueFriendRequestDraft(matching _: ActivityCategoryToken? = nil) -> Bool {
+        queueFriendRequestDraft(groupID: shieldIndex().friendRequestGroupID)
     }
 
     @discardableResult
-    static func queueFriendRequestDraft(matching token: WebDomainToken? = nil) -> Bool {
-        let state = state()
-        return queueFriendRequestDraft(groupID: requestGroupID(matching: token, in: state))
+    static func queueFriendRequestDraft(matching _: WebDomainToken? = nil) -> Bool {
+        queueFriendRequestDraft(groupID: shieldIndex().friendRequestGroupID)
     }
 
-    static func shieldCopy(matching token: ApplicationToken? = nil, itemName: String? = nil) -> ShieldCopy {
-        let state = state()
-        let groupIDs = groupIDs(matching: token, in: state)
-        return shieldCopy(
-            groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs,
-            state: state,
-            itemName: itemName
-        )
+    static func shieldCopy(matching _: ApplicationToken? = nil, itemName: String? = nil) -> ShieldCopy {
+        shieldCopy(index: shieldIndex(), itemName: itemName)
     }
 
-    static func shieldCopy(matching token: ActivityCategoryToken? = nil, itemName: String? = nil) -> ShieldCopy {
-        let state = state()
-        let groupIDs = groupIDs(matching: token, in: state)
-        return shieldCopy(
-            groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs,
-            state: state,
-            itemName: itemName
-        )
+    static func shieldCopy(matching _: ActivityCategoryToken? = nil, itemName: String? = nil) -> ShieldCopy {
+        shieldCopy(index: shieldIndex(), itemName: itemName)
     }
 
-    static func shieldCopy(matching token: WebDomainToken? = nil, itemName: String? = nil) -> ShieldCopy {
-        let state = state()
-        let groupIDs = groupIDs(matching: token, in: state)
-        return shieldCopy(
-            groupIDs: groupIDs.isEmpty ? effectiveActiveGroupIDs(in: state) : groupIDs,
-            state: state,
-            itemName: itemName
-        )
+    static func shieldCopy(matching _: WebDomainToken? = nil, itemName: String? = nil) -> ShieldCopy {
+        shieldCopy(index: shieldIndex(), itemName: itemName)
     }
 
     private static func queueFriendRequestDraft(groupID: String?) -> Bool {
@@ -96,12 +83,27 @@ enum ExtensionBlockingSupport {
 
         defaults?.set(groupID, forKey: BlockingFriendRequestIntentStore.groupIDKey)
         defaults?.set(Date(), forKey: BlockingFriendRequestIntentStore.createdAtKey)
-        scheduleRequestNotification()
+        defaults?.synchronize()
         return true
     }
 
-    private static func shieldCopy(groupIDs: Set<String>, state: BlockingState, itemName: String?) -> ShieldCopy {
-        let groups = state.groups.filter { groupIDs.contains($0.id) && $0.isEnabled }
+    private static func shieldIndex() -> BlockingShieldIndex {
+        let index = BlockingShieldIndexStore(defaults: defaults).load()
+        if !index.groups.isEmpty {
+            return index
+        }
+
+        return BlockingShieldIndex(state: state(), activeGroupIDs: activeShieldedGroupIDs())
+    }
+
+    private static func saveShieldIndex(activeGroupIDs: Set<String>, state: BlockingState) {
+        BlockingShieldIndexStore(defaults: defaults).save(
+            BlockingShieldIndex(state: state, activeGroupIDs: activeGroupIDs)
+        )
+    }
+
+    private static func shieldCopy(index: BlockingShieldIndex, itemName: String?) -> ShieldCopy {
+        let groups = index.activeGroups
         let restrictedItemName = normalizedItemName(itemName)
         guard !groups.isEmpty else {
             return ShieldCopy(
@@ -113,16 +115,16 @@ enum ExtensionBlockingSupport {
             )
         }
 
-        let hasFriendRequest = groups.contains { $0.friendRequestConfig.isEnabled }
+        let hasFriendRequest = groups.contains(where: \.isFriendRequestEnabled)
         let hasQueuedFriendRequest = groups.contains { $0.id == pendingFriendRequestDraftGroupID() }
 
         if hasQueuedFriendRequest {
             return ShieldCopy(
                 title: "Request ready",
-                subtitle: "Open ScreenLog to finish your photo request for \(restrictedItemName).",
+                subtitle: "Open ScreenLog to take your photo request for \(restrictedItemName).",
                 primaryButton: "OK",
-                secondaryButton: "Notification sent",
-                isFriendRequestEnabled: false
+                secondaryButton: "Open ScreenLog",
+                isFriendRequestEnabled: true
             )
         }
 
@@ -149,30 +151,6 @@ enum ExtensionBlockingSupport {
         return nil
     }
 
-    private static func scheduleRequestNotification() {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            switch settings.authorizationStatus {
-            case .authorized, .provisional, .ephemeral:
-                let content = UNMutableNotificationContent()
-                content.title = "Finish time request"
-                content.body = "Tap to open ScreenLog and send your request."
-                content.sound = .default
-
-                let request = UNNotificationRequest(
-                    identifier: "screenlog-shield-request-ready",
-                    content: content,
-                    trigger: nil
-                )
-
-                center.removePendingNotificationRequests(withIdentifiers: [request.identifier])
-                center.add(request)
-            default:
-                break
-            }
-        }
-    }
-
     private static func normalizedItemName(_ itemName: String?) -> String {
         let trimmed = itemName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? "this app" : trimmed
@@ -188,20 +166,45 @@ enum ExtensionBlockingSupport {
             .filter { groupIDs.contains($0.id) && $0.isEnabled && !suppressedGroupIDs.contains($0.id) }
             .compactMap { decodeSelection($0.selectionData) }
 
-        let applications = selections.reduce(into: Set<ApplicationToken>()) { partial, selection in
+        let exemptSelections = activeUnblockSelections(in: state)
+        let exemptApplications = exemptSelections.reduce(into: Set<ApplicationToken>()) { partial, selection in
             partial.formUnion(selection.applicationTokens)
         }
-        let categories = selections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
+        let exemptCategories = exemptSelections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
             partial.formUnion(selection.categoryTokens)
         }
-        let webDomains = selections.reduce(into: Set<WebDomainToken>()) { partial, selection in
+        let exemptWebDomains = exemptSelections.reduce(into: Set<WebDomainToken>()) { partial, selection in
             partial.formUnion(selection.webDomainTokens)
         }
+        let applications = selections.reduce(into: Set<ApplicationToken>()) { partial, selection in
+            partial.formUnion(selection.applicationTokens)
+        }.subtracting(exemptApplications)
+        let categories = selections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
+            partial.formUnion(selection.categoryTokens)
+        }.subtracting(exemptCategories)
+        let webDomains = selections.reduce(into: Set<WebDomainToken>()) { partial, selection in
+            partial.formUnion(selection.webDomainTokens)
+        }.subtracting(exemptWebDomains)
 
         managedStore.shield.applications = applications.isEmpty ? nil : applications
-        managedStore.shield.applicationCategories = categories.isEmpty ? nil : .specific(categories)
+        managedStore.shield.applicationCategories = categories.isEmpty ? nil : .specific(categories, except: exemptApplications)
         managedStore.shield.webDomains = webDomains.isEmpty ? nil : webDomains
-        managedStore.shield.webDomainCategories = categories.isEmpty ? nil : .specific(categories)
+        managedStore.shield.webDomainCategories = categories.isEmpty ? nil : .specific(categories, except: exemptWebDomains)
+    }
+
+    private static func activeUnblockSelections(in state: BlockingState, now: Date = Date()) -> [FamilyActivitySelection] {
+        BlockingStateResolver.activeUnblockSessions(in: state, now: now).compactMap { session in
+            if let selectionData = session.selectionData,
+               let selection = decodeSelection(selectionData) {
+                return selection
+            }
+
+            guard let group = BlockingStateResolver.group(for: session.groupID, in: state) else {
+                return nil
+            }
+
+            return decodeSelection(group.selectionData)
+        }
     }
 
     private static func requestGroupID(matching token: ApplicationToken?, in state: BlockingState) -> String? {

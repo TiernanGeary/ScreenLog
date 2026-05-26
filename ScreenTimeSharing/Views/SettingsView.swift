@@ -11,7 +11,13 @@ struct SettingsView: View {
     @State private var draftDisplayName = ""
     @State private var selectedProfilePhotoItem: PhotosPickerItem?
     @State private var profilePhotoCropItem: ProfilePhotoCropItem?
-    var onShowBlockingActivityPicker: (() -> Void)?
+    @State private var selectedCollectionPhoto: AcceptedRequestPhotoItem?
+
+    private let photoBoardColumns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
 
     var body: some View {
         NavigationStack {
@@ -30,22 +36,6 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.tint)
-                    }
-                }
-
-                AppSection("Blocking") {
-                    AppCard {
-                        NavigationLink {
-                            BlockingSettingsView(onShowBlockingActivityPicker: onShowBlockingActivityPicker)
-                        } label: {
-                            Label("Manage Block Groups", systemImage: "lock.shield")
-                                .appCardRow()
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-                        .simultaneousGesture(TapGesture().onEnded {
-                            AppHaptics.buttonTap()
-                        })
                     }
                 }
 
@@ -141,6 +131,8 @@ struct SettingsView: View {
                     }
                 }
                 #endif
+
+                photoCollectionSection
             }
             .navigationTitle("Profile")
             .sheet(isPresented: $isShowingShareSheet) {
@@ -159,6 +151,10 @@ struct SettingsView: View {
                     model.updateProfile(avatarImageData: croppedImageData)
                     profilePhotoCropItem = nil
                 }
+            }
+            .sheet(item: $selectedCollectionPhoto) { item in
+                AcceptedRequestPhotoDetailView(item: item)
+                    .presentationDetents([.large])
             }
             .onChange(of: selectedProfilePhotoItem) { _, item in
                 loadSelectedProfilePhoto(item)
@@ -221,6 +217,36 @@ struct SettingsView: View {
         .padding(.bottom, 2)
     }
 
+    private var photoCollectionSection: some View {
+        AppSection("Photo Collection") {
+            AppCard {
+                if acceptedPhotoItems.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("No accepted photos yet", systemImage: "photo.on.rectangle.angled")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Photos from friend requests appear here after you approve them.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .appCardRow()
+                } else {
+                    LazyVGrid(columns: photoBoardColumns, spacing: 10) {
+                        ForEach(acceptedPhotoItems) { item in
+                            Button {
+                                AppHaptics.buttonTap()
+                                selectedCollectionPhoto = item
+                            } label: {
+                                AcceptedRequestPhotoTile(item: item)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .appCardRow(verticalPadding: 12)
+                }
+            }
+        }
+    }
+
     private var appearanceSection: some View {
         AppSection("Appearance") {
             AppCard {
@@ -243,6 +269,45 @@ struct SettingsView: View {
                 .appCardRow(verticalPadding: 12)
             }
         }
+    }
+
+    private var acceptedPhotoItems: [AcceptedRequestPhotoItem] {
+        model.blockingState.friendRequests
+            .compactMap { request in
+                guard request.isReceived(by: model.profile.id),
+                      request.approvedByFriendID == model.profile.id,
+                      let photoData = model.friendRequestPhotoData(for: request) else {
+                    return nil
+                }
+
+                return AcceptedRequestPhotoItem(
+                    id: request.id,
+                    photoData: photoData,
+                    senderName: senderName(for: request),
+                    groupName: groupName(for: request.groupID),
+                    requestedSeconds: request.requestedSeconds,
+                    approvedAt: request.resolvedAt ?? request.createdAt
+                )
+            }
+            .sorted { $0.approvedAt > $1.approvedAt }
+    }
+
+    private func senderName(for request: BlockFriendRequest) -> String {
+        if let displayName = request.requesterDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !displayName.isEmpty {
+            return displayName
+        }
+
+        if let requesterID = request.requesterID,
+           let friend = model.friendSummaries.first(where: { $0.id == requesterID }) {
+            return friend.displayName
+        }
+
+        return "Friend"
+    }
+
+    private func groupName(for groupID: String) -> String {
+        model.blockingState.groups.first { $0.id == groupID }?.name ?? "Restricted app"
     }
 
     private func loadSelectedProfilePhoto(_ item: PhotosPickerItem?) {
@@ -275,6 +340,130 @@ struct SettingsView: View {
                 selectedProfilePhotoItem = nil
             }
             #endif
+        }
+    }
+}
+
+private struct AcceptedRequestPhotoItem: Identifiable {
+    let id: String
+    let photoData: Data
+    let senderName: String
+    let groupName: String
+    let requestedSeconds: TimeInterval
+    let approvedAt: Date
+}
+
+private struct AcceptedRequestPhotoTile: View {
+    let item: AcceptedRequestPhotoItem
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .bottomLeading) {
+                AcceptedRequestPhotoImage(photoData: item.photoData)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.58)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+
+                Text(item.senderName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                    .padding(8)
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
+        }
+        .accessibilityLabel("\(item.senderName) accepted request photo")
+    }
+}
+
+private struct AcceptedRequestPhotoDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+    let item: AcceptedRequestPhotoItem
+
+    var body: some View {
+        NavigationStack {
+            AppScreenScroll(backgroundStyle: .white) {
+                AcceptedRequestPhotoImage(photoData: item.photoData)
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(0.78, contentMode: .fill)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.16), radius: 22, x: 0, y: 12)
+
+                AppCard {
+                    LabeledContent("From", value: item.senderName)
+                        .appCardRow()
+                    AppCardDivider()
+                    LabeledContent("Request", value: item.groupName)
+                        .appCardRow()
+                    AppCardDivider()
+                    LabeledContent("Time", value: UsageFormatting.duration(item.requestedSeconds))
+                        .appCardRow()
+                    AppCardDivider()
+                    LabeledContent("Accepted", value: item.approvedAt.formatted(date: .abbreviated, time: .shortened))
+                        .appCardRow()
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        AppHaptics.buttonTap()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct AcceptedRequestPhotoImage: View {
+    let photoData: Data
+
+    var body: some View {
+        Group {
+            #if canImport(UIKit)
+            if let image = UIImage(data: photoData) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                fallback
+            }
+            #else
+            fallback
+            #endif
+        }
+        .clipped()
+    }
+
+    private var fallback: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.12, green: 0.18, blue: 0.28),
+                    Color(red: 0.24, green: 0.36, blue: 0.52)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: "photo")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.72))
         }
     }
 }

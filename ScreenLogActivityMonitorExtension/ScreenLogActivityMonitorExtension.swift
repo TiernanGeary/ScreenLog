@@ -17,6 +17,11 @@ final class ScreenLogActivityMonitorExtension: DeviceActivityMonitor {
 
     override func intervalDidEnd(for activity: DeviceActivityName) {
         let state = ExtensionBlockingSupport.state()
+        if BlockingMonitorNameBuilder.isUnblockActivity(activity.rawValue) {
+            ExtensionBlockingSupport.refreshActiveShields(state: state)
+            return
+        }
+
         guard let groupID = ExtensionBlockingSupport.groupID(forRuleNamed: activity.rawValue, state: state) else {
             return
         }

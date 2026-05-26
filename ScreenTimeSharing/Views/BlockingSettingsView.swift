@@ -10,9 +10,23 @@ struct RequestFeedView: View {
     var highlightedFriendRequestID: String?
     var showsDoneButton = true
     @State private var selectedPhotoRequestID = ""
+    @State private var isPhotoSwipeActive = false
+    @State private var isChoosingRequestGroup = false
+    @State private var requestGroup: BlockGroup?
+    @State private var isShowingNoRequestGroupAlert = false
 
     private var pendingReceivedRequests: [BlockFriendRequest] {
         BlockingStateResolver.pendingReceivedFriendRequests(for: model.profile.id, in: model.blockingState)
+    }
+
+    private var eligibleRequestGroups: [BlockGroup] {
+        model.blockingState.groups
+            .filter { group in
+                group.isEnabled
+                    && group.mode.isValid
+                    && group.friendRequestConfig.isEnabled
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var friendRequestLogs: [BlockFriendRequest] {
@@ -37,7 +51,7 @@ struct RequestFeedView: View {
     }
 
     var body: some View {
-        AppScreenScroll(backgroundStyle: .white) {
+        AppScreenScroll(backgroundStyle: .white, isScrollDisabled: isPhotoSwipeActive) {
             photoBookSection
 
             AppSection("Logs") {
@@ -66,6 +80,15 @@ struct RequestFeedView: View {
             syncSelectedPhotoRequest(preferredID: highlightedFriendRequestID)
         }
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    startInAppFriendRequest()
+                } label: {
+                    Image(systemName: "hands.sparkles.fill")
+                }
+                .accessibilityLabel("Create friend request")
+            }
+
             if showsDoneButton {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
@@ -74,6 +97,29 @@ struct RequestFeedView: View {
                     }
                 }
             }
+        }
+        .confirmationDialog(
+            "Choose App Group",
+            isPresented: $isChoosingRequestGroup,
+            titleVisibility: .visible
+        ) {
+            ForEach(eligibleRequestGroups) { group in
+                Button(group.name) {
+                    AppHaptics.buttonTap()
+                    requestGroup = group
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Pick which blocked app group this request is for.")
+        }
+        .sheet(item: $requestGroup) { group in
+            FriendApprovalRequestView(group: group)
+        }
+        .alert("No Friend Request Group", isPresented: $isShowingNoRequestGroupAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Turn on friend requests for an active block group before creating an in-app request.")
         }
     }
 
@@ -122,6 +168,9 @@ struct RequestFeedView: View {
                 },
                 onApprove: { request in
                     resolvePhotoBookRequest(request, approve: true)
+                },
+                onHorizontalSwipeActiveChanged: { isActive in
+                    isPhotoSwipeActive = isActive
                 }
             )
             .frame(height: 580)
@@ -164,7 +213,6 @@ struct RequestFeedView: View {
                     )
 
                     FriendRequestPhotoThumbnail(photoData: model.friendRequestPhotoData(for: request))
-                        .frame(width: 58, height: 72)
 
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -235,44 +283,7 @@ struct RequestFeedView: View {
                 .frame(maxWidth: .infinity)
             }
         case .received:
-            if request.status == .pending {
-                HStack(spacing: 8) {
-                    Button {
-                        if model.approveFriendRequest(id: request.id) {
-                            AppHaptics.buttonTap()
-                        }
-                    } label: {
-                        Text("Approve")
-                            .font(.caption.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 9)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.green.opacity(0.12))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
-
-                    Button {
-                        if model.denyFriendRequest(id: request.id) {
-                            AppHaptics.buttonTap()
-                        }
-                    } label: {
-                        Text("Deny")
-                            .font(.caption.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 9)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.red.opacity(0.10))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color(red: 0.86, green: 0.24, blue: 0.22))
-                }
-                .frame(maxWidth: .infinity)
-            }
+            EmptyView()
         }
     }
 
@@ -338,6 +349,19 @@ struct RequestFeedView: View {
         selectedPhotoRequestID = ids.first ?? ""
     }
 
+    private func startInAppFriendRequest() {
+        AppHaptics.buttonTap()
+
+        switch eligibleRequestGroups.count {
+        case 0:
+            isShowingNoRequestGroupAlert = true
+        case 1:
+            requestGroup = eligibleRequestGroups[0]
+        default:
+            isChoosingRequestGroup = true
+        }
+    }
+
     private func resolvePhotoBookRequest(_ request: BlockFriendRequest, approve: Bool) {
         let currentIDs = pendingReceivedRequests.map(\.id)
         let currentIndex = currentIDs.firstIndex(of: request.id) ?? 0
@@ -371,6 +395,7 @@ private struct FriendRequestPhotoStackView: View {
     let expiresIn: (BlockFriendRequest) -> String
     let onDeny: (BlockFriendRequest) -> Void
     let onApprove: (BlockFriendRequest) -> Void
+    let onHorizontalSwipeActiveChanged: (Bool) -> Void
     @State private var dragOffset: CGSize = .zero
     @State private var flyAwayOffset: CGSize = .zero
     @State private var promotionProgress: CGFloat = 0
@@ -457,6 +482,7 @@ private struct FriendRequestPhotoStackView: View {
                 }
 
                 guard isHorizontalDrag(value) else {
+                    setHorizontalDragActive(false)
                     withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
                         dragOffset = .zero
                         promotionProgress = 0
@@ -464,7 +490,7 @@ private struct FriendRequestPhotoStackView: View {
                     return
                 }
 
-                isHorizontalDragActive = true
+                setHorizontalDragActive(true)
                 if abs(value.translation.width) > 8 {
                     stackDirection = value.translation.width < 0 ? 1 : -1
                 }
@@ -481,7 +507,7 @@ private struct FriendRequestPhotoStackView: View {
                         dragOffset = .zero
                         promotionProgress = 0
                     }
-                    isHorizontalDragActive = false
+                    setHorizontalDragActive(false)
                     return
                 }
 
@@ -489,7 +515,7 @@ private struct FriendRequestPhotoStackView: View {
                 AppHaptics.selectionChanged()
                 stackDirection = direction
                 isAdvancing = true
-                isHorizontalDragActive = false
+                setHorizontalDragActive(false)
                 advancingRequestID = exitingID
 
                 withAnimation(.easeOut(duration: 0.28)) {
@@ -512,7 +538,7 @@ private struct FriendRequestPhotoStackView: View {
                         moveSelection(by: direction)
                         flyAwayOffset = .zero
                         promotionProgress = 0
-                        isHorizontalDragActive = false
+                        setHorizontalDragActive(false)
                         advancingRequestID = nil
                         isAdvancing = false
                     }
@@ -599,6 +625,15 @@ private struct FriendRequestPhotoStackView: View {
         let horizontal = abs(value.translation.width)
         let vertical = abs(value.translation.height)
         return horizontal > 14 && horizontal > vertical * 1.2
+    }
+
+    private func setHorizontalDragActive(_ isActive: Bool) {
+        guard isHorizontalDragActive != isActive else {
+            return
+        }
+
+        isHorizontalDragActive = isActive
+        onHorizontalSwipeActiveChanged(isActive)
     }
 
     private func moveSelection(by delta: Int) {
@@ -751,14 +786,18 @@ private struct FriendRequestPhotoBookCard: View {
 
 private struct FriendRequestPhotoThumbnail: View {
     let photoData: Data?
+    private let thumbnailSize = CGSize(width: 58, height: 72)
 
     var body: some View {
         FriendRequestPhotoImage(photoData: photoData)
+            .frame(width: thumbnailSize.width, height: thumbnailSize.height)
+            .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(.white.opacity(0.18), lineWidth: 0.8)
             }
+            .frame(width: thumbnailSize.width, height: thumbnailSize.height)
     }
 }
 
@@ -943,43 +982,7 @@ private struct FriendRequestDetailView: View {
                 .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
             }
         case .received:
-            if request.status == .pending {
-                HStack(spacing: 8) {
-                    Button {
-                        if model.approveFriendRequest(id: request.id) {
-                            AppHaptics.buttonTap()
-                        }
-                    } label: {
-                        Text("Approve")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 11)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.green.opacity(0.12))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
-
-                    Button {
-                        if model.denyFriendRequest(id: request.id) {
-                            AppHaptics.buttonTap()
-                        }
-                    } label: {
-                        Text("Deny")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 11)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.red.opacity(0.10))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color(red: 0.86, green: 0.24, blue: 0.22))
-                }
-            }
+            EmptyView()
         }
     }
 
@@ -1208,16 +1211,15 @@ struct BlockingSettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var model: AppModel
     var highlightedFriendRequestID: String?
-    var onShowBlockingActivityPicker: (() -> Void)?
 
     @State private var editorDraft: BlockGroupDraft?
     @State private var passwordAction: PasswordProtectedAction?
 
     var body: some View {
         AppScreenScroll(backgroundStyle: .white) {
-            AppSection("Block Groups") {
-                AppCard {
-                    if model.blockingState.groups.isEmpty {
+            if model.blockingState.groups.isEmpty {
+                AppSection("Block Groups") {
+                    AppCard {
                         VStack(alignment: .leading, spacing: 12) {
                             Label("No block groups yet", systemImage: "lock.shield")
                                 .font(.headline)
@@ -1235,7 +1237,11 @@ struct BlockingSettingsView: View {
                             .foregroundStyle(.tint)
                         }
                         .appCardRow()
-                    } else {
+                    }
+                }
+            } else {
+                AppSection("Block Groups") {
+                    AppCard {
                         Button {
                             AppHaptics.buttonTap()
                             editorDraft = BlockGroupDraft()
@@ -1246,16 +1252,18 @@ struct BlockingSettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.tint)
+                    }
+                }
 
-                        AppCardDivider()
+                if !activeBlockGroups.isEmpty {
+                    AppSection("Active") {
+                        groupListCard(activeBlockGroups)
+                    }
+                }
 
-                        ForEach(Array(model.blockingState.groups.enumerated()), id: \.element.id) { index, group in
-                            if index > 0 {
-                                AppCardDivider()
-                            }
-                            groupRow(group)
-                                .appCardRow(verticalPadding: 13)
-                        }
+                if !inactiveBlockGroups.isEmpty {
+                    AppSection("Inactive") {
+                        groupListCard(inactiveBlockGroups, isMuted: true)
                     }
                 }
             }
@@ -1278,9 +1286,11 @@ struct BlockingSettingsView: View {
         .sheet(item: $editorDraft) { draft in
             NavigationStack {
                 BlockGroupEditorView(initialDraft: draft) { group, password in
-                    if model.upsertBlockGroup(group, password: password) {
+                    let didSave = model.upsertBlockGroup(group, password: password)
+                    if didSave {
                         editorDraft = nil
                     }
+                    return didSave
                 }
             }
         }
@@ -1293,6 +1303,14 @@ struct BlockingSettingsView: View {
                 editorDraft = BlockGroupDraft(group: group)
             }
         }
+    }
+
+    private var activeBlockGroups: [BlockGroup] {
+        model.blockingState.groups.filter(\.isEnabled)
+    }
+
+    private var inactiveBlockGroups: [BlockGroup] {
+        model.blockingState.groups.filter { !$0.isEnabled }
     }
 
     private var sentFriendRequests: [BlockFriendRequest] {
@@ -1430,43 +1448,7 @@ struct BlockingSettingsView: View {
                 .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
             }
         case .received:
-            if request.status == .pending {
-                HStack(spacing: 8) {
-                    Button {
-                        if model.approveFriendRequest(id: request.id) {
-                            AppHaptics.buttonTap()
-                        }
-                    } label: {
-                        Text("Approve")
-                            .font(.caption.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 9)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.green.opacity(0.12))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
-
-                    Button {
-                        if model.denyFriendRequest(id: request.id) {
-                            AppHaptics.buttonTap()
-                        }
-                    } label: {
-                        Text("Deny")
-                            .font(.caption.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 9)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.red.opacity(0.10))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color(red: 0.86, green: 0.24, blue: 0.22))
-                }
-            }
+            EmptyView()
         }
     }
 
@@ -1544,11 +1526,23 @@ struct BlockingSettingsView: View {
         request.isSent(by: model.profile.id) ? .sent : .received
     }
 
-    private func groupRow(_ group: BlockGroup) -> some View {
+    private func groupListCard(_ groups: [BlockGroup], isMuted: Bool = false) -> some View {
+        AppCard {
+            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                if index > 0 {
+                    AppCardDivider()
+                }
+                groupRow(group, isMuted: isMuted)
+                    .appCardRow(verticalPadding: 13)
+            }
+        }
+    }
+
+    private func groupRow(_ group: BlockGroup, isMuted: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 Circle()
-                    .fill(Color(hex: group.colorHex))
+                    .fill(isMuted ? Color.secondary.opacity(0.36) : Color(hex: group.colorHex))
                     .frame(width: 12, height: 12)
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -1613,6 +1607,8 @@ struct BlockingSettingsView: View {
                 .buttonStyle(.plain)
             }
         }
+        .saturation(isMuted ? 0 : 1)
+        .opacity(isMuted ? 0.62 : 1)
     }
 
     private func requestRow(_ request: BlockingRequestListItem) -> some View {
@@ -1797,6 +1793,7 @@ struct PasswordPromptView: View {
     @State private var password = ""
     @State private var newPassword = ""
     @State private var isConfirmingPasswordRecovery = false
+    @State private var passwordError: String?
 
     private var group: BlockGroup? {
         model.blockingState.groups.first { $0.id == action.groupID }
@@ -1863,10 +1860,25 @@ struct PasswordPromptView: View {
                                     SecureField("Group passcode", text: $password)
                                         .textContentType(.password)
 
+                                    if let passwordError {
+                                        Label(passwordError, systemImage: "exclamationmark.circle.fill")
+                                            .font(.footnote.weight(.semibold))
+                                            .foregroundStyle(Color(red: 0.86, green: 0.24, blue: 0.22))
+                                            .transition(.opacity.combined(with: .move(edge: .top)))
+                                    }
+
                                     Button {
                                         if model.verifyPassword(for: group, password: password) {
                                             AppHaptics.buttonTap()
+                                            passwordError = nil
                                             onUnlocked(action.kind, group, password)
+                                        } else {
+                                            AppHaptics.selectionChanged()
+                                            withAnimation(.snappy(duration: 0.18)) {
+                                                passwordError = password.isEmpty
+                                                    ? "Enter the group passcode."
+                                                    : "Incorrect passcode. Try again."
+                                            }
                                         }
                                     } label: {
                                         Label(submitLabel, systemImage: submitSystemImage)
@@ -1877,6 +1889,13 @@ struct PasswordPromptView: View {
                                 }
                                 .appCardRow()
                             }
+                        }
+                    }
+                }
+                .onChange(of: password) {
+                    if passwordError != nil {
+                        withAnimation(.snappy(duration: 0.18)) {
+                            passwordError = nil
                         }
                     }
                 }
@@ -2098,9 +2117,11 @@ struct BlockGroupConfigurationView: View {
             .sheet(item: $editorDraft) { draft in
                 NavigationStack {
                     BlockGroupEditorView(initialDraft: draft) { group, password in
-                        if model.upsertBlockGroup(group, password: password) {
+                        let didSave = model.upsertBlockGroup(group, password: password)
+                        if didSave {
                             editorDraft = nil
                         }
+                        return didSave
                     }
                 }
             }
@@ -2323,9 +2344,10 @@ struct BlockGroupEditorView: View {
     @State private var unblockPicker: UnblockPicker?
     @State private var passwordSetupGroup: BlockGroup?
     @State private var saveError: String?
-    let onSave: (BlockGroup, String?) -> Void
+    @State private var isSaving = false
+    let onSave: (BlockGroup, String?) -> Bool
 
-    init(initialDraft: BlockGroupDraft, onSave: @escaping (BlockGroup, String?) -> Void) {
+    init(initialDraft: BlockGroupDraft, onSave: @escaping (BlockGroup, String?) -> Bool) {
         _draft = State(initialValue: initialDraft)
         self.onSave = onSave
     }
@@ -2448,6 +2470,7 @@ struct BlockGroupEditorView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .disabled(isSaving)
         .safeAreaInset(edge: .bottom) {
             saveButton
         }
@@ -2457,6 +2480,7 @@ struct BlockGroupEditorView: View {
                     AppHaptics.buttonTap()
                     dismiss()
                 }
+                .disabled(isSaving)
             }
 
             ToolbarItem(placement: .principal) {
@@ -2510,10 +2534,18 @@ struct BlockGroupEditorView: View {
                 AppHaptics.buttonTap()
                 save()
             } label: {
-                Text("Save")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
+                HStack(spacing: 10) {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                    }
+
+                    Text(isSaving ? "Saving..." : "Save")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.white)
@@ -2521,6 +2553,8 @@ struct BlockGroupEditorView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.accentColor)
             }
+            .disabled(isSaving)
+            .opacity(isSaving ? 0.82 : 1)
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -2609,13 +2643,25 @@ struct BlockGroupEditorView: View {
     }
 
     private func save() {
+        guard !isSaving else {
+            return
+        }
+
         do {
             let group = try draft.makeGroup()
             saveError = nil
             if draft.requiresPassword {
                 passwordSetupGroup = group
             } else {
-                onSave(group, nil)
+                isSaving = true
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 60_000_000)
+                    let didSave = onSave(group, nil)
+                    if !didSave {
+                        saveError = "Could not save this block group. Please check the settings and try again."
+                        isSaving = false
+                    }
+                }
             }
         } catch {
             saveError = "Could not save this block group. Please check the settings and try again."
@@ -2626,11 +2672,12 @@ struct BlockGroupEditorView: View {
 private struct BlockGroupPasswordSetupView: View {
     @Environment(\.dismiss) private var dismiss
     let groupName: String
-    let onSave: (String) -> Void
+    let onSave: (String) -> Bool
 
     @State private var password = ""
     @State private var confirmPassword = ""
     @State private var validationMessage: String?
+    @State private var isSaving = false
 
     var body: some View {
         AppScreenScroll(backgroundStyle: .white) {
@@ -2700,6 +2747,7 @@ private struct BlockGroupPasswordSetupView: View {
         }
         .navigationTitle("Password")
         .navigationBarTitleDisplayMode(.inline)
+        .disabled(isSaving)
         .safeAreaInset(edge: .bottom) {
             bottomSaveButton
         }
@@ -2709,6 +2757,7 @@ private struct BlockGroupPasswordSetupView: View {
                     AppHaptics.buttonTap()
                     dismiss()
                 }
+                .disabled(isSaving)
             }
         }
     }
@@ -2718,10 +2767,18 @@ private struct BlockGroupPasswordSetupView: View {
             Button {
                 save()
             } label: {
-                Text("Save Block Group")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
+                HStack(spacing: 10) {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                    }
+
+                    Text(isSaving ? "Saving..." : "Save Block Group")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.white)
@@ -2729,6 +2786,8 @@ private struct BlockGroupPasswordSetupView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.accentColor)
             }
+            .disabled(isSaving)
+            .opacity(isSaving ? 0.82 : 1)
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -2762,6 +2821,10 @@ private struct BlockGroupPasswordSetupView: View {
     }
 
     private func save() {
+        guard !isSaving else {
+            return
+        }
+
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPassword.isEmpty else {
             validationMessage = "Enter a password before saving."
@@ -2775,7 +2838,15 @@ private struct BlockGroupPasswordSetupView: View {
 
         validationMessage = nil
         AppHaptics.buttonTap()
-        onSave(password)
+        isSaving = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            let didSave = onSave(trimmedPassword)
+            if !didSave {
+                validationMessage = "Could not save this block group. Please check the settings and try again."
+                isSaving = false
+            }
+        }
     }
 }
 

@@ -59,6 +59,94 @@ import Testing
     #expect(store.load() == state)
 }
 
+@Test func shieldIndexPersistsActiveFriendRequestGroupWithoutSelectionDecode() throws {
+    let suiteName = "BlockingShieldIndexStoreTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    let now = Date(timeIntervalSince1970: 1_779_236_400)
+    let social = BlockGroup(
+        id: "social",
+        name: "Social",
+        colorHex: "#E84855",
+        selectionData: Data([1, 2, 3]),
+        friendRequestConfig: BlockFriendRequestConfig(isEnabled: true),
+        createdAt: now,
+        updatedAt: now
+    )
+    let games = BlockGroup(
+        id: "games",
+        name: "Games",
+        colorHex: "#1B998B",
+        selectionData: Data([4, 5, 6]),
+        createdAt: now,
+        updatedAt: now
+    )
+    let disabled = BlockGroup(
+        id: "disabled",
+        name: "Disabled",
+        colorHex: "#6A4C93",
+        selectionData: Data([7, 8, 9]),
+        isEnabled: false,
+        friendRequestConfig: BlockFriendRequestConfig(isEnabled: true),
+        createdAt: now,
+        updatedAt: now
+    )
+    let state = BlockingState(groups: [games, social, disabled], lastUpdated: now)
+    let index = BlockingShieldIndex(state: state, activeGroupIDs: ["social", "disabled"], now: now)
+    let store = BlockingShieldIndexStore(defaults: defaults, key: "BlockingShieldIndexStoreTests")
+
+    store.save(index)
+    let loaded = store.load()
+
+    #expect(loaded.activeGroupIDs == ["social"])
+    #expect(loaded.activeGroups.map(\.id) == ["social"])
+    #expect(loaded.friendRequestGroupID == "social")
+    #expect(loaded.groups.first { $0.id == "social" }?.isFriendRequestEnabled == true)
+    #expect(defaults.string(forKey: BlockingStoreCodec.shieldFriendRequestGroupIDKey) == "social")
+    #expect(defaults.bool(forKey: BlockingStoreCodec.shieldFriendRequestEnabledKey))
+    #expect(defaults.object(forKey: BlockingStoreCodec.shieldRuntimeUpdatedAtKey) != nil)
+}
+
+@Test func shieldIndexClearsFriendRequestRuntimeWhenNoActiveFriendRequestGroup() throws {
+    let suiteName = "BlockingShieldRuntimeClearTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    let now = Date(timeIntervalSince1970: 1_779_236_400)
+    let social = BlockGroup(
+        id: "social",
+        name: "Social",
+        colorHex: "#E84855",
+        selectionData: Data([1, 2, 3]),
+        friendRequestConfig: BlockFriendRequestConfig(isEnabled: true),
+        createdAt: now,
+        updatedAt: now
+    )
+    let games = BlockGroup(
+        id: "games",
+        name: "Games",
+        colorHex: "#1B998B",
+        selectionData: Data([4, 5, 6]),
+        createdAt: now,
+        updatedAt: now
+    )
+    let store = BlockingShieldIndexStore(defaults: defaults, key: "BlockingShieldIndexRuntimeClearTests")
+
+    store.save(BlockingShieldIndex(state: BlockingState(groups: [social], lastUpdated: now), activeGroupIDs: ["social"], now: now))
+    #expect(defaults.string(forKey: BlockingStoreCodec.shieldFriendRequestGroupIDKey) == "social")
+    #expect(defaults.bool(forKey: BlockingStoreCodec.shieldFriendRequestEnabledKey))
+
+    store.save(BlockingShieldIndex(state: BlockingState(groups: [games], lastUpdated: now), activeGroupIDs: ["games"], now: now))
+
+    #expect(defaults.string(forKey: BlockingStoreCodec.shieldFriendRequestGroupIDKey) == nil)
+    #expect(defaults.bool(forKey: BlockingStoreCodec.shieldFriendRequestEnabledKey) == false)
+}
+
 @Test func scheduledRuleNormalizesDaysAndValidatesMinuteBounds() throws {
     let kind = BlockRuleKind.scheduledWindow(
         days: [.wednesday, .monday, .wednesday],
@@ -390,6 +478,39 @@ import Testing
     #expect(approvalExpired.status == .expired)
     #expect(approvalExpired.approvedByFriendID == "sam")
     #expect(approvalExpired.resolvedAt == approvedAt)
+}
+
+@Test func unblockSessionSelectionDataRoundTripsAndLegacyDecodes() throws {
+    let now = Date(timeIntervalSinceReferenceDate: 1_000)
+    let session = BlockUnblockSession(
+        id: "unblock",
+        groupID: "social",
+        selectionData: Data([1, 2, 3]),
+        durationSeconds: 15 * 60,
+        startedAt: now,
+        expiresAt: now.addingTimeInterval(15 * 60)
+    )
+
+    let decoded = try JSONDecoder().decode(
+        BlockUnblockSession.self,
+        from: JSONEncoder().encode(session)
+    )
+
+    #expect(decoded.selectionData == Data([1, 2, 3]))
+
+    let legacyData = """
+    {
+      "id": "legacy",
+      "groupID": "social",
+      "durationSeconds": 300,
+      "startedAt": 1000,
+      "expiresAt": 1300
+    }
+    """.data(using: .utf8)!
+
+    let legacy = try JSONDecoder().decode(BlockUnblockSession.self, from: legacyData)
+    #expect(legacy.selectionData == nil)
+    #expect(legacy.groupID == "social")
 }
 
 @Test func monitorNamesAreDeterministicAndParseable() {

@@ -2,13 +2,18 @@ import SwiftUI
 #if canImport(AVFoundation)
 import AVFoundation
 #endif
+#if canImport(CoreImage)
+import CoreImage
+#endif
+#if canImport(ImageIO)
+import ImageIO
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
 
 struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var isShowingBlockingActivityPicker: Bool
 
     private var engagementSummary: HomeEngagementSummary {
         HomeEngagementBuilder.summary(history: model.usageHistory)
@@ -32,9 +37,7 @@ struct DashboardView: View {
                 }
 
                 AppSection("Blocking") {
-                    BlockingOverviewCard(
-                        isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
-                    )
+                    BlockingOverviewCard()
                 }
 
 #if DEBUG
@@ -171,7 +174,7 @@ private struct TodayScreenTimeCard: View {
                     .scrollIndicators(.hidden)
                 }
             }
-            .appCardRow(verticalPadding: 14)
+            .appCardRow(verticalPadding: 18)
         }
     }
 
@@ -725,7 +728,11 @@ private struct TopAppUsageTile: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            AppUsageIcon(name: app.displayName, applicationTokenData: app.applicationTokenData)
+            AppUsageIcon(
+                name: app.displayName,
+                applicationTokenData: app.applicationTokenData,
+                showsContainer: false
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.displayName)
@@ -819,71 +826,52 @@ private struct TopAppEmptyTile: View {
 
 private struct BlockingOverviewCard: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var isShowingBlockingActivityPicker: Bool
     @State private var newGroupDraft: BlockGroupDraft?
     @State private var viewedGroup: BlockGroup?
-    @State private var isShowingBlockingSettings = false
 
     private var groups: [BlockGroup] {
         model.blockingState.groups
     }
 
+    private var activeGroups: [BlockGroup] {
+        groups.filter(\.isEnabled)
+    }
+
+    private var inactiveGroups: [BlockGroup] {
+        groups.filter { !$0.isEnabled }
+    }
+
     var body: some View {
-        AppCard {
+        Group {
             if groups.isEmpty {
+                AppCard {
                 startBlockingButton
+                }
             } else {
-                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                    if index > 0 {
-                        AppCardDivider()
+                VStack(alignment: .leading, spacing: 16) {
+                    if !activeGroups.isEmpty {
+                        blockGroupSection("Active", groups: activeGroups)
                     }
 
-                    Button {
-                        AppHaptics.buttonTap()
-                        viewedGroup = group
-                    } label: {
-                        blockGroupRow(group)
-                            .contentShape(Rectangle())
+                    if !inactiveGroups.isEmpty {
+                        blockGroupSection("Inactive", groups: inactiveGroups, isMuted: true)
                     }
-                    .buttonStyle(.plain)
+
+                    AppCard {
+                        HStack(spacing: 12) {
+                            Button {
+                                AppHaptics.buttonTap()
+                                newGroupDraft = BlockGroupDraft()
+                            } label: {
+                                Label("New Group", systemImage: "plus.circle.fill")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tint)
+                        }
+                        .appCardRow(verticalPadding: 14)
+                    }
                 }
-
-                AppCardDivider()
-
-                HStack(spacing: 12) {
-                    Button {
-                        AppHaptics.buttonTap()
-                        newGroupDraft = BlockGroupDraft()
-                    } label: {
-                        Label("New Group", systemImage: "plus.circle.fill")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
-
-                    Spacer()
-
-                    Button {
-                        AppHaptics.buttonTap()
-                        isShowingBlockingSettings = true
-                    } label: {
-                        Label("Manage", systemImage: "slider.horizontal.3")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
-                }
-                .appCardRow(verticalPadding: 14)
-            }
-        }
-        .sheet(isPresented: $isShowingBlockingSettings) {
-            NavigationStack {
-                BlockingSettingsView(onShowBlockingActivityPicker: {
-                    isShowingBlockingSettings = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        isShowingBlockingActivityPicker = true
-                    }
-                })
             }
         }
         .sheet(item: $viewedGroup) { group in
@@ -892,9 +880,11 @@ private struct BlockingOverviewCard: View {
         .sheet(item: $newGroupDraft) { draft in
             NavigationStack {
                 BlockGroupEditorView(initialDraft: draft) { group, password in
-                    if model.upsertBlockGroup(group, password: password) {
+                    let didSave = model.upsertBlockGroup(group, password: password)
+                    if didSave {
                         newGroupDraft = nil
                     }
+                    return didSave
                 }
             }
         }
@@ -918,31 +908,119 @@ private struct BlockingOverviewCard: View {
         .foregroundStyle(.tint)
     }
 
-    private func blockGroupRow(_ group: BlockGroup) -> some View {
+    private func blockGroupSection(
+        _ title: String,
+        groups: [BlockGroup],
+        isMuted: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 18)
+
+            AppCard {
+                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                    if index > 0 {
+                        AppCardDivider()
+                    }
+
+                    blockGroupRow(group, isMuted: isMuted)
+                }
+            }
+        }
+    }
+
+    private func blockGroupRow(_ group: BlockGroup, isMuted: Bool = false) -> some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(Color(hex: group.colorHex))
-                .frame(width: 12, height: 12)
+            Button {
+                openGroup(group)
+            } label: {
+                HStack(spacing: 12) {
+                    Circle()
+                        .fill(isMuted ? Color.secondary.opacity(0.36) : Color(hex: group.colorHex))
+                        .frame(width: 12, height: 12)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(group.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(group.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
 
-                Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                        Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !isMuted {
+                unblockButton(for: group)
             }
 
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.tertiary)
+            Button {
+                openGroup(group)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 28, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(group.name) settings")
         }
         .appCardRow(verticalPadding: 12)
+        .saturation(isMuted ? 0 : 1)
+        .opacity(isMuted ? 0.62 : 1)
+    }
+
+    private func openGroup(_ group: BlockGroup) {
+        AppHaptics.buttonTap()
+        viewedGroup = group
+    }
+
+    private func unblockButton(for group: BlockGroup) -> some View {
+        let totalUnblocks = group.unblockConfig.isEnabled ? group.unblockConfig.unblocksPerDay : 0
+        let remainingUnblocks = BlockingStateResolver.remainingUnblocks(
+            for: group.id,
+            in: model.blockingState
+        )
+        let hasActiveUnblock = BlockingStateResolver.activeUnblockSessions(in: model.blockingState)
+            .contains { $0.groupID == group.id }
+        let isDisabled = totalUnblocks == 0 || remainingUnblocks == 0 || hasActiveUnblock
+
+        return Button {
+            if model.startLocalUnblock(
+                groupID: group.id,
+                seconds: group.unblockConfig.maxDurationSeconds
+            ) {
+                AppHaptics.buttonTap()
+            } else {
+                AppHaptics.selectionChanged()
+            }
+        } label: {
+            Text("Unblock \(remainingUnblocks)/\(totalUnblocks)")
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+                .background(
+                    Capsule()
+                        .fill(isDisabled ? Color.secondary.opacity(0.12) : Color.accentColor.opacity(0.14))
+                )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isDisabled ? Color.secondary : Color.accentColor)
+        .disabled(isDisabled)
+        .accessibilityLabel("Unblock \(group.name), \(remainingUnblocks) of \(totalUnblocks) left today")
     }
 
 }
@@ -1571,12 +1649,132 @@ private struct FriendRequestCameraCaptureView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: FriendRequestCameraViewController, context: Context) {}
 }
 
+private final class FriendRequestBeautyRenderer: @unchecked Sendable {
+    private let context = CIContext(options: [.useSoftwareRenderer: false])
+    private let detector = CIDetector(
+        ofType: CIDetectorTypeFace,
+        context: nil,
+        options: [CIDetectorAccuracy: CIDetectorAccuracyLow]
+    )
+    private let lock = NSLock()
+    private var cachedFaceRect: CGRect?
+
+    func retouchedImage(from image: UIImage) -> UIImage? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let input = CIImage(image: image) else {
+            return nil
+        }
+
+        let orientedInput = input.oriented(forExifOrientation: Int32(image.imageOrientation.cgImagePropertyOrientation.rawValue))
+        let previousFaceRect = cachedFaceRect
+        cachedFaceRect = nil
+        let output = subtlyRetouchedImage(orientedInput, shouldRefreshFace: true)
+        cachedFaceRect = previousFaceRect
+
+        guard let cgImage = context.createCGImage(output, from: output.extent) else {
+            return nil
+        }
+
+        return UIImage(cgImage: cgImage, scale: image.scale, orientation: .up)
+    }
+
+    private func subtlyRetouchedImage(_ image: CIImage, shouldRefreshFace: Bool) -> CIImage {
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0 else {
+            return image
+        }
+
+        if shouldRefreshFace {
+            cachedFaceRect = largestFaceRect(in: image)
+        }
+
+        guard let faceRect = cachedFaceRect else {
+            return image.applyingFilter(
+                "CIColorControls",
+                parameters: [
+                    kCIInputBrightnessKey: 0.006,
+                    kCIInputSaturationKey: 1.01,
+                    kCIInputContrastKey: 0.995
+                ]
+            )
+        }
+
+        let smoothed = image
+            .applyingFilter(
+                "CINoiseReduction",
+                parameters: [
+                    "inputNoiseLevel": 0.038,
+                    "inputSharpness": 0.34
+                ]
+            )
+            .applyingFilter(
+                "CIColorControls",
+                parameters: [
+                    kCIInputBrightnessKey: 0.012,
+                    kCIInputSaturationKey: 1.018,
+                    kCIInputContrastKey: 0.988
+                ]
+            )
+
+        let mask = faceBlendMask(for: faceRect, in: extent)
+        return smoothed
+            .applyingFilter(
+                "CIBlendWithMask",
+                parameters: [
+                    kCIInputBackgroundImageKey: image,
+                    kCIInputMaskImageKey: mask
+                ]
+            )
+            .cropped(to: extent)
+    }
+
+    private func largestFaceRect(in image: CIImage) -> CGRect? {
+        let faces = detector?
+            .features(in: image)
+            .compactMap { feature -> CGRect? in
+                guard let face = feature as? CIFaceFeature else {
+                    return nil
+                }
+
+                return face.bounds
+            } ?? []
+
+        return faces.max { first, second in
+            first.width * first.height < second.width * second.height
+        }
+    }
+
+    private func faceBlendMask(for faceRect: CGRect, in extent: CGRect) -> CIImage {
+        let expandedFaceRect = faceRect.insetBy(dx: -faceRect.width * 0.22, dy: -faceRect.height * 0.16)
+        let center = CGPoint(x: expandedFaceRect.midX, y: expandedFaceRect.midY)
+        let innerRadius = max(expandedFaceRect.width, expandedFaceRect.height) * 0.22
+        let outerRadius = max(expandedFaceRect.width, expandedFaceRect.height) * 0.68
+        let mask = CIFilter(
+            name: "CIRadialGradient",
+            parameters: [
+                "inputCenter": CIVector(x: center.x, y: center.y),
+                "inputRadius0": innerRadius,
+                "inputRadius1": outerRadius,
+                "inputColor0": CIColor(red: 0.48, green: 0.48, blue: 0.48, alpha: 1),
+                "inputColor1": CIColor(red: 0, green: 0, blue: 0, alpha: 1)
+            ]
+        )?.outputImage
+
+        return (mask ?? CIImage(color: .black)).cropped(to: extent)
+    }
+}
+
 private final class FriendRequestCameraViewController: UIViewController, @preconcurrency AVCapturePhotoCaptureDelegate {
     private let onCapture: (UIImage) -> Void
     private let onCancel: (() -> Void)?
     private let showsCloseButton: Bool
+    private let selfieLightIdleAlpha: CGFloat = 0.72
+    private let selfieLightCaptureAlpha: CGFloat = 0.92
     private let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
+    private lazy var beautyRenderer = FriendRequestBeautyRenderer()
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var activeInput: AVCaptureDeviceInput?
     private var currentPosition: AVCaptureDevice.Position = .front
@@ -1584,9 +1782,9 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
     private var isCaptureInFlight = false
     private var isSelfieLightEnabled = false
     private var brightnessBeforeSelfieLight: CGFloat?
+    private var capturePreviewAspectRatio: CGFloat?
 
     private let previewView = UIView()
-    private let bottomScrimView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let closeButton = UIButton(type: .system)
     private let selfieLightButton = UIButton(type: .system)
     private let selfieLightOverlayView = UIView()
@@ -1638,6 +1836,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
 
         previewView.translatesAutoresizingMaskIntoConstraints = false
         previewView.backgroundColor = .black
+        previewView.clipsToBounds = true
         view.addSubview(previewView)
 
         selfieLightOverlayView.translatesAutoresizingMaskIntoConstraints = false
@@ -1645,10 +1844,6 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         selfieLightOverlayView.alpha = 0
         selfieLightOverlayView.isUserInteractionEnabled = false
         view.addSubview(selfieLightOverlayView)
-
-        bottomScrimView.translatesAutoresizingMaskIntoConstraints = false
-        bottomScrimView.clipsToBounds = true
-        view.addSubview(bottomScrimView)
 
         configureRoundIconButton(closeButton, systemName: "xmark", pointSize: 18)
         closeButton.isHidden = !showsCloseButton
@@ -1717,11 +1912,6 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
             selfieLightOverlayView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             selfieLightOverlayView.topAnchor.constraint(equalTo: view.topAnchor),
             selfieLightOverlayView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            bottomScrimView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            bottomScrimView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            bottomScrimView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            bottomScrimView.heightAnchor.constraint(equalToConstant: 154),
 
             closeButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 18),
             closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 14),
@@ -1832,7 +2022,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
                 session.startRunning()
             }
 
-            attachPreviewLayerIfNeeded()
+            attachPreviewRendererIfNeeded()
             setCaptureControlsEnabled(true)
             updateSelfieLightButton()
             unavailableView.isHidden = true
@@ -1874,13 +2064,15 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
             }
 
             session.addOutput(photoOutput)
+
             isConfigured = true
         }
 
         session.commitConfiguration()
+        updateOutputConnections()
     }
 
-    private func attachPreviewLayerIfNeeded() {
+    private func attachPreviewRendererIfNeeded() {
         if previewLayer == nil {
             let layer = AVCaptureVideoPreviewLayer(session: session)
             layer.videoGravity = .resizeAspectFill
@@ -1889,7 +2081,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         }
 
         previewLayer?.frame = previewView.bounds
-        updatePreviewMirroring()
+        updateOutputConnections()
     }
 
     private func cameraDevice(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
@@ -1914,14 +2106,25 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         selfieLightButton.alpha = isEnabled ? 1 : 0.38
     }
 
-    private func updatePreviewMirroring() {
-        guard let connection = previewLayer?.connection, connection.isVideoMirroringSupported else {
+    private func updateOutputConnections() {
+        configureVideoConnection(previewLayer?.connection)
+        configureVideoConnection(photoOutput.connection(with: .video))
+        updateSelfieLightButton()
+    }
+
+    private func configureVideoConnection(_ connection: AVCaptureConnection?) {
+        guard let connection else {
             return
         }
 
-        connection.automaticallyAdjustsVideoMirroring = false
-        connection.isVideoMirrored = currentPosition == .front
-        updateSelfieLightButton()
+        if connection.isVideoOrientationSupported {
+            connection.videoOrientation = .portrait
+        }
+
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = currentPosition == .front
+        }
     }
 
     @objc private func cancelCapture() {
@@ -1935,6 +2138,10 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
 
         AppHaptics.selectionChanged()
         let nextPosition: AVCaptureDevice.Position = currentPosition == .front ? .back : .front
+        if nextPosition != .front {
+            isSelfieLightEnabled = false
+            restoreSelfieLight()
+        }
         configureCamera(position: nextPosition)
     }
 
@@ -1946,6 +2153,11 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         AppHaptics.selectionChanged()
         isSelfieLightEnabled.toggle()
         updateSelfieLightButton()
+        if isSelfieLightEnabled {
+            turnOnSelfieLight()
+        } else {
+            restoreSelfieLight()
+        }
     }
 
     @objc private func capturePhoto() {
@@ -1953,6 +2165,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
             return
         }
 
+        capturePreviewAspectRatio = currentPreviewAspectRatio()
         isCaptureInFlight = true
         setCaptureControlsEnabled(false)
         UIView.animate(withDuration: 0.10, animations: {
@@ -1964,7 +2177,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         })
 
         if currentPosition == .front, isSelfieLightEnabled {
-            prepareSelfieLight()
+            prepareSelfieLightForCapture()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                 self.performPhotoCapture()
             }
@@ -1982,14 +2195,25 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
 
-    private func prepareSelfieLight() {
+    private func turnOnSelfieLight() {
+        if brightnessBeforeSelfieLight == nil {
+            brightnessBeforeSelfieLight = UIScreen.main.brightness
+        }
+
+        UIScreen.main.brightness = 1
+        UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseOut]) {
+            self.selfieLightOverlayView.alpha = self.selfieLightIdleAlpha
+        }
+    }
+
+    private func prepareSelfieLightForCapture() {
         if brightnessBeforeSelfieLight == nil {
             brightnessBeforeSelfieLight = UIScreen.main.brightness
         }
 
         UIScreen.main.brightness = 1
         UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseOut]) {
-            self.selfieLightOverlayView.alpha = 0.92
+            self.selfieLightOverlayView.alpha = self.selfieLightCaptureAlpha
         }
     }
 
@@ -2014,9 +2238,11 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
             let data = photo.fileDataRepresentation(),
             let image = UIImage(data: data)
         {
+            let retouchedImage = beautyRenderer.retouchedImage(from: image) ?? image
+            let finalImage = retouchedImage.croppedToFillAspectRatio(capturePreviewAspectRatio) ?? retouchedImage
             DispatchQueue.main.async {
                 self.restoreSelfieLight()
-                self.onCapture(image)
+                self.onCapture(finalImage)
             }
             return
         }
@@ -2031,6 +2257,15 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
                 detail: "Try taking the photo again."
             )
         }
+    }
+
+    private func currentPreviewAspectRatio() -> CGFloat? {
+        let size = previewView.bounds.size
+        guard size.width > 1, size.height > 1 else {
+            return nil
+        }
+
+        return size.width / size.height
     }
 
     @objc private func focusPreview(_ recognizer: UITapGestureRecognizer) {
@@ -2078,7 +2313,76 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
     }
 }
 
+private extension UIImage.Orientation {
+    var cgImagePropertyOrientation: CGImagePropertyOrientation {
+        switch self {
+        case .up:
+            return .up
+        case .upMirrored:
+            return .upMirrored
+        case .down:
+            return .down
+        case .downMirrored:
+            return .downMirrored
+        case .left:
+            return .left
+        case .leftMirrored:
+            return .leftMirrored
+        case .right:
+            return .right
+        case .rightMirrored:
+            return .rightMirrored
+        @unknown default:
+            return .up
+        }
+    }
+}
+
 private extension UIImage {
+    func croppedToFillAspectRatio(_ targetAspectRatio: CGFloat?) -> UIImage? {
+        guard let targetAspectRatio,
+              targetAspectRatio > 0,
+              size.width > 0,
+              size.height > 0 else {
+            return nil
+        }
+
+        let source = normalizedForDrawing()
+        let sourceAspectRatio = source.size.width / source.size.height
+        guard abs(sourceAspectRatio - targetAspectRatio) > 0.01 else {
+            return source
+        }
+
+        var cropRect = CGRect(origin: .zero, size: source.size)
+        if sourceAspectRatio > targetAspectRatio {
+            cropRect.size.width = source.size.height * targetAspectRatio
+            cropRect.origin.x = (source.size.width - cropRect.size.width) / 2
+        } else {
+            cropRect.size.height = source.size.width / targetAspectRatio
+            cropRect.origin.y = (source.size.height - cropRect.size.height) / 2
+        }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = source.scale
+        let renderer = UIGraphicsImageRenderer(size: cropRect.size, format: format)
+        return renderer.image { _ in
+            source.draw(at: CGPoint(x: -cropRect.minX, y: -cropRect.minY))
+        }
+    }
+
+    private func normalizedForDrawing() -> UIImage {
+        guard imageOrientation != .up else {
+            return self
+        }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
     func requestPhotoJPEGData(maxPixel: CGFloat = 1_400, compressionQuality: CGFloat = 0.82) -> Data? {
         let largestSide = max(size.width, size.height)
         guard largestSide > maxPixel else {

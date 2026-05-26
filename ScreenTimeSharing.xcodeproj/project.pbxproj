@@ -122,7 +122,6 @@
 			files = (
 				B40000000000000000000001 /* ScreenTimeSharingWidget.appex in Embed Foundation Extensions */,
 				B40000000000000000000002 /* ScreenLogActivityMonitorExtension.appex in Embed Foundation Extensions */,
-				B40000000000000000000003 /* ScreenLogShieldActionExtension.appex in Embed Foundation Extensions */,
 				B40000000000000000000004 /* ScreenLogShieldConfigurationExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
@@ -418,7 +417,6 @@
 			dependencies = (
 				A00000000000000000000021 /* PBXTargetDependency */,
 				F10000000000000000000031 /* PBXTargetDependency */,
-				F20000000000000000000031 /* PBXTargetDependency */,
 				F30000000000000000000031 /* PBXTargetDependency */,
 				F40000000000000000000031 /* PBXTargetDependency */,
 			);
@@ -684,8 +682,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B60000000000000000000003 /* BlockingModels.swift in Sources */,
-				B60000000000000000000004 /* ExtensionBlockingSupport.swift in Sources */,
 				B60000000000000000000005 /* ScreenLogShieldActionExtension.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -694,8 +690,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B70000000000000000000002 /* BlockingModels.swift in Sources */,
-				B70000000000000000000003 /* ExtensionBlockingSupport.swift in Sources */,
 				B70000000000000000000001 /* ScreenLogShieldConfigurationExtension.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1012,7 +1006,9 @@
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldActionExtension/ScreenLogShieldActionExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = NO;
+				GCC_OPTIMIZATION_LEVEL = s;
 				INFOPLIST_FILE = ScreenLogShieldActionExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1023,7 +1019,9 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.jdco.ScreenTimeSharing.ShieldAction;
 				PRODUCT_NAME = ScreenLogShieldActionExtension;
 				SKIP_INSTALL = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Osize";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -1036,6 +1034,7 @@
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldActionExtension/ScreenLogShieldActionExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogShieldActionExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1060,7 +1059,9 @@
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldConfigurationExtension/ScreenLogShieldConfigurationExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = NO;
+				GCC_OPTIMIZATION_LEVEL = s;
 				INFOPLIST_FILE = ScreenLogShieldConfigurationExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1071,7 +1072,9 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.jdco.ScreenTimeSharing.ShieldConfiguration;
 				PRODUCT_NAME = ScreenLogShieldConfigurationExtension;
 				SKIP_INSTALL = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Osize";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -1084,6 +1087,7 @@
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldConfigurationExtension/ScreenLogShieldConfigurationExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogShieldConfigurationExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

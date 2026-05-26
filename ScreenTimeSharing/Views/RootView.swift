@@ -1,33 +1,14 @@
-import FamilyControls
 import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var isShowingBlockingActivityPicker = false
 
     var body: some View {
         Group {
             if model.hasCompletedOnboarding {
-                AppTabs(
-                    isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
-                )
+                AppTabs()
             } else {
                 OnboardingView()
-            }
-        }
-        .sheet(isPresented: $isShowingBlockingActivityPicker, onDismiss: model.saveSuggestedSocialBlockGroup) {
-            NavigationStack {
-                FamilyActivityPicker(selection: $model.blockingSelection)
-                    .navigationTitle("Social Block Group")
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") {
-                                AppHaptics.buttonTap()
-                                model.saveSuggestedSocialBlockGroup()
-                                isShowingBlockingActivityPicker = false
-                            }
-                        }
-                    }
             }
         }
         .sheet(
@@ -47,7 +28,6 @@ struct RootView: View {
 
 private struct AppTabs: View {
     @EnvironmentObject private var model: AppModel
-    @Binding var isShowingBlockingActivityPicker: Bool
     @State private var selection: AppTab = .today
     @State private var visitedTabs: Set<AppTab> = [.today]
     @State private var highlightedFeedRequestID: String?
@@ -100,9 +80,7 @@ private struct AppTabs: View {
     private func tabView(for tab: AppTab) -> some View {
         switch tab {
         case .today:
-            DashboardView(
-                isShowingBlockingActivityPicker: $isShowingBlockingActivityPicker
-            )
+            DashboardView()
         case .stats:
             StatsView()
         case .feed:
@@ -115,11 +93,7 @@ private struct AppTabs: View {
         case .friends:
             FriendsView()
         case .settings:
-            SettingsView(
-                onShowBlockingActivityPicker: {
-                    isShowingBlockingActivityPicker = true
-                }
-            )
+            SettingsView()
         }
     }
 

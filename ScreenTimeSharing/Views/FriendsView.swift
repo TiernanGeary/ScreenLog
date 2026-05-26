@@ -22,7 +22,7 @@ struct FriendsView: View {
                         FriendLeaderboardCard(
                             entries: leaderboardEntries,
                             addDemoAction: {
-                                #if DEBUG && targetEnvironment(simulator)
+                                #if DEBUG
                                 model.seedDemoFriends()
                                 #endif
                             }
@@ -71,11 +71,20 @@ struct FriendsView: View {
             .navigationTitle("Friends")
             .onAppear {
                 model.setLeaderboardWindow(selectedLeaderboardWindow)
+                seedDemoFriendsIfNeeded()
             }
             .onChange(of: selectedLeaderboardWindow) { _, newWindow in
                 model.setLeaderboardWindow(newWindow)
             }
         }
+    }
+
+    private func seedDemoFriendsIfNeeded() {
+        #if DEBUG
+        if model.friendSummaries.isEmpty {
+            model.seedDemoFriends(showsStatusMessage: false)
+        }
+        #endif
     }
 }
 
@@ -84,9 +93,11 @@ private struct FriendLeaderboardWindowSelector: View {
     @Binding var selection: LeaderboardWindow
     @Namespace private var namespace
 
+    private let visibleWindows: [LeaderboardWindow] = [.week, .allTime]
+
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(LeaderboardWindow.allCases, id: \.self) { window in
+            ForEach(visibleWindows, id: \.self) { window in
                 Button {
                     if selection != window {
                         AppHaptics.selectionChanged()
@@ -139,7 +150,7 @@ private struct FriendLeaderboardWindowSelector: View {
         case .today:
             return "Today"
         case .week:
-            return "Week"
+            return "This Week"
         case .month:
             return "Month"
         case .allTime:
@@ -166,7 +177,7 @@ private struct FriendLeaderboardCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
-                    #if DEBUG && targetEnvironment(simulator)
+                    #if DEBUG
                     Button(action: addDemoAction) {
                         Label("Add Demo Stats", systemImage: "person.3.sequence")
                             .font(.subheadline.weight(.semibold))

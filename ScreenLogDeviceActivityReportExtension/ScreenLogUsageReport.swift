@@ -330,6 +330,7 @@ struct ScreenLogTodaySummaryReportView: View {
                 }
                 .scrollIndicators(.hidden)
         }
+        .padding(.top, 4)
     }
 }
 
@@ -611,7 +612,6 @@ private struct ReportBarChart: View {
             )
         }
         .frame(height: 150)
-        .sensoryFeedback(.selection, trigger: selectedBucketID ?? "none")
     }
 
     private func barColor(for bucket: UsageChartBucket) -> Color {
@@ -627,6 +627,9 @@ private struct ReportBarChart: View {
             return
         }
 
+        if selectedBucketID != id {
+            ReportHaptics.selectionChanged()
+        }
         selectedBucketID = id
     }
 
@@ -635,7 +638,11 @@ private struct ReportBarChart: View {
             return
         }
 
-        selectedBucketID = selectedBucketID == id ? nil : id
+        let nextSelection = selectedBucketID == id ? nil : id
+        if selectedBucketID != nextSelection {
+            ReportHaptics.selectionChanged()
+        }
+        selectedBucketID = nextSelection
     }
 
     private func bucketID(at location: CGPoint, width: CGFloat) -> String? {
@@ -672,6 +679,16 @@ private struct ReportBarChart: View {
         }
 
         return buckets
+    }
+}
+
+@MainActor
+private enum ReportHaptics {
+    private static let selectionGenerator = UISelectionFeedbackGenerator()
+
+    static func selectionChanged() {
+        selectionGenerator.selectionChanged()
+        selectionGenerator.prepare()
     }
 }
 
