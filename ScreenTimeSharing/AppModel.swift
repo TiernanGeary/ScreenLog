@@ -2,7 +2,7 @@ import CloudKit
 import FamilyControls
 import Foundation
 import SwiftUI
-import UserNotifications
+@preconcurrency import UserNotifications
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -160,6 +160,73 @@ private struct UsageHistorySignature: Equatable {
 }
 
 @MainActor
+final class IncomingFriendShareInvite: Identifiable {
+    let id: String
+    let metadata: CKShare.Metadata
+    let displayName: String
+    let avatarImageData: Data?
+
+    init(metadata: CKShare.Metadata) {
+        self.metadata = metadata
+        self.id = [
+            metadata.share.recordID.zoneID.ownerName,
+            metadata.share.recordID.zoneID.zoneName,
+            metadata.share.recordID.recordName
+        ].joined(separator: ":")
+        self.displayName = Self.resolvedDisplayName(from: metadata)
+        self.avatarImageData = Self.thumbnailImageData(from: metadata)
+    }
+
+    private static func resolvedDisplayName(from metadata: CKShare.Metadata) -> String {
+        if let title = metadata.share[CKShare.SystemFieldKey.title] as? String,
+           let name = nameFromShareTitle(title) {
+            return name
+        }
+
+        if let nameComponents = metadata.ownerIdentity.nameComponents {
+            let formattedName = PersonNameComponentsFormatter.localizedString(
+                from: nameComponents,
+                style: .medium,
+                options: []
+            )
+            let trimmedName = formattedName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedName.isEmpty {
+                return trimmedName
+            }
+        }
+
+        return "Friend"
+    }
+
+    private static func nameFromShareTitle(_ title: String) -> String? {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffixes = ["'s Screen Time", "’s Screen Time"]
+
+        for suffix in suffixes where trimmedTitle.hasSuffix(suffix) {
+            let name = String(trimmedTitle.dropLast(suffix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty, name.localizedCaseInsensitiveCompare("Me") != .orderedSame {
+                return name
+            }
+        }
+
+        return nil
+    }
+
+    private static func thumbnailImageData(from metadata: CKShare.Metadata) -> Data? {
+        if let data = metadata.share[CKShare.SystemFieldKey.thumbnailImageData] as? Data {
+            return data
+        }
+
+        if let data = metadata.share[CKShare.SystemFieldKey.thumbnailImageData] as? NSData {
+            return data as Data
+        }
+
+        return nil
+    }
+}
+
+@MainActor
 final class AppModel: ObservableObject {
     @Published var profile: UserProfile
     @Published var appearanceMode: AppAppearanceMode
@@ -182,10 +249,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var groupUnlockExpirations: [String: Date] = [:]
     @Published var pendingShieldFriendRequestGroupID: String?
     @Published var focusedFriendRequestLogID: String?
+    @Published var pendingFriendShareInvite: IncomingFriendShareInvite?
+    @Published var isAcceptingFriendShareInvite = false
+    @Published var isAuthenticated: Bool
 
     let snapshotStore: CloudKitUsageSnapshotStore
+    let subscriptionService: SubscriptionService
+    let denyStartedAt: Date
 
     private let profileStore: LocalProfileStore
+    private let appleSignInService: AppleSignInService
     private let selectionStore: FamilyActivitySelectionStore
     private let screenTimeProvider: ScreenTimeProvider
     private let widgetCacheWriter: AppGroupWidgetCacheWriter
@@ -195,7 +268,9 @@ final class AppModel: ObservableObject {
     private let friendRequestPhotoStore: FriendRequestPhotoStore
     private let usageHistoryDefaults: UserDefaults?
     private let onboardingKey = "HasCompletedOnboarding.v1"
+    private static let denyStartedAtKey = "DenyStartedAt.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
+    private var isSyncingFriendRequests = false
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
@@ -209,7 +284,9 @@ final class AppModel: ObservableObject {
         blockingStore: BlockingStateStore = BlockingStateStore(),
         blockingEnforcementService: BlockingEnforcementService = BlockingEnforcementService(),
         friendRequestNotificationService: FriendRequestNotificationService = FriendRequestNotificationService(),
-        friendRequestPhotoStore: FriendRequestPhotoStore = FriendRequestPhotoStore()
+        friendRequestPhotoStore: FriendRequestPhotoStore = FriendRequestPhotoStore(),
+        appleSignInService: AppleSignInService = AppleSignInService(),
+        subscriptionService: SubscriptionService = SubscriptionService()
     ) {
         self.profileStore = profileStore
         self.selectionStore = selectionStore
@@ -220,10 +297,19 @@ final class AppModel: ObservableObject {
         self.blockingEnforcementService = blockingEnforcementService
         self.friendRequestNotificationService = friendRequestNotificationService
         self.friendRequestPhotoStore = friendRequestPhotoStore
+        self.appleSignInService = appleSignInService
+        self.subscriptionService = subscriptionService
+        self.isAuthenticated = KeychainAppleID.load() != nil
         let sharedDefaults = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)
         let loadedProfile = profileStore.load()
         self.usageHistoryDefaults = sharedDefaults
         self.profile = loadedProfile
+        let storedDenyStartedAt = UserDefaults.standard.object(forKey: Self.denyStartedAtKey) as? Date
+        let denyStartedAt = storedDenyStartedAt ?? Date()
+        self.denyStartedAt = denyStartedAt
+        if storedDenyStartedAt == nil {
+            UserDefaults.standard.set(denyStartedAt, forKey: Self.denyStartedAtKey)
+        }
         ScreenTimeReportStorage.saveProfileID(loadedProfile.id, defaults: sharedDefaults)
         self.appearanceMode = AppAppearanceMode(
             rawValue: UserDefaults.standard.string(forKey: Self.appearanceKey) ?? ""
@@ -247,7 +333,6 @@ final class AppModel: ObservableObject {
         #if DEBUG && targetEnvironment(simulator)
         let demoNow = Date()
         seedDemoUsageHistory(now: demoNow)
-        seedDemoFriends(now: demoNow, showsStatusMessage: false)
         #else
         self.localSnapshot = UsageStatsBuilder.snapshot(for: Date(), in: usageHistory)
             ?? usageHistory.sorted { $0.date > $1.date }.first
@@ -295,7 +380,11 @@ final class AppModel: ObservableObject {
         screenTimeAuthorization = screenTimeProvider.authorizationLabel()
         expireStaleFriendRequests()
         loadPendingShieldFriendRequest()
+        await subscriptionService.checkEntitlements()
+        await subscriptionService.loadProducts()
         cloudAvailability = await snapshotStore.cloudAvailability()
+        await migrateLegacyFriendRequestRecords()
+        await publishProfileUpdateToCloud()
         await reloadFriends()
         await syncFriendRequests()
         syncFriendRequestNotifications()
@@ -306,6 +395,58 @@ final class AppModel: ObservableObject {
     func completeOnboarding() {
         hasCompletedOnboarding = true
         UserDefaults.standard.set(true, forKey: onboardingKey)
+    }
+
+    func signInWithApple() async throws -> AppleCredential {
+        let credential = try await appleSignInService.signIn()
+
+        if let existingProfile = try? await snapshotStore.fetchExistingProfile(id: credential.userID) {
+            profileStore.restoreProfile(existingProfile, appleUserID: credential.userID)
+            profile = existingProfile
+        } else {
+            profile = profileStore.load(appleUserID: credential.userID)
+            if let fullName = credential.fullName {
+                let name = PersonNameComponentsFormatter.localizedString(
+                    from: fullName,
+                    style: .medium,
+                    options: []
+                ).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty, name != "Me" {
+                    profile.displayName = name
+                    profile.updatedAt = Date()
+                    profileStore.save(profile)
+                }
+            }
+        }
+
+        isAuthenticated = true
+        // Persist the Apple identifier to CloudKit so this profile can be
+        // recovered by `fetchExistingProfile(id:)` on reinstall or a new device.
+        await publishProfileUpdateToCloud()
+        return credential
+    }
+
+    func checkExistingSession() async {
+        guard let appleUserID = await appleSignInService.checkExistingCredential() else {
+            isAuthenticated = false
+            return
+        }
+
+        if let existingProfile = try? await snapshotStore.fetchExistingProfile(id: appleUserID) {
+            profileStore.restoreProfile(existingProfile, appleUserID: appleUserID)
+            profile = existingProfile
+        } else {
+            profile = profileStore.load(appleUserID: appleUserID)
+        }
+
+        isAuthenticated = true
+        // Backfill the Apple identifier on the cloud profile for sessions created
+        // before recovery existed, so the field is queryable on next reinstall.
+        if profile.appleUserID == nil {
+            profile.appleUserID = appleUserID
+            profileStore.save(profile)
+        }
+        await publishProfileUpdateToCloud()
     }
 
     #if DEBUG
@@ -341,6 +482,9 @@ final class AppModel: ObservableObject {
         profile.updatedAt = Date()
         profileStore.save(profile)
         ScreenTimeReportStorage.saveProfileID(profile.id, defaults: usageHistoryDefaults)
+        Task {
+            await publishProfileUpdateToCloud()
+        }
     }
 
     func friendRequestPhotoData(for request: BlockFriendRequest) -> Data? {
@@ -904,27 +1048,77 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func acceptShare(metadata: CKShare.Metadata) async {
+    #if DEBUG
+    func bootstrapCloudKitDevelopmentSchema() async {
+        isWorking = true
+        defer { isWorking = false }
+
+        cloudAvailability = await snapshotStore.cloudAvailability()
+        guard cloudAvailability.allowsCloudWrites else {
+            message = "\(cloudAvailability.label). Could not bootstrap schema."
+            return
+        }
+
+        do {
+            try await snapshotStore.bootstrapDevelopmentSchema(profile: profile)
+            message = "CloudKit Development schema bootstrapped."
+        } catch {
+            message = "CloudKit schema bootstrap failed: \(error.localizedDescription)"
+        }
+    }
+    #endif
+
+    func presentFriendShareInvite(metadata: CKShare.Metadata) {
+        pendingFriendShareInvite = IncomingFriendShareInvite(metadata: metadata)
+    }
+
+    func presentFriendShareInvite(url: URL) async {
+        do {
+            let metadata = try await snapshotStore.shareMetadata(for: url)
+            presentFriendShareInvite(metadata: metadata)
+        } catch {
+            message = "Could not open friend invite: \(error.localizedDescription)"
+        }
+    }
+
+    func dismissFriendShareInvite() {
+        pendingFriendShareInvite = nil
+    }
+
+    func acceptFriendShareInvite(_ invite: IncomingFriendShareInvite) async {
+        isAcceptingFriendShareInvite = true
+        defer {
+            isAcceptingFriendShareInvite = false
+        }
+
+        let accepted = await acceptShare(metadata: invite.metadata)
+        if accepted, pendingFriendShareInvite?.id == invite.id {
+            pendingFriendShareInvite = nil
+        }
+    }
+
+    @discardableResult
+    func acceptShare(metadata: CKShare.Metadata) async -> Bool {
         do {
             try await snapshotStore.acceptShare(metadata: metadata)
+            do {
+                try await snapshotStore.publishAcceptedShareMirrors(profile: profile, snapshot: localSnapshot)
+            } catch {
+                message = "Friend accepted. Your profile will sync back after iCloud is ready."
+            }
             message = "Friend share accepted."
             await reloadFriends()
             await syncFriendRequests()
+            return true
         } catch {
             message = "Could not accept share: \(error.localizedDescription)"
+            return false
         }
     }
 
     func reloadFriends() async {
-        #if DEBUG && targetEnvironment(simulator)
-        if UserDefaults.standard.bool(forKey: demoFriendsKey) {
-            seedDemoFriends()
-            return
-        }
-        #endif
-
         do {
-            let friends = try await snapshotStore.fetchFriendSummaries()
+            let friends = try await snapshotStore.fetchFriendSummaries(for: profile)
             friendSummaries = friends
             leaderboardEntries = []
             refreshLocalAccountabilityStats()
@@ -939,8 +1133,20 @@ final class AppModel: ObservableObject {
     }
 
     func syncFriendRequests() async {
+        guard !isSyncingFriendRequests else {
+            return
+        }
+
+        isSyncingFriendRequests = true
+        defer {
+            isSyncingFriendRequests = false
+        }
+
         do {
-            let cloudRequests = try await snapshotStore.fetchFriendRequests { [friendRequestPhotoStore] id, data in
+            let knownRequestIDs = Set(blockingState.friendRequests.map(\.id))
+            let cloudRequests = try await snapshotStore.fetchFriendRequests(
+                knownRequestIDs: knownRequestIDs
+            ) { [friendRequestPhotoStore] id, data in
                 try friendRequestPhotoStore.saveJPEGData(data, id: id)
             }
             guard mergeCloudFriendRequests(cloudRequests) else {
@@ -981,6 +1187,36 @@ final class AppModel: ObservableObject {
             try await snapshotStore.updateFriendRequest(request)
         } catch {
             message = "Request updated locally. Cloud sync failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func publishProfileUpdateToCloud() async {
+        let availability = await snapshotStore.cloudAvailability()
+        cloudAvailability = availability
+        guard availability.allowsCloudWrites else {
+            return
+        }
+
+        do {
+            try await snapshotStore.publishProfile(profile)
+        } catch {
+            message = "Profile saved locally. Cloud sync failed: \(error.localizedDescription)"
+        }
+    }
+
+    private static let legacyMigrationKey = "DidMigrateLegacyFriendRequests.v1"
+
+    private func migrateLegacyFriendRequestRecords() async {
+        guard !UserDefaults.standard.bool(forKey: Self.legacyMigrationKey),
+              cloudAvailability.allowsCloudWrites else {
+            return
+        }
+
+        do {
+            try await snapshotStore.migrateLegacyFriendRequests(profile: profile)
+            UserDefaults.standard.set(true, forKey: Self.legacyMigrationKey)
+        } catch {
+            // Non-fatal — will retry next launch
         }
     }
 
@@ -1098,8 +1334,21 @@ final class AppModel: ObservableObject {
         loadPendingShieldFriendRequest()
     }
 
-    private func loadPendingShieldFriendRequest(now: Date = Date()) {
+    func openPendingShieldFriendRequestFromNotification(groupID: String?) {
+        loadPendingShieldFriendRequest(preferredGroupID: groupID)
+        if pendingShieldFriendRequestGroupID == nil {
+            message = "That request is no longer available."
+        }
+    }
+
+    private func loadPendingShieldFriendRequest(now: Date = Date(), preferredGroupID: String? = nil) {
         guard let groupID = usageHistoryDefaults?.string(forKey: BlockingFriendRequestIntentStore.groupIDKey) else {
+            pendingShieldFriendRequestGroupID = nil
+            return
+        }
+
+        if let preferredGroupID,
+           preferredGroupID != groupID {
             pendingShieldFriendRequestGroupID = nil
             return
         }
@@ -1124,7 +1373,9 @@ final class AppModel: ObservableObject {
     private func persistBlockingState() throws {
         blockingState.lastUpdated = Date()
         try blockingStore.save(blockingState)
-        syncBlockingEnforcement()
+        Task.detached { @MainActor [weak self] in
+            self?.syncBlockingEnforcement()
+        }
     }
 
     private func saveBlockingStateWithStatus(_ status: String) {
@@ -1370,12 +1621,6 @@ final class AppModel: ObservableObject {
     func setLeaderboardWindow(_ window: LeaderboardWindow) {
         leaderboardWindow = window
         refreshLocalAccountabilityStats()
-
-        #if DEBUG && targetEnvironment(simulator)
-        if UserDefaults.standard.bool(forKey: demoFriendsKey) {
-            seedDemoFriends()
-        }
-        #endif
     }
 
     #if DEBUG

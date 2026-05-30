@@ -7,6 +7,10 @@ public struct UserProfile: Codable, Equatable, Identifiable, Sendable {
     public var avatarImageData: Data?
     public var shareStatus: ShareStatus
     public var updatedAt: Date
+    /// Stable Sign in with Apple identifier used to recover this profile on
+    /// reinstall or a new device. `nil` for legacy profiles created before
+    /// Apple sign-in; populated on the next sign-in.
+    public var appleUserID: String?
 
     public init(
         id: String,
@@ -14,7 +18,8 @@ public struct UserProfile: Codable, Equatable, Identifiable, Sendable {
         avatarColorHex: String,
         avatarImageData: Data? = nil,
         shareStatus: ShareStatus,
-        updatedAt: Date
+        updatedAt: Date,
+        appleUserID: String? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -22,6 +27,7 @@ public struct UserProfile: Codable, Equatable, Identifiable, Sendable {
         self.avatarImageData = avatarImageData
         self.shareStatus = shareStatus
         self.updatedAt = updatedAt
+        self.appleUserID = appleUserID
     }
 }
 
@@ -32,6 +38,8 @@ public enum ShareStatus: String, Codable, CaseIterable, Equatable, Sendable {
 }
 
 public struct SharedAppUsage: Codable, Equatable, Identifiable, Sendable {
+    public static let webDomainIDPrefix = "web-domain:"
+
     public var id: String
     public var displayName: String
     public var bundleIdentifier: String?
@@ -50,6 +58,14 @@ public struct SharedAppUsage: Codable, Equatable, Identifiable, Sendable {
         self.bundleIdentifier = bundleIdentifier
         self.applicationTokenData = applicationTokenData
         self.duration = duration
+    }
+
+    public var isWebDomain: Bool {
+        bundleIdentifier == nil && id.hasPrefix(Self.webDomainIDPrefix)
+    }
+
+    public static func webDomainID(for domain: String) -> String {
+        "\(webDomainIDPrefix)\(domain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
     }
 }
 
@@ -625,10 +641,12 @@ public struct UsageHistoryPayload: Codable, Equatable, Sendable {
 
 public enum HomeEngagementBuilder {
     public static let requiredBaselineDays = 7
+    public static let fallbackDailyBaseline: TimeInterval = 5.5 * 3_600
     public static let streakImprovementThreshold = 0.10
 
     public static func summary(
         history: [DailyUsageSnapshot],
+        appStartedAt: Date? = nil,
         calendar: Calendar = .current,
         now: Date = Date()
     ) -> HomeEngagementSummary {
@@ -649,35 +667,74 @@ public enum HomeEngagementBuilder {
             )
         }
 
+        if let appStartedAt {
+            let startDay = calendar.startOfDay(for: appStartedAt)
+            let today = calendar.startOfDay(for: now)
+            let baselineSnapshots = Array(
+                usableSnapshots
+                    .filter { calendar.startOfDay(for: $0.date) < startDay }
+                    .suffix(requiredBaselineDays)
+            )
+            let comparisonSnapshots = usableSnapshots.filter { snapshot in
+                let day = calendar.startOfDay(for: snapshot.date)
+                return day >= startDay && day <= today
+            }
+
+            if !baselineSnapshots.isEmpty || !comparisonSnapshots.isEmpty {
+                return readySummary(
+                    baselineSnapshots: baselineSnapshots,
+                    comparisonSnapshots: comparisonSnapshots,
+                    calendar: calendar,
+                    now: now
+                )
+            }
+        }
+
         guard usableSnapshots.count >= requiredBaselineDays else {
-            return HomeEngagementSummary(
-                baselineStatus: .building(daysCollected: usableSnapshots.count, requiredDays: requiredBaselineDays),
-                baselineDailyAverage: nil,
-                netSavedDuration: 0,
-                screenTimePercentChange: nil,
-                pickupPercentChange: nil,
-                beatBaselineStreakDays: 0,
-                comparisonDayCount: 0,
-                isTodayBelowBaseline: nil,
-                topImprovement: nil
+            return readySummary(
+                baselineSnapshots: [],
+                comparisonSnapshots: usableSnapshots,
+                calendar: calendar,
+                now: now
             )
         }
 
         let baselineSnapshots = Array(usableSnapshots.prefix(requiredBaselineDays))
         let comparisonSnapshots = Array(usableSnapshots.dropFirst(requiredBaselineDays))
+        return readySummary(
+            baselineSnapshots: baselineSnapshots,
+            comparisonSnapshots: comparisonSnapshots,
+            calendar: calendar,
+            now: now
+        )
+    }
+
+    private static func readySummary(
+        baselineSnapshots: [DailyUsageSnapshot],
+        comparisonSnapshots: [DailyUsageSnapshot],
+        calendar: Calendar,
+        now: Date
+    ) -> HomeEngagementSummary {
         let baselineTotal = baselineSnapshots.reduce(TimeInterval(0)) { partial, snapshot in
             partial + max(0, snapshot.totalDuration ?? 0)
         }
-        let baselineAverage = baselineTotal / TimeInterval(requiredBaselineDays)
-        let comparisonTotal = comparisonSnapshots.reduce(TimeInterval(0)) { partial, snapshot in
-            partial + max(0, snapshot.totalDuration ?? 0)
+        let calculatedBaselineAverage = baselineSnapshots.isEmpty
+            ? fallbackDailyBaseline
+            : baselineTotal / TimeInterval(baselineSnapshots.count)
+        let baselineAverage = max(fallbackDailyBaseline, calculatedBaselineAverage)
+        let netSavedDuration = comparisonSnapshots.reduce(TimeInterval(0)) { partial, snapshot in
+            guard let duration = snapshot.totalDuration else {
+                return partial
+            }
+
+            return partial + max(0, baselineAverage - max(0, duration))
         }
         let expectedComparisonTotal = baselineAverage * TimeInterval(comparisonSnapshots.count)
-        let netSavedDuration = expectedComparisonTotal - comparisonTotal
         let screenTimePercentChange = percentChange(saved: netSavedDuration, expected: expectedComparisonTotal)
+        let baselineDayCount = max(0, baselineSnapshots.count)
 
         return HomeEngagementSummary(
-            baselineStatus: .ready(days: requiredBaselineDays),
+            baselineStatus: .ready(days: baselineDayCount),
             baselineDailyAverage: baselineAverage,
             netSavedDuration: netSavedDuration,
             screenTimePercentChange: screenTimePercentChange,
@@ -700,7 +757,8 @@ public enum HomeEngagementBuilder {
             ),
             topImprovement: topImprovement(
                 baselineSnapshots: baselineSnapshots,
-                comparisonSnapshots: comparisonSnapshots
+                comparisonSnapshots: comparisonSnapshots,
+                baselineDayCount: baselineDayCount
             )
         )
     }
@@ -804,7 +862,8 @@ public enum HomeEngagementBuilder {
 
     private static func topImprovement(
         baselineSnapshots: [DailyUsageSnapshot],
-        comparisonSnapshots: [DailyUsageSnapshot]
+        comparisonSnapshots: [DailyUsageSnapshot],
+        baselineDayCount: Int
     ) -> HomeTopImprovement? {
         guard !comparisonSnapshots.isEmpty else {
             return nil
@@ -812,7 +871,8 @@ public enum HomeEngagementBuilder {
 
         if let appImprovement = topAppImprovement(
             baselineSnapshots: baselineSnapshots,
-            comparisonSnapshots: comparisonSnapshots
+            comparisonSnapshots: comparisonSnapshots,
+            baselineDayCount: baselineDayCount
         ) {
             return appImprovement
         }
@@ -825,16 +885,17 @@ public enum HomeEngagementBuilder {
 
     private static func topAppImprovement(
         baselineSnapshots: [DailyUsageSnapshot],
-        comparisonSnapshots: [DailyUsageSnapshot]
+        comparisonSnapshots: [DailyUsageSnapshot],
+        baselineDayCount: Int
     ) -> HomeTopImprovement? {
         let baselineTotals = appTotals(in: baselineSnapshots)
         let comparisonTotals = appTotals(in: comparisonSnapshots)
-        guard !baselineTotals.isEmpty else {
+        guard !baselineTotals.isEmpty, baselineDayCount > 0 else {
             return nil
         }
 
         let improvements: [HomeTopImprovement] = baselineTotals.compactMap { id, baseline in
-            let expected = baseline.duration / TimeInterval(requiredBaselineDays) * TimeInterval(comparisonSnapshots.count)
+            let expected = baseline.duration / TimeInterval(baselineDayCount) * TimeInterval(comparisonSnapshots.count)
             let actual = comparisonTotals[id]?.duration ?? 0
             let saved = expected - actual
             guard saved > 0 else {

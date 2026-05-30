@@ -114,6 +114,20 @@ enum ScreenLogUsageReportBuilder {
                             )
                         )
                     }
+
+                    for await webDomain in category.webDomains {
+                        let trimmedDomain = webDomain.webDomain.domain?
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        let domain = trimmedDomain?.isEmpty == false ? trimmedDomain! : "Website"
+                        segmentRows.append(
+                            SharedAppUsage(
+                                id: SharedAppUsage.webDomainID(for: domain),
+                                displayName: domain,
+                                bundleIdentifier: nil,
+                                duration: max(0, webDomain.totalActivityDuration)
+                            )
+                        )
+                    }
                 }
 
                 segments.append(
@@ -281,7 +295,9 @@ struct ScreenLogTodaySummaryReportView: View {
     }
 
     private var reportSurfaceColor: Color {
-        Color(uiColor: colorScheme == .dark ? .secondarySystemGroupedBackground : .systemBackground)
+        colorScheme == .dark
+            ? Color(red: 0.075, green: 0.085, blue: 0.10)
+            : .clear
     }
 
     private var reportContent: some View {
@@ -294,16 +310,12 @@ struct ScreenLogTodaySummaryReportView: View {
                 HStack(alignment: .top, spacing: 14) {
                     ReportMetricColumn(
                         title: "Screen time",
-                        value: ReportDurationFormatter.string(from: configuration.totalDuration),
-                        systemImage: "iphone",
-                        accentColor: Color.blue
+                        value: ReportDurationFormatter.string(from: configuration.totalDuration)
                     )
 
                     ReportMetricColumn(
                         title: "Pickups",
-                        value: "\(configuration.pickupCount)",
-                        systemImage: "hand.tap",
-                        accentColor: Color(red: 0.08, green: 0.58, blue: 0.50)
+                        value: "\(configuration.pickupCount)"
                     )
                 }
 
@@ -312,7 +324,7 @@ struct ScreenLogTodaySummaryReportView: View {
                         if topApps.isEmpty {
                             ReportTopAppTile(
                                 id: "empty",
-                                displayName: "No app detail yet",
+                                displayName: "No app or website detail yet",
                                 duration: "Open apps, then refresh."
                             )
                         } else {
@@ -326,11 +338,12 @@ struct ScreenLogTodaySummaryReportView: View {
                             }
                         }
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 6)
                 }
                 .scrollIndicators(.hidden)
         }
         .padding(.top, 4)
+        .padding(.bottom, 2)
     }
 }
 
@@ -458,11 +471,11 @@ struct ScreenLogStatsReportView: View {
             .layoutPriority(1)
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Most Used Apps")
+                Text("Most Used")
                     .font(.subheadline.weight(.semibold))
 
                 if topApps.isEmpty {
-                    Text("No app detail available for this report yet.")
+                    Text("No app or website detail available for this report yet.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -481,7 +494,9 @@ struct ScreenLogStatsReportView: View {
     }
 
     private var reportSurfaceColor: Color {
-        Color(uiColor: colorScheme == .dark ? .secondarySystemGroupedBackground : .systemBackground)
+        colorScheme == .dark
+            ? Color(red: 0.075, green: 0.085, blue: 0.10)
+            : .clear
     }
 }
 
@@ -510,27 +525,20 @@ struct ScreenLogUsageReportView: View {
 private struct ReportMetricColumn: View {
     let title: String
     let value: String
-    let systemImage: String
-    let accentColor: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.caption.weight(.semibold))
-
-                Text(title)
-                    .font(.caption.weight(.semibold))
-            }
-            .foregroundStyle(accentColor)
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
-            .fixedSize(horizontal: false, vertical: true)
-
+        VStack(alignment: .leading, spacing: 6) {
             Text(value)
                 .font(.system(size: 40, weight: .regular).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.56)
+
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -544,7 +552,11 @@ private struct ReportTopAppTile: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ReportAppIcon(name: displayName, applicationTokenData: applicationTokenData)
+            ReportAppIcon(
+                name: displayName,
+                applicationTokenData: applicationTokenData,
+                isWebDomain: id.hasPrefix(SharedAppUsage.webDomainIDPrefix)
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(displayName)
@@ -573,6 +585,10 @@ private struct ReportBarChart: View {
     let buckets: [UsageChartBucket]
     let maxDuration: TimeInterval
     @Binding var selectedBucketID: String?
+    @State private var pinnedBucketID: String?
+    @State private var isHoldSelecting = false
+
+    private let chartHoldDuration = 0.18
 
     var body: some View {
         GeometryReader { chartProxy in
@@ -598,20 +614,36 @@ private struct ReportBarChart: View {
                 }
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 10)
-                    .onChanged { value in
-                        selectBucket(at: value.location, width: chartProxy.size.width)
-                    }
-            )
             .simultaneousGesture(
                 SpatialTapGesture()
                     .onEnded { value in
                         toggleBucket(at: value.location, width: chartProxy.size.width)
                     }
             )
+            .simultaneousGesture(
+                holdSelectionGesture(width: chartProxy.size.width)
+            )
         }
         .frame(height: 150)
+    }
+
+    private func holdSelectionGesture(width: CGFloat) -> some Gesture {
+        LongPressGesture(minimumDuration: chartHoldDuration, maximumDistance: 12)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .onChanged { value in
+                switch value {
+                case .first(true):
+                    beginHoldSelection()
+                case .second(true, let drag?):
+                    beginHoldSelection()
+                    selectBucket(at: drag.location, width: width)
+                default:
+                    break
+                }
+            }
+            .onEnded { _ in
+                endHoldSelection()
+            }
     }
 
     private func barColor(for bucket: UsageChartBucket) -> Color {
@@ -638,11 +670,30 @@ private struct ReportBarChart: View {
             return
         }
 
-        let nextSelection = selectedBucketID == id ? nil : id
+        let nextSelection = pinnedBucketID == id ? nil : id
         if selectedBucketID != nextSelection {
             ReportHaptics.selectionChanged()
         }
+        pinnedBucketID = nextSelection
         selectedBucketID = nextSelection
+    }
+
+    private func beginHoldSelection() {
+        guard !isHoldSelecting else {
+            return
+        }
+
+        isHoldSelecting = true
+        ReportHaptics.selectionChanged()
+    }
+
+    private func endHoldSelection() {
+        guard isHoldSelecting else {
+            return
+        }
+
+        isHoldSelecting = false
+        selectedBucketID = pinnedBucketID
     }
 
     private func bucketID(at location: CGPoint, width: CGFloat) -> String? {
@@ -708,7 +759,11 @@ private struct ReportMostUsedAppRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 24, alignment: .leading)
 
-            ReportAppIcon(name: app.displayName, applicationTokenData: app.applicationTokenData)
+            ReportAppIcon(
+                name: app.displayName,
+                applicationTokenData: app.applicationTokenData,
+                isWebDomain: app.isWebDomain
+            )
 
             VStack(alignment: .leading, spacing: 7) {
                 HStack(alignment: .firstTextBaseline) {
@@ -745,6 +800,7 @@ private struct ReportMostUsedAppRow: View {
 private struct ReportAppIcon: View {
     let name: String
     var applicationTokenData: Data? = nil
+    var isWebDomain = false
     var size: CGFloat = 34
 
     var body: some View {
@@ -754,11 +810,24 @@ private struct ReportAppIcon: View {
                     .labelStyle(.iconOnly)
                     .frame(width: size, height: size)
                     .background(Color(uiColor: .secondarySystemGroupedBackground))
+            } else if isWebDomain {
+                webDomainIcon
             } else {
                 fallbackIcon
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
+    }
+
+    private var webDomainIcon: some View {
+        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+            .fill(Color.secondary.opacity(0.14))
+            .frame(width: size, height: size)
+            .overlay {
+                Image(systemName: "globe")
+                    .font(.system(size: size * 0.44, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
     }
 
     private var fallbackIcon: some View {
@@ -797,7 +866,12 @@ private struct ReportAppIcon: View {
 
 private enum ReportDurationFormatter {
     static func string(from duration: TimeInterval) -> String {
-        let minutes = max(0, Int(duration / 60))
+        let seconds = max(0, Int(duration.rounded()))
+        if seconds > 0 && seconds < 60 {
+            return "<1m"
+        }
+
+        let minutes = seconds / 60
         if minutes < 60 {
             return "\(minutes)m"
         }

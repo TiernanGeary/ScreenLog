@@ -20,14 +20,7 @@ struct FriendsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         FriendLeaderboardWindowSelector(selection: $selectedLeaderboardWindow)
 
-                        FriendLeaderboardCard(
-                            entries: leaderboardEntries,
-                            addDemoAction: {
-                                #if DEBUG
-                                model.seedDemoFriends()
-                                #endif
-                            }
-                        )
+                        FriendLeaderboardCard(entries: leaderboardEntries)
                     }
                 }
 
@@ -55,37 +48,25 @@ struct FriendsView: View {
                     }
                 }
 
-                AppCard {
+            }
+            .refreshable {
+                AppHaptics.selectionChanged()
+                await refreshFriends()
+            }
+            .navigationTitle("Friends")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         AppHaptics.buttonTap()
                         isShowingShareSheet = true
                     } label: {
-                        Label("Invite Friend", systemImage: "person.crop.circle.badge.plus")
-                            .appCardRow()
+                        Label("Invite Friends", systemImage: "person.crop.circle.badge.plus")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
-
-                    AppCardDivider()
-
-                    Button {
-                        AppHaptics.buttonTap()
-                        Task {
-                            await model.reloadFriends()
-                            await model.syncFriendRequests()
-                        }
-                    } label: {
-                        Label("Refresh Friends", systemImage: "arrow.clockwise")
-                            .appCardRow()
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
+                    .accessibilityLabel("Invite Friends")
                 }
             }
-            .navigationTitle("Friends")
             .onAppear {
                 model.setLeaderboardWindow(selectedLeaderboardWindow)
-                seedDemoFriendsIfNeeded()
             }
             .onChange(of: selectedLeaderboardWindow) { _, newWindow in
                 model.setLeaderboardWindow(newWindow)
@@ -96,12 +77,9 @@ struct FriendsView: View {
         }
     }
 
-    private func seedDemoFriendsIfNeeded() {
-        #if DEBUG && targetEnvironment(simulator)
-        if model.friendSummaries.isEmpty {
-            model.seedDemoFriends(showsStatusMessage: false)
-        }
-        #endif
+    private func refreshFriends() async {
+        await model.reloadFriends()
+        await model.syncFriendRequests()
     }
 }
 
@@ -135,6 +113,7 @@ private struct FriendLeaderboardWindowSelector: View {
                                     .shadow(color: Color.blue.opacity(0.18), radius: 7, x: 0, y: 3)
                             }
                         }
+                        .appCapsuleButtonHitArea()
                 }
                 .buttonStyle(.plain)
             }
@@ -154,12 +133,12 @@ private struct FriendLeaderboardWindowSelector: View {
 
     private var backgroundColor: Color {
         colorScheme == .dark
-            ? Color(uiColor: .secondarySystemGroupedBackground)
+            ? Color(red: 0.075, green: 0.085, blue: 0.10)
             : Color.white.opacity(0.72)
     }
 
     private var borderColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.86)
+        colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.86)
     }
 
     private func shortLabel(for window: LeaderboardWindow) -> String {
@@ -178,7 +157,6 @@ private struct FriendLeaderboardWindowSelector: View {
 
 private struct FriendLeaderboardCard: View {
     let entries: [LeaderboardEntry]
-    let addDemoAction: () -> Void
 
     private var maxRequestedExtraSeconds: TimeInterval {
         entries
@@ -189,20 +167,9 @@ private struct FriendLeaderboardCard: View {
     var body: some View {
         AppCard {
             if entries.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("No friend stats yet")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    #if DEBUG
-                    Button(action: addDemoAction) {
-                        Label("Add Demo Stats", systemImage: "person.3.sequence")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
-                    #endif
-                }
+                Text("No friend stats yet")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 .appCardRow()
             } else {
                 ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
@@ -234,8 +201,12 @@ private struct FriendLeaderboardRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 24, height: 40, alignment: .center)
 
-            Avatar(colorHex: entry.avatarColorHex, initials: entry.displayName.initials)
-                .frame(width: 40, height: 40)
+            ProfileAvatar(
+                imageData: entry.avatarImageData,
+                colorHex: entry.avatarColorHex,
+                initials: entry.displayName.initials,
+                size: 40
+            )
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -329,7 +300,12 @@ struct FriendSummaryRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            Avatar(colorHex: friend.avatarColorHex, initials: friend.displayName.initials)
+            ProfileAvatar(
+                imageData: friend.avatarImageData,
+                colorHex: friend.avatarColorHex,
+                initials: friend.displayName.initials,
+                size: 44
+            )
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {

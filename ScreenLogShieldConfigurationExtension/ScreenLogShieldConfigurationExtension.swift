@@ -83,9 +83,9 @@ private struct ShieldCopy {
            friendRequestGroupID == pendingGroupID {
             return ShieldCopy(
                 title: "Request ready",
-                subtitle: "Open ScreenLog to take your photo request for \(restrictedItemName).",
+                subtitle: "Tap the deny notification to take your photo request for \(restrictedItemName).",
                 primaryButton: "OK",
-                secondaryButton: "Open ScreenLog",
+                secondaryButton: "Send notification again",
                 isFriendRequestEnabled: true
             )
         }

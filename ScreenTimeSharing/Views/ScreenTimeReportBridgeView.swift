@@ -53,15 +53,11 @@ struct ScreenTimeReportBridgeView: View {
 
 struct ScreenTimeLiveTodayReport: View {
     @EnvironmentObject private var model: AppModel
+    @State private var isShowingLoading = false
 
     var body: some View {
         if model.hasScreenTimeAuthorization {
             ZStack {
-                ScreenTimeReportLoadingView(
-                    title: "Preparing today's report",
-                    message: "Screen Time data usually appears in a moment."
-                )
-
                 DeviceActivityReport(
                     .screenLogTodaySummary,
                     filter: .screenLogAllActivity(
@@ -70,14 +66,38 @@ struct ScreenTimeLiveTodayReport: View {
                 )
                 .id(model.screenTimeReportRefreshID)
                 .accessibilityLabel("Live Screen Time today report")
-                .task(id: model.screenTimeReportRefreshID) {
-                    await pollForReportSnapshot()
+
+                if isShowingLoading {
+                    ScreenTimeReportLoadingOverlay(
+                        title: "Loading today's report",
+                        message: "Screen Time data usually appears in a moment."
+                    )
+                    .transition(.opacity)
+                    .zIndex(2)
                 }
+            }
+            .animation(.easeInOut(duration: 0.18), value: isShowingLoading)
+            .task(id: model.screenTimeReportRefreshID) {
+                await pollForReportSnapshot(maxLoadingDuration: 3)
             }
         }
     }
 
-    private func pollForReportSnapshot() async {
+    private var hasCachedTodayReport: Bool {
+        guard let snapshot = model.localSnapshot,
+              Calendar.current.isDateInToday(snapshot.date) else {
+            return false
+        }
+
+        return snapshot.totalDuration != nil
+            || snapshot.pickupCount != nil
+            || !snapshot.appRows.isEmpty
+    }
+
+    private func pollForReportSnapshot(maxLoadingDuration: TimeInterval) async {
+        let startedAt = Date()
+        isShowingLoading = !hasCachedTodayReport
+
         for _ in 0..<60 {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else {
@@ -85,8 +105,12 @@ struct ScreenTimeLiveTodayReport: View {
             }
 
             _ = model.reloadUsageHistoryFromSharedStorage()
+            if hasCachedTodayReport || Date().timeIntervalSince(startedAt) >= maxLoadingDuration {
+                isShowingLoading = false
+            }
         }
 
+        isShowingLoading = false
         model.refreshScreenTimeReportStatus()
     }
 }
@@ -95,15 +119,11 @@ struct ScreenTimeLiveStatsReport: View {
     @EnvironmentObject private var model: AppModel
     let range: StatsRange
     let selectedDate: Date
+    @State private var isShowingLoading = false
 
     var body: some View {
         if model.hasScreenTimeAuthorization {
             ZStack {
-                ScreenTimeReportLoadingView(
-                    title: loadingTitle,
-                    message: loadingMessage
-                )
-
                 DeviceActivityReport(
                     reportContext,
                     filter: .screenLogAllActivity(
@@ -112,16 +132,34 @@ struct ScreenTimeLiveStatsReport: View {
                 )
                 .id(reportIdentity)
                 .accessibilityLabel("Live Screen Time stats report")
-                .task(id: reportIdentity) {
-                    await pollForReportSnapshot()
+
+                if isShowingLoading {
+                    ScreenTimeReportLoadingOverlay(
+                        title: loadingTitle,
+                        message: loadingMessage
+                    )
+                    .transition(.opacity)
+                    .zIndex(2)
                 }
+            }
+            .animation(.easeInOut(duration: 0.18), value: isShowingLoading)
+            .task(id: reportIdentity) {
+                await pollForReportSnapshot(maxLoadingDuration: maxLoadingDuration)
             }
         }
     }
 
+    private var hasCachedReportData: Bool {
+        UsageStatsBuilder.summary(
+            range: range,
+            selectedDate: selectedDate,
+            history: model.usageHistory
+        ).hasScreenTimeData
+    }
+
     private var reportIdentity: String {
         let start = UsageStatsBuilder.periodInterval(for: range, containing: selectedDate).start
-        return "\(range.id)-\(start.timeIntervalSinceReferenceDate)"
+        return "\(range.id)-\(start.timeIntervalSinceReferenceDate)-\(model.screenTimeReportRefreshID.uuidString)"
     }
 
     private var segmentInterval: DeviceActivityFilter.SegmentInterval {
@@ -169,11 +207,11 @@ struct ScreenTimeLiveStatsReport: View {
     private var loadingTitle: String {
         switch range {
         case .day:
-            return "Preparing day report"
+            return "Loading day report"
         case .week:
-            return "Preparing week report"
+            return "Loading week report"
         case .month:
-            return "Preparing month report"
+            return "Loading month report"
         }
     }
 
@@ -188,7 +226,21 @@ struct ScreenTimeLiveStatsReport: View {
         }
     }
 
-    private func pollForReportSnapshot() async {
+    private var maxLoadingDuration: TimeInterval {
+        switch range {
+        case .day:
+            return 3
+        case .week:
+            return 5
+        case .month:
+            return 6
+        }
+    }
+
+    private func pollForReportSnapshot(maxLoadingDuration: TimeInterval) async {
+        let startedAt = Date()
+        isShowingLoading = !hasCachedReportData
+
         for _ in 0..<60 {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else {
@@ -196,13 +248,18 @@ struct ScreenTimeLiveStatsReport: View {
             }
 
             _ = model.reloadUsageHistoryFromSharedStorage()
+            if hasCachedReportData || Date().timeIntervalSince(startedAt) >= maxLoadingDuration {
+                isShowingLoading = false
+            }
         }
 
+        isShowingLoading = false
         model.refreshScreenTimeReportStatus()
     }
 }
 
-private struct ScreenTimeReportLoadingView: View {
+private struct ScreenTimeReportLoadingOverlay: View {
+    @Environment(\.colorScheme) private var colorScheme
     let title: String
     let message: String
 
@@ -226,7 +283,14 @@ private struct ScreenTimeReportLoadingView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 24)
+        .background(reportSurfaceColor)
         .accessibilityElement(children: .combine)
+    }
+
+    private var reportSurfaceColor: Color {
+        colorScheme == .dark
+            ? Color(red: 0.075, green: 0.085, blue: 0.10)
+            : Color(uiColor: .systemBackground)
     }
 }
 
@@ -234,7 +298,7 @@ private extension DeviceActivityFilter {
     static func screenLogAllActivity(
         segment: DeviceActivityFilter.SegmentInterval
     ) -> DeviceActivityFilter {
-        DeviceActivityFilter(segment: segment)
+        DeviceActivityFilter(segment: segment, devices: .screenLogCurrentDevice)
     }
 
     static func screenLog(
@@ -243,9 +307,18 @@ private extension DeviceActivityFilter {
     ) -> DeviceActivityFilter {
         DeviceActivityFilter(
             segment: segment,
+            devices: .screenLogCurrentDevice,
             applications: selection.applicationTokens,
             categories: selection.categoryTokens,
             webDomains: selection.webDomainTokens
         )
+    }
+}
+
+private extension DeviceActivityFilter.Devices {
+    static var screenLogCurrentDevice: Self {
+        // The app is iPhone-first, and using the iPhone model keeps the report
+        // aligned with the iPhone Screen Time screen instead of cross-device data.
+        Self([.iPhone])
     }
 }

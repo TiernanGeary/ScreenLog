@@ -51,20 +51,22 @@ struct AppSurfaceBackground: View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(strokeColor, lineWidth: 0.8)
             }
-            .shadow(color: shadowColor, radius: 18, x: 0, y: 9)
+            .shadow(color: shadowColor, radius: colorScheme == .dark ? 10 : 18, x: 0, y: colorScheme == .dark ? 5 : 9)
             .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.18 : 0.026), radius: 20, x: 0, y: 4)
     }
 
     private var surfaceColor: Color {
-        Color(uiColor: colorScheme == .dark ? .secondarySystemGroupedBackground : .systemBackground)
+        colorScheme == .dark
+            ? Color(red: 0.075, green: 0.085, blue: 0.10)
+            : Color(uiColor: .systemBackground)
     }
 
     private var strokeColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.82)
+        colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.82)
     }
 
     private var shadowColor: Color {
-        Color(red: 0.12, green: 0.18, blue: 0.28).opacity(colorScheme == .dark ? 0.22 : 0.075)
+        Color(red: 0.12, green: 0.18, blue: 0.28).opacity(colorScheme == .dark ? 0.12 : 0.075)
     }
 }
 
@@ -233,6 +235,14 @@ extension View {
             .padding(.vertical, verticalPadding)
     }
 
+    func appRoundedButtonHitArea(cornerRadius: CGFloat = 16) -> some View {
+        contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    func appCapsuleButtonHitArea() -> some View {
+        contentShape(Capsule())
+    }
+
 }
 
 enum AppHaptics {
@@ -342,6 +352,7 @@ struct ProfileAvatar: View {
 struct AppUsageIcon: View {
     let name: String
     var applicationTokenData: Data? = nil
+    var isWebDomain = false
     var size: CGFloat = 42
     var showsContainer: Bool = true
 
@@ -349,6 +360,8 @@ struct AppUsageIcon: View {
         Group {
             if let token = applicationToken {
                 tokenIcon(token)
+            } else if isWebDomain {
+                webDomainIcon
             } else {
                 fallbackIcon
             }
@@ -373,6 +386,17 @@ struct AppUsageIcon: View {
         }
     }
     #endif
+
+    private var webDomainIcon: some View {
+        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+            .fill(Color.secondary.opacity(0.14))
+            .frame(width: size, height: size)
+            .overlay {
+                Image(systemName: "globe")
+                    .font(.system(size: size * 0.44, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+    }
 
     private var fallbackIcon: some View {
         RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)

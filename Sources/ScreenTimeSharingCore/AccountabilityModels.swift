@@ -98,11 +98,13 @@ public struct AccountabilityParticipant: Codable, Equatable, Identifiable, Senda
     public var id: String
     public var displayName: String
     public var avatarColorHex: String
+    public var avatarImageData: Data?
 
-    public init(id: String, displayName: String, avatarColorHex: String) {
+    public init(id: String, displayName: String, avatarColorHex: String, avatarImageData: Data? = nil) {
         self.id = id
         self.displayName = displayName
         self.avatarColorHex = avatarColorHex
+        self.avatarImageData = avatarImageData
     }
 }
 
@@ -131,6 +133,7 @@ public struct LeaderboardEntry: Codable, Equatable, Identifiable, Sendable {
     public var userID: String
     public var displayName: String
     public var avatarColorHex: String
+    public var avatarImageData: Data?
     public var requestedExtraSeconds: TimeInterval
     public var approvedExtraSeconds: TimeInterval
     public var requestCount: Int
@@ -145,6 +148,7 @@ public struct LeaderboardEntry: Codable, Equatable, Identifiable, Sendable {
         userID: String,
         displayName: String,
         avatarColorHex: String,
+        avatarImageData: Data? = nil,
         requestedExtraSeconds: TimeInterval,
         approvedExtraSeconds: TimeInterval,
         requestCount: Int,
@@ -158,6 +162,7 @@ public struct LeaderboardEntry: Codable, Equatable, Identifiable, Sendable {
         self.userID = userID
         self.displayName = displayName
         self.avatarColorHex = avatarColorHex
+        self.avatarImageData = avatarImageData
         self.requestedExtraSeconds = requestedExtraSeconds
         self.approvedExtraSeconds = approvedExtraSeconds
         self.requestCount = requestCount
@@ -224,6 +229,7 @@ public enum LeaderboardBuilder {
             userID: participant.id,
             displayName: participant.displayName,
             avatarColorHex: participant.avatarColorHex,
+            avatarImageData: participant.avatarImageData,
             requestedExtraSeconds: requested,
             approvedExtraSeconds: approved,
             requestCount: requestCount,

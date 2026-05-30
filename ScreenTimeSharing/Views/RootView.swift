@@ -1,15 +1,34 @@
+import AuthenticationServices
 import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var showsLaunchSplash = true
+    @State private var launchSplashOpacity = 1.0
 
     var body: some View {
-        Group {
-            if model.hasCompletedOnboarding {
-                AppTabs()
-            } else {
-                OnboardingView()
+        ZStack {
+            Group {
+                if !model.hasCompletedOnboarding {
+                    OnboardingView()
+                } else if !model.isAuthenticated {
+                    // Existing users who finished onboarding before Sign in with
+                    // Apple shipped: prompt once so their profile gets a recovery
+                    // key. Their data is preserved (same profile ID).
+                    SignInGateView()
+                } else {
+                    AppTabs()
+                }
             }
+
+            if showsLaunchSplash {
+                LaunchSplashView()
+                    .opacity(launchSplashOpacity)
+                    .zIndex(10)
+            }
+        }
+        .task {
+            await fadeOutLaunchSplash()
         }
         .sheet(
             item: Binding<BlockGroup?>(
@@ -23,6 +42,204 @@ struct RootView: View {
         ) { group in
             FriendApprovalRequestView(group: group)
         }
+        .sheet(item: $model.pendingFriendShareInvite) { invite in
+            FriendShareInviteView(
+                invite: invite,
+                isAccepting: model.isAcceptingFriendShareInvite,
+                onAccept: {
+                    Task {
+                        await model.acceptFriendShareInvite(invite)
+                    }
+                },
+                onCancel: {
+                    model.dismissFriendShareInvite()
+                }
+            )
+            .interactiveDismissDisabled(model.isAcceptingFriendShareInvite)
+        }
+    }
+
+    private func fadeOutLaunchSplash() async {
+        guard showsLaunchSplash, launchSplashOpacity == 1 else {
+            return
+        }
+
+        try? await Task.sleep(nanoseconds: 750_000_000)
+        guard !Task.isCancelled else {
+            return
+        }
+
+        withAnimation(.easeInOut(duration: 1.8)) {
+            launchSplashOpacity = 0
+        }
+
+        try? await Task.sleep(nanoseconds: 1_850_000_000)
+        guard !Task.isCancelled else {
+            return
+        }
+
+        showsLaunchSplash = false
+    }
+}
+
+private struct SignInGateView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var isSigningIn = false
+    @State private var signInError: String?
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            Image(systemName: "person.crop.circle.badge.checkmark")
+                .font(.system(size: 64, weight: .thin))
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 10) {
+                Text("Sign in to continue")
+                    .font(.largeTitle.bold())
+                    .multilineTextAlignment(.center)
+
+                Text("Connect your Apple ID so you can recover this account on a new device. Your existing data stays exactly as it is.")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 18)
+            }
+
+            Spacer()
+
+            SignInWithAppleButton(.signIn, onRequest: { request in
+                request.requestedScopes = [.fullName, .email]
+            }, onCompletion: { _ in })
+            .signInWithAppleButtonStyle(.white)
+            .frame(height: 54)
+            .cornerRadius(14)
+            .disabled(isSigningIn)
+            .overlay {
+                Button(action: performSignIn) {
+                    Color.clear
+                }
+                .disabled(isSigningIn)
+            }
+
+            if isSigningIn {
+                ProgressView()
+                    .tint(.primary)
+            }
+
+            if let signInError {
+                Text(signInError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private func performSignIn() {
+        guard !isSigningIn else {
+            return
+        }
+
+        isSigningIn = true
+        signInError = nil
+        Task {
+            do {
+                _ = try await model.signInWithApple()
+            } catch {
+                if (error as NSError).code != ASAuthorizationError.canceled.rawValue {
+                    signInError = error.localizedDescription
+                }
+            }
+            isSigningIn = false
+        }
+    }
+}
+
+private struct FriendShareInviteView: View {
+    let invite: IncomingFriendShareInvite
+    let isAccepting: Bool
+    let onAccept: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                Spacer(minLength: 18)
+
+                ProfileAvatar(
+                    imageData: invite.avatarImageData,
+                    colorHex: AppConfiguration.defaultAvatarColor,
+                    initials: invite.displayName.initials,
+                    size: 116
+                )
+
+                VStack(spacing: 8) {
+                    Text(invite.displayName)
+                        .font(.title2.weight(.bold))
+                        .multilineTextAlignment(.center)
+
+                    Text("wants to share Screen Time with you.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                Spacer(minLength: 18)
+
+                Button(action: onAccept) {
+                    HStack(spacing: 10) {
+                        if isAccepting {
+                            ProgressView()
+                                .tint(.white)
+                        }
+
+                        Text(isAccepting ? "Accepting" : "Accept Friend Request")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isAccepting)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(uiColor: .systemBackground))
+            .navigationTitle("Friend Request")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Not Now", action: onCancel)
+                        .disabled(isAccepting)
+                }
+            }
+        }
+    }
+}
+
+private struct LaunchSplashView: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            backgroundColor
+
+            Image("DenyWordmark")
+                .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 148)
+                .accessibilityLabel("deny")
+        }
+        .ignoresSafeArea()
+    }
+
+    private var backgroundColor: Color {
+        colorScheme == .dark ? .black : .white
     }
 }
 

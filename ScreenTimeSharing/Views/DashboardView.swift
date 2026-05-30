@@ -18,48 +18,70 @@ struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
 
     private var engagementSummary: HomeEngagementSummary {
-        HomeEngagementBuilder.summary(history: model.usageHistory)
+        var history = model.usageHistory
+        if let localSnapshot = model.localSnapshot,
+           !history.contains(where: { $0.id == localSnapshot.id }) {
+            history.append(localSnapshot)
+        }
+        return HomeEngagementBuilder.summary(
+            history: history,
+            appStartedAt: model.denyStartedAt
+        )
     }
 
     var body: some View {
         NavigationStack {
-            AppScreenScroll {
-                TodayScreenTimeCard(
-                    snapshot: model.localSnapshot,
-                    usesLiveReport: model.hasScreenTimeAuthorization,
-                    hasLoadedLiveReport: model.hasCompletedScreenTimeReport
-                )
+            ZStack(alignment: .topLeading) {
+                AppScreenScroll {
+                    Color.clear
+                        .frame(height: 32)
+                        .accessibilityHidden(true)
 
-                if shouldShowHomeROICard(engagementSummary) {
+                    TodayScreenTimeCard(
+                        snapshot: model.localSnapshot,
+                        usesLiveReport: model.hasScreenTimeAuthorization,
+                        hasLoadedLiveReport: model.hasCompletedScreenTimeReport
+                    )
+
                     HomeROICard(
                         summary: engagementSummary,
                         snapshot: model.localSnapshot
                     )
-                    .transition(.scale(scale: 0.98).combined(with: .opacity))
-                }
 
-                AppSection("Blocking") {
-                    BlockingOverviewCard()
-                }
+                    AppSection("Blocking") {
+                        BlockingOverviewCard()
+                    }
 
-#if DEBUG
-                AppSection("Developer Preview") {
-                    BlockingDeveloperToolsCard()
-                }
+#if DEBUG && DENY_INTERNAL_DEBUG
+                    AppSection("Developer Preview") {
+                        BlockingDeveloperToolsCard()
+                    }
 #endif
 
-                if let message = model.message {
-                    AppCard {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .appCardRow(verticalPadding: 10)
+                    if let message = model.message {
+                        AppCard {
+                            Text(message)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .appCardRow(verticalPadding: 10)
+                        }
                     }
+
                 }
 
+                Image("DenyWordmark")
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 82, height: 32, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .accessibilityLabel("deny")
             }
-            .navigationTitle("Home")
-            .animation(.snappy(duration: 0.22), value: shouldShowHomeROICard(engagementSummary))
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
+            .animation(.snappy(duration: 0.22), value: engagementSummary.baselineStatus)
             .onAppear {
                 model.reloadUsageHistoryFromSharedStorage()
             }
@@ -72,14 +94,6 @@ struct DashboardView: View {
         }
     }
 
-    private func shouldShowHomeROICard(_ summary: HomeEngagementSummary) -> Bool {
-        switch summary.baselineStatus {
-        case .ready:
-            return summary.comparisonDayCount > 0
-        case .building, .unavailable:
-            return false
-        }
-    }
 }
 
 private struct TodayScreenTimeCard: View {
@@ -114,8 +128,8 @@ private struct TodayScreenTimeCard: View {
         ZStack {
             HomeCard(cornerRadius: 24) {
                 ScreenTimeLiveTodayReport()
-                    .frame(minHeight: 156)
-                    .appCardRow(verticalPadding: 14)
+                    .frame(minHeight: 196)
+                    .appCardRow(verticalPadding: 16)
             }
             .opacity(shouldShowLiveReport ? 1 : 0)
             .scaleEffect(shouldShowLiveReport ? 1 : 0.98)
@@ -147,16 +161,12 @@ private struct TodayScreenTimeCard: View {
                 HStack(alignment: .top, spacing: 14) {
                     TodayMetricColumn(
                         title: "Screen time",
-                        value: UsageFormatting.duration(snapshot?.totalDuration),
-                        systemImage: "iphone",
-                        accentColor: Color.blue
+                        value: UsageFormatting.duration(snapshot?.totalDuration)
                     )
 
                     TodayMetricColumn(
                         title: "Pickups",
-                        value: pickupLabel,
-                        systemImage: "hand.tap",
-                        accentColor: Color(red: 0.08, green: 0.58, blue: 0.50)
+                        value: pickupLabel
                     )
                 }
 
@@ -171,7 +181,7 @@ private struct TodayScreenTimeCard: View {
                                 }
                             }
                         }
-                        .padding(.vertical, 2)
+                        .padding(.vertical, 6)
                     }
                     .scrollIndicators(.hidden)
                 }
@@ -268,10 +278,10 @@ private struct TodayLoadingTile: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(uiColor: colorScheme == .dark ? .secondarySystemGroupedBackground : .systemBackground))
+                .fill(colorScheme == .dark ? Color(red: 0.075, green: 0.085, blue: 0.10) : Color(uiColor: .systemBackground))
                 .overlay {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.8)
+                        .strokeBorder(Color.secondary.opacity(colorScheme == .dark ? 0.08 : 0.12), lineWidth: 0.8)
                 }
         )
     }
@@ -284,25 +294,19 @@ private struct TodayLoadingTile: View {
 private struct TodayMetricColumn: View {
     let title: String
     let value: String
-    let systemImage: String
-    let accentColor: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-            } icon: {
-                Image(systemName: systemImage)
-                    .font(.caption.weight(.semibold))
-            }
-            .foregroundStyle(accentColor)
-            .lineLimit(1)
-
+        VStack(alignment: .leading, spacing: 6) {
             Text(value)
                 .font(.system(size: 40, weight: .bold).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.56)
+
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -312,113 +316,52 @@ private struct HomeROICard: View {
     let summary: HomeEngagementSummary
     let snapshot: DailyUsageSnapshot?
 
+    private var savedDuration: TimeInterval {
+        max(0, summary.netSavedDuration)
+    }
+
     var body: some View {
         HomeCard(cornerRadius: 26) {
             VStack(alignment: .leading, spacing: 18) {
-                switch summary.baselineStatus {
-                case .ready:
-                    readyContent
-                case .building(let daysCollected, let requiredDays):
-                    buildingContent(daysCollected: daysCollected, requiredDays: requiredDays)
-                case .unavailable:
-                    unavailableContent
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("deny has saved you")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Text(UsageFormatting.duration(savedDuration))
+                        .font(.system(size: 40, weight: .bold).monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.58)
+
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                if case .ready = summary.baselineStatus, summary.comparisonDayCount > 0 {
+                    HomeProofRow(summary: summary)
+
+                    if let topImprovement = summary.topImprovement {
+                        HomeTopImprovementRow(improvement: topImprovement)
+                    }
                 }
             }
             .appCardRow(verticalPadding: 16)
         }
     }
 
-    private var readyContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 7) {
-                Text(summary.netSavedDuration >= 0 ? "Time won back" : "Over baseline")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Text(UsageFormatting.duration(abs(summary.netSavedDuration)))
-                    .font(.system(size: 40, weight: .bold).monospacedDigit())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.58)
-
-                Text(readySubtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            HomeProofRow(summary: summary)
-
-            if let topImprovement = summary.topImprovement {
-                HomeTopImprovementRow(improvement: topImprovement)
-            }
+    private var subtitle: String {
+        switch summary.baselineStatus {
+        case .ready where summary.comparisonDayCount > 0:
+            return "Compared with your pre-deny baseline."
+        case .ready:
+            return "Baseline ready. Keep using deny to grow your savings."
+        case .building(let daysCollected, let requiredDays):
+            return "Collecting baseline: \(daysCollected)/\(requiredDays) days. Keep going."
+        case .unavailable:
+            return "Start using deny to track your time saved."
         }
-    }
-
-    private func buildingContent(daysCollected: Int, requiredDays: Int) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 7) {
-                Text("Time won back")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                HStack(alignment: .lastTextBaseline, spacing: 9) {
-                    Text("\(daysCollected)/\(requiredDays)")
-                        .font(.system(size: 40, weight: .bold).monospacedDigit())
-                        .lineLimit(1)
-
-                    Text("baseline days")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                }
-
-                Text("Keep ScreenLog running for \(max(0, requiredDays - daysCollected)) more days to calculate saved time.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            HomeProofMetric(
-                title: "Pickups",
-                value: pickupLabel,
-                systemImage: "hand.tap"
-            )
-        }
-    }
-
-    private var unavailableContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Time won back")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Text("Unavailable")
-                .font(.system(size: 40, weight: .bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-
-            Text(snapshot?.capability.reason ?? "Authorize Screen Time and refresh to start tracking ROI.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-        }
-    }
-
-    private var readySubtitle: String {
-        if summary.comparisonDayCount == 0 {
-            return "Baseline ready. New days will start growing your ROI."
-        }
-
-        return "Compared with your first 7-day baseline."
-    }
-
-    private var pickupLabel: String {
-        guard let pickupCount = snapshot?.pickupCount else {
-            return "Unavailable"
-        }
-
-        return "\(pickupCount)"
     }
 }
 
@@ -444,13 +387,13 @@ private struct HomeCard<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color(uiColor: colorScheme == .dark ? .secondarySystemGroupedBackground : .systemBackground))
+                .fill(colorScheme == .dark ? Color(red: 0.075, green: 0.085, blue: 0.10) : Color(uiColor: .systemBackground))
                 .overlay {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.86), lineWidth: 0.8)
+                        .strokeBorder(colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.86), lineWidth: 0.8)
                 }
-                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.055), radius: 22, x: 0, y: 10)
-                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.16 : 0.035), radius: 14, x: 0, y: 7)
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.14 : 0.055), radius: colorScheme == .dark ? 12 : 22, x: 0, y: colorScheme == .dark ? 6 : 10)
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.10 : 0.035), radius: colorScheme == .dark ? 8 : 14, x: 0, y: colorScheme == .dark ? 4 : 7)
         }
     }
 }
@@ -653,13 +596,11 @@ private struct ScreenTimeSummaryCard: View {
                 HStack(spacing: 12) {
                     SummaryMetricTile(
                         title: "Screen time",
-                        value: UsageFormatting.duration(snapshot?.totalDuration),
-                        systemImage: "iphone"
+                        value: UsageFormatting.duration(snapshot?.totalDuration)
                     )
                     SummaryMetricTile(
                         title: "Pickups",
-                        value: pickupLabel,
-                        systemImage: "hand.tap"
+                        value: pickupLabel
                     )
                 }
 
@@ -680,7 +621,7 @@ private struct ScreenTimeSummaryCard: View {
                                 }
                             }
                         }
-                        .padding(.vertical, 2)
+                        .padding(.vertical, 6)
                     }
                     .scrollIndicators(.hidden)
                 }
@@ -701,7 +642,6 @@ private struct ScreenTimeSummaryCard: View {
 private struct SummaryMetricTile: View {
     let title: String
     let value: String
-    let systemImage: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -710,14 +650,10 @@ private struct SummaryMetricTile: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.62)
 
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.caption.weight(.semibold))
-                Text(title)
-                    .font(.caption)
-                    .lineLimit(1)
-            }
-            .foregroundStyle(.secondary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
@@ -733,6 +669,7 @@ private struct TopAppUsageTile: View {
             AppUsageIcon(
                 name: app.displayName,
                 applicationTokenData: app.applicationTokenData,
+                isWebDomain: app.isWebDomain,
                 showsContainer: false
             )
 
@@ -818,7 +755,7 @@ private struct TopAppEmptyTile: View {
             return "App detail unavailable"
         }
 
-        return "No app detail yet"
+        return "No app or website detail yet"
     }
 
     private var emptySubtitle: String {
@@ -831,6 +768,7 @@ private struct BlockingOverviewCard: View {
     @State private var newGroupDraft: BlockGroupDraft?
     @State private var viewedGroup: BlockGroup?
     @State private var unblockConfirmationGroup: BlockGroup?
+    @State private var friendRequestGroup: BlockGroup?
 
     private var groups: [BlockGroup] {
         model.blockingState.groups
@@ -882,6 +820,9 @@ private struct BlockingOverviewCard: View {
         }
         .sheet(item: $unblockConfirmationGroup) { group in
             UnblockConfirmationView(groupID: group.id)
+        }
+        .sheet(item: $friendRequestGroup) { group in
+            FriendApprovalRequestView(group: group)
         }
         .sheet(item: $newGroupDraft) { draft in
             NavigationStack {
@@ -938,51 +879,58 @@ private struct BlockingOverviewCard: View {
     }
 
     private func blockGroupRow(_ group: BlockGroup, isMuted: Bool = false) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                openGroup(group)
-            } label: {
-                HStack(spacing: 12) {
-                    Circle()
-                        .fill(isMuted ? Color.secondary.opacity(0.36) : Color(hex: group.colorHex))
-                        .frame(width: 12, height: 12)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Button {
+                    openGroup(group)
+                } label: {
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(isMuted ? Color.secondary.opacity(0.36) : Color(hex: group.colorHex))
+                            .frame(width: 12, height: 12)
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(group.name)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(group.name)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
 
-                        Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 8)
                     }
-
-                    Spacer(minLength: 8)
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    openGroup(group)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 28, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(group.name) settings")
             }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, alignment: .leading)
 
             if !isMuted {
-                unblockButton(for: group)
+                HStack(spacing: 10) {
+                    Spacer(minLength: 0)
+                    friendRequestButton(for: group)
+                    unblockButton(for: group)
+                    Spacer(minLength: 0)
+                }
             }
-
-            Button {
-                openGroup(group)
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 28, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Open \(group.name) settings")
         }
-        .appCardRow(verticalPadding: 12)
+        .appCardRow(verticalPadding: isMuted ? 12 : 14)
         .saturation(isMuted ? 0 : 1)
         .opacity(isMuted ? 0.62 : 1)
     }
@@ -1016,11 +964,42 @@ private struct BlockingOverviewCard: View {
                     Capsule()
                         .fill(isDisabled ? Color.secondary.opacity(0.12) : Color.accentColor.opacity(0.14))
                 )
+                .appCapsuleButtonHitArea()
         }
         .buttonStyle(.plain)
         .foregroundStyle(isDisabled ? Color.secondary : Color.accentColor)
         .disabled(isDisabled)
         .accessibilityLabel("Unblock \(group.name), \(remainingUnblocks) of \(totalUnblocks) left today")
+    }
+
+    private func friendRequestButton(for group: BlockGroup) -> some View {
+        let isEnabled = group.friendRequestConfig.isEnabled
+
+        return Button {
+            AppHaptics.buttonTap()
+            friendRequestGroup = group
+        } label: {
+            Label("Request", systemImage: "hands.sparkles.fill")
+                .font(.caption.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+                .background(
+                    Capsule()
+                        .fill(isEnabled ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.12))
+                )
+                .appCapsuleButtonHitArea()
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isEnabled ? Color.accentColor : Color.secondary)
+        .disabled(!isEnabled)
+        .accessibilityLabel(
+            isEnabled
+                ? "Request time from friends for \(group.name)"
+                : "Friend requests disabled for \(group.name)"
+        )
     }
 
 }
@@ -1276,6 +1255,7 @@ private struct UnblockConfirmationView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.blue)
         }
+        .appRoundedButtonHitArea(cornerRadius: 16)
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 8)
@@ -1283,7 +1263,7 @@ private struct UnblockConfirmationView: View {
     }
 }
 
-#if DEBUG
+#if DEBUG && DENY_INTERNAL_DEBUG
 private struct BlockingDeveloperToolsCard: View {
     @EnvironmentObject private var model: AppModel
     @State private var isShowingDummyBlockedApp = false
@@ -1410,6 +1390,7 @@ private struct DummyBlockedAppPreviewView: View {
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                                     .fill(Color.accentColor)
                             )
+                            .appRoundedButtonHitArea(cornerRadius: 14)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.white)
@@ -1443,6 +1424,7 @@ private struct DummyBlockedAppPreviewView: View {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(Color.accentColor.opacity(0.12))
                     )
+                    .appRoundedButtonHitArea(cornerRadius: 14)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.tint)
@@ -1458,6 +1440,7 @@ private struct DummyBlockedAppPreviewView: View {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(Color.gray.opacity(0.12))
                     )
+                    .appRoundedButtonHitArea(cornerRadius: 14)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
@@ -1510,6 +1493,7 @@ struct FriendApprovalRequestView: View {
     @State private var selectedFriendIDs: Set<String> = []
     @State private var selectedPhotoData: Data?
     @State private var message = ""
+    @FocusState private var isMessageFocused: Bool
 
     private let minuteOptions = [5, 10, 15, 20, 30, 45, 60]
 
@@ -1517,14 +1501,14 @@ struct FriendApprovalRequestView: View {
         #if DEBUG && targetEnvironment(simulator)
         if model.friendSummaries.isEmpty {
             return [
-                FriendChoice(id: "demo-sam", name: "Sam", avatarColorHex: "#1B998B"),
-                FriendChoice(id: "demo-maya", name: "Maya", avatarColorHex: "#E84855")
+                FriendChoice(id: "demo-sam", name: "Sam", avatarColorHex: "#1B998B", avatarImageData: nil),
+                FriendChoice(id: "demo-maya", name: "Maya", avatarColorHex: "#E84855", avatarImageData: nil)
             ]
         }
         #endif
 
         return model.friendSummaries.map {
-            FriendChoice(id: $0.id, name: $0.displayName, avatarColorHex: $0.avatarColorHex)
+            FriendChoice(id: $0.id, name: $0.displayName, avatarColorHex: $0.avatarColorHex, avatarImageData: $0.avatarImageData)
         }
     }
 
@@ -1539,7 +1523,18 @@ struct FriendApprovalRequestView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         AppHaptics.buttonTap()
+                        isMessageFocused = false
                         dismiss()
+                    }
+                }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    if requestStep == .details && isMessageFocused {
+                        Spacer()
+
+                        Button("Done") {
+                            isMessageFocused = false
+                        }
                     }
                 }
             }
@@ -1641,11 +1636,15 @@ struct FriendApprovalRequestView: View {
                         .appCardRow(verticalPadding: 12)
                 }
             }
+            .onTapGesture {
+                isMessageFocused = false
+            }
 
             AppSection("Request") {
                 AppCard {
                     Button {
                         AppHaptics.buttonTap()
+                        isMessageFocused = false
                         isShowingMinutePicker = true
                     } label: {
                         HStack(spacing: 12) {
@@ -1673,6 +1672,11 @@ struct FriendApprovalRequestView: View {
 
                     TextField("Optional message", text: $message, axis: .vertical)
                         .lineLimit(2...4)
+                        .focused($isMessageFocused)
+                        .submitLabel(.done)
+                        .onSubmit {
+                            isMessageFocused = false
+                        }
                         .appCardRow()
                 }
             }
@@ -1693,6 +1697,7 @@ struct FriendApprovalRequestView: View {
                             }
                             Button {
                                 AppHaptics.selectionChanged()
+                                isMessageFocused = false
                                 if selectedFriendIDs.contains(friend.id) {
                                     selectedFriendIDs.remove(friend.id)
                                 } else {
@@ -1700,8 +1705,12 @@ struct FriendApprovalRequestView: View {
                                 }
                             } label: {
                                 HStack(spacing: 12) {
-                                    Avatar(colorHex: friend.avatarColorHex, initials: friend.name.initials)
-                                        .frame(width: 44, height: 44)
+                                    ProfileAvatar(
+                                        imageData: friend.avatarImageData,
+                                        colorHex: friend.avatarColorHex,
+                                        initials: friend.name.initials,
+                                        size: 44
+                                    )
 
                                     Text(friend.name)
                                         .font(.subheadline.weight(.medium))
@@ -1719,7 +1728,11 @@ struct FriendApprovalRequestView: View {
                     }
                 }
             }
+            .onTapGesture {
+                isMessageFocused = false
+            }
         }
+        .scrollDismissesKeyboard(.interactively)
     }
 
     @ViewBuilder
@@ -1789,6 +1802,7 @@ struct FriendApprovalRequestView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.accentColor.opacity(0.12))
             }
+            .appRoundedButtonHitArea(cornerRadius: 16)
 
             Button {
                 AppHaptics.buttonTap()
@@ -1805,6 +1819,7 @@ struct FriendApprovalRequestView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.accentColor)
             }
+            .appRoundedButtonHitArea(cornerRadius: 16)
             .disabled(selectedPhotoData == nil)
         }
         .padding(.horizontal, 20)
@@ -1816,6 +1831,7 @@ struct FriendApprovalRequestView: View {
     private var sendButton: some View {
         VStack(spacing: 0) {
             Button {
+                isMessageFocused = false
                 sendRequest()
             } label: {
                 Text("Send Request")
@@ -1829,6 +1845,7 @@ struct FriendApprovalRequestView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(canSendRequest ? Color.accentColor : Color.secondary.opacity(0.18))
             }
+            .appRoundedButtonHitArea(cornerRadius: 16)
             .disabled(!canSendRequest)
         }
         .padding(.horizontal, 20)
@@ -1885,10 +1902,12 @@ private struct FriendChoice: Identifiable {
     let id: String
     let name: String
     let avatarColorHex: String
+    let avatarImageData: Data?
 }
 
 #if canImport(UIKit)
 private struct FriendRequestCameraCaptureView: UIViewControllerRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let showsCloseButton: Bool
     let onCancel: (() -> Void)?
     let onImage: (UIImage) -> Void
@@ -1905,6 +1924,7 @@ private struct FriendRequestCameraCaptureView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> FriendRequestCameraViewController {
         FriendRequestCameraViewController(
+            colorScheme: colorScheme,
             showsCloseButton: showsCloseButton,
             onCapture: { image in
                 onImage(image)
@@ -1915,7 +1935,9 @@ private struct FriendRequestCameraCaptureView: UIViewControllerRepresentable {
         )
     }
 
-    func updateUIViewController(_ uiViewController: FriendRequestCameraViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: FriendRequestCameraViewController, context: Context) {
+        uiViewController.updateColorScheme(colorScheme)
+    }
 }
 
 private final class FriendRequestBeautyRenderer: @unchecked Sendable {
@@ -2036,24 +2058,27 @@ private final class FriendRequestBeautyRenderer: @unchecked Sendable {
 }
 
 private final class FriendRequestCameraViewController: UIViewController, @preconcurrency AVCapturePhotoCaptureDelegate {
+    private var colorScheme: ColorScheme
     private let onCapture: (UIImage) -> Void
     private let onCancel: (() -> Void)?
     private let showsCloseButton: Bool
     private let selfieLightIdleAlpha: CGFloat = 0.72
     private let selfieLightCaptureAlpha: CGFloat = 0.92
-    private let session = AVCaptureSession()
-    private let photoOutput = AVCapturePhotoOutput()
+    private let sessionQueue = DispatchQueue(label: "com.jdco.deny.camera.session")
+    nonisolated(unsafe) private let session = AVCaptureSession()
+    nonisolated(unsafe) private let photoOutput = AVCapturePhotoOutput()
     private lazy var beautyRenderer = FriendRequestBeautyRenderer()
     private var previewLayer: AVCaptureVideoPreviewLayer?
-    private var activeInput: AVCaptureDeviceInput?
+    nonisolated(unsafe) private var activeInput: AVCaptureDeviceInput?
     private var currentPosition: AVCaptureDevice.Position = .front
-    private var isConfigured = false
+    nonisolated(unsafe) private var isConfigured = false
     private var isCaptureInFlight = false
     private var isSelfieLightEnabled = false
     private var brightnessBeforeSelfieLight: CGFloat?
     private var capturePreviewAspectRatio: CGFloat?
 
     private let previewView = UIView()
+    private let topSafeAreaBackgroundView = UIView()
     private let closeButton = UIButton(type: .system)
     private let selfieLightButton = UIButton(type: .system)
     private let selfieLightOverlayView = UIView()
@@ -2066,10 +2091,12 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
     private let focusRingView = UIView()
 
     init(
+        colorScheme: ColorScheme,
         showsCloseButton: Bool,
         onCapture: @escaping (UIImage) -> Void,
         onCancel: (() -> Void)?
     ) {
+        self.colorScheme = colorScheme
         self.showsCloseButton = showsCloseButton
         self.onCapture = onCapture
         self.onCancel = onCancel
@@ -2079,6 +2106,10 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        colorScheme == .dark ? .lightContent : .darkContent
     }
 
     override func viewDidLoad() {
@@ -2095,18 +2126,34 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         restoreSelfieLight()
-        if session.isRunning {
-            session.stopRunning()
+        sessionQueue.async { [weak self] in
+            guard let self, self.session.isRunning else {
+                return
+            }
+
+            self.session.stopRunning()
         }
     }
 
+    func updateColorScheme(_ colorScheme: ColorScheme) {
+        guard self.colorScheme != colorScheme else {
+            return
+        }
+
+        self.colorScheme = colorScheme
+        applyInterfaceColors()
+    }
+
     private func configureInterface() {
-        view.backgroundColor = .black
+        applyInterfaceColors()
 
         previewView.translatesAutoresizingMaskIntoConstraints = false
         previewView.backgroundColor = .black
         previewView.clipsToBounds = true
         view.addSubview(previewView)
+
+        topSafeAreaBackgroundView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(topSafeAreaBackgroundView)
 
         selfieLightOverlayView.translatesAutoresizingMaskIntoConstraints = false
         selfieLightOverlayView.backgroundColor = .white
@@ -2177,6 +2224,11 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
             previewView.topAnchor.constraint(equalTo: view.topAnchor),
             previewView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
+            topSafeAreaBackgroundView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topSafeAreaBackgroundView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            topSafeAreaBackgroundView.topAnchor.constraint(equalTo: view.topAnchor),
+            topSafeAreaBackgroundView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+
             selfieLightOverlayView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             selfieLightOverlayView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             selfieLightOverlayView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -2224,6 +2276,13 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         ])
     }
 
+    private func applyInterfaceColors() {
+        let topBackgroundColor: UIColor = colorScheme == .dark ? .black : .systemBackground
+        view.backgroundColor = topBackgroundColor
+        topSafeAreaBackgroundView.backgroundColor = topBackgroundColor
+        setNeedsStatusBarAppearanceUpdate()
+    }
+
     private func configureRoundIconButton(_ button: UIButton, systemName: String, pointSize: CGFloat) {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.tintColor = .white
@@ -2256,14 +2315,16 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
             configureCamera(position: currentPosition)
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] isGranted in
-                DispatchQueue.main.async {
-                    guard let self else {
-                        return
-                    }
+                guard let self else {
+                    return
+                }
 
-                    if isGranted {
+                if isGranted {
+                    DispatchQueue.main.async {
                         self.configureCamera(position: self.currentPosition)
-                    } else {
+                    }
+                } else {
+                    DispatchQueue.main.async {
                         self.showUnavailable(
                             title: "Camera Access Off",
                             detail: "Enable camera access to send a photo request."
@@ -2285,25 +2346,36 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
     }
 
     private func configureCamera(position: AVCaptureDevice.Position) {
-        do {
-            try configureSession(position: position)
-            if !session.isRunning {
-                session.startRunning()
+        sessionQueue.async { [weak self] in
+            guard let self else {
+                return
             }
 
-            attachPreviewRendererIfNeeded()
-            setCaptureControlsEnabled(true)
-            updateSelfieLightButton()
-            unavailableView.isHidden = true
-        } catch {
-            showUnavailable(
-                title: "Camera Unavailable",
-                detail: "This device cannot start a camera preview."
-            )
+            do {
+                let configuredPosition = try self.configureSession(position: position)
+                if !self.session.isRunning {
+                    self.session.startRunning()
+                }
+
+                DispatchQueue.main.async {
+                    self.currentPosition = configuredPosition
+                    self.attachPreviewRendererIfNeeded()
+                    self.setCaptureControlsEnabled(true)
+                    self.updateSelfieLightButton()
+                    self.unavailableView.isHidden = true
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.showUnavailable(
+                        title: "Camera Unavailable",
+                        detail: "This device cannot start a camera preview."
+                    )
+                }
+            }
         }
     }
 
-    private func configureSession(position: AVCaptureDevice.Position) throws {
+    nonisolated private func configureSession(position: AVCaptureDevice.Position) throws -> AVCaptureDevice.Position {
         session.beginConfiguration()
         session.sessionPreset = .photo
 
@@ -2324,7 +2396,6 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
 
         session.addInput(input)
         activeInput = input
-        currentPosition = position
 
         if !isConfigured {
             guard session.canAddOutput(photoOutput) else {
@@ -2338,7 +2409,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         }
 
         session.commitConfiguration()
-        updateOutputConnections()
+        return device.position
     }
 
     private func attachPreviewRendererIfNeeded() {
@@ -2353,7 +2424,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         updateOutputConnections()
     }
 
-    private func cameraDevice(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+    nonisolated private func cameraDevice(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
         AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
             ?? AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: position)
             ?? AVCaptureDevice.default(for: .video)
@@ -2386,7 +2457,12 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
             return
         }
 
-        if connection.isVideoOrientationSupported {
+        if #available(iOS 17.0, *) {
+            let portraitRotationAngle: CGFloat = 90
+            if connection.isVideoRotationAngleSupported(portraitRotationAngle) {
+                connection.videoRotationAngle = portraitRotationAngle
+            }
+        } else if connection.isVideoOrientationSupported {
             connection.videoOrientation = .portrait
         }
 

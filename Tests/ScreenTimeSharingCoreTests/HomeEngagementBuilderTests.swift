@@ -20,9 +20,9 @@ import Testing
         now: makeHomeDate(2026, 5, 4, calendar: calendar)
     )
 
-    #expect(summary.baselineStatus == .building(daysCollected: 3, requiredDays: 7))
-    #expect(summary.netSavedDuration == 0)
-    #expect(summary.screenTimePercentChange == nil)
+    #expect(summary.baselineStatus == .ready(days: 0))
+    #expect(summary.netSavedDuration == 3 * (5.5 * 3_600 - 4 * 3_600))
+    #expect(summary.screenTimePercentChange != nil)
 }
 
 @Test func homeEngagementCalculatesNetSavedAndPercentDrops() throws {
@@ -63,7 +63,7 @@ import Testing
     #expect(improvement.savedDuration == TimeInterval(3 * 3_600))
 }
 
-@Test func homeEngagementAllowsNegativeNetSavedTime() throws {
+@Test func homeEngagementOnlyAccumulatesDaysUnderBaseline() throws {
     let calendar = makeHomeCalendar()
     let baseline = (1...7).map { day in
         makeHomeSnapshot(
@@ -90,9 +90,75 @@ import Testing
         now: makeHomeDate(2026, 5, 9, calendar: calendar)
     )
 
-    #expect(summary.netSavedDuration == -3_600)
-    #expect(summary.screenTimePercentChange == -25)
+    #expect(summary.baselineDailyAverage == HomeEngagementBuilder.fallbackDailyBaseline)
+    #expect(summary.netSavedDuration == 30 * 60)
+    #expect(abs((summary.screenTimePercentChange ?? 0) - 9.09) < 0.01)
     #expect(summary.topImprovement == nil)
+}
+
+@Test func homeEngagementUsesPreDenyDaysAndMinimumUSBaselineFloor() throws {
+    let calendar = makeHomeCalendar()
+    let beforeDeny = (20...22).map { day in
+        makeHomeSnapshot(
+            date: makeHomeDate(2026, 5, day, calendar: calendar),
+            duration: 4 * 3_600,
+            pickups: 35,
+            selectedDuration: 2 * 3_600,
+            calendar: calendar
+        )
+    }
+    let afterDeny = [
+        makeHomeSnapshot(
+            date: makeHomeDate(2026, 5, 23, calendar: calendar),
+            duration: 4 * 3_600,
+            pickups: 30,
+            selectedDuration: 90 * 60,
+            calendar: calendar
+        ),
+        makeHomeSnapshot(
+            date: makeHomeDate(2026, 5, 24, calendar: calendar),
+            duration: 7 * 3_600,
+            pickups: 70,
+            selectedDuration: 4 * 3_600,
+            calendar: calendar
+        )
+    ]
+
+    let summary = HomeEngagementBuilder.summary(
+        history: beforeDeny + afterDeny,
+        appStartedAt: makeHomeDate(2026, 5, 23, calendar: calendar),
+        calendar: calendar,
+        now: makeHomeDate(2026, 5, 25, calendar: calendar)
+    )
+
+    #expect(summary.baselineStatus == .ready(days: 3))
+    #expect(summary.baselineDailyAverage == HomeEngagementBuilder.fallbackDailyBaseline)
+    #expect(summary.netSavedDuration == 90 * 60)
+}
+
+@Test func homeEngagementFallsBackToUSBaselineWhenNoPreDenyHistoryExists() throws {
+    let calendar = makeHomeCalendar()
+    let history = [
+        makeHomeSnapshot(
+            date: makeHomeDate(2026, 5, 23, calendar: calendar),
+            duration: 4 * 3_600,
+            pickups: 30,
+            selectedDuration: 90 * 60,
+            calendar: calendar
+        )
+    ]
+
+    let summary = HomeEngagementBuilder.summary(
+        history: history,
+        appStartedAt: makeHomeDate(2026, 5, 23, calendar: calendar),
+        calendar: calendar,
+        now: makeHomeDate(2026, 5, 24, calendar: calendar)
+    )
+
+    #expect(summary.baselineStatus == .ready(days: 0))
+    #expect(summary.baselineDailyAverage == HomeEngagementBuilder.fallbackDailyBaseline)
+    #expect(summary.netSavedDuration == 90 * 60)
+    #expect(summary.pickupPercentChange == nil)
 }
 
 @Test func homeEngagementStreakExcludesToday() throws {

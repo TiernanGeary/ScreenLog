@@ -30,9 +30,15 @@ enum CloudAvailability: Equatable {
 
 private enum CloudKitUsageSnapshotStoreError: LocalizedError {
     case unavailableInSimulator
+    case cloudKitSaveFailed(context: String, reason: String)
 
     var errorDescription: String? {
-        "iCloud sharing is unavailable in this simulator build."
+        switch self {
+        case .unavailableInSimulator:
+            "iCloud sharing is unavailable in this simulator build."
+        case .cloudKitSaveFailed(let context, let reason):
+            "\(context) failed: \(reason)"
+        }
     }
 }
 
@@ -42,14 +48,17 @@ final class CloudKitUsageSnapshotStore {
         static let userProfile = "UserProfile"
         static let dailyUsageSnapshot = "DailyUsageSnapshot"
         static let friendTimeRequest = "FriendTimeRequest"
+        static let friendInbox = "FriendInbox"
     }
 
     private enum Field {
         static let displayName = "displayName"
         static let avatarColorHex = "avatarColorHex"
+        static let avatarImageData = "avatarImageData"
         static let shareStatus = "shareStatus"
         static let updatedAt = "updatedAt"
         static let ownerProfileID = "ownerProfileID"
+        static let appleUserID = "appleUserID"
         static let date = "date"
         static let calendarIdentifier = "calendarIdentifier"
         static let timeZoneIdentifier = "timeZoneIdentifier"
@@ -75,6 +84,8 @@ final class CloudKitUsageSnapshotStore {
         static let expiresAt = "expiresAt"
         static let approvedExpiresAt = "approvedExpiresAt"
         static let photoAsset = "photoAsset"
+        static let inboxFriendID = "inboxFriendID"
+        static let inboxOwnerProfileID = "inboxOwnerProfileID"
     }
 
     private let container: CKContainer?
@@ -122,6 +133,49 @@ final class CloudKitUsageSnapshotStore {
         }
     }
 
+    func fetchExistingProfile(id appleUserID: String) async throws -> UserProfile? {
+        guard let container else {
+            return nil
+        }
+
+        try await ensurePrivateZone(in: container)
+        let database = container.privateCloudDatabase
+        let query = CKQuery(
+            recordType: RecordType.userProfile,
+            predicate: NSPredicate(format: "%K == %@", Field.appleUserID, appleUserID)
+        )
+
+        let response = try await database.records(
+            matching: query,
+            inZoneWith: privateZoneID,
+            desiredKeys: nil,
+            resultsLimit: 1
+        )
+
+        guard let record = response.matchResults.compactMap({ try? $0.1.get() }).first else {
+            return nil
+        }
+
+        let profileID = record[Field.ownerProfileID] as? String ?? appleUserID
+        let displayName = record[Field.displayName] as? String ?? "Me"
+        let avatarColorHex = record[Field.avatarColorHex] as? String ?? AppConfiguration.defaultAvatarColor
+        let avatarImageData = record[Field.avatarImageData] as? Data
+        let shareStatusRaw = record[Field.shareStatus] as? String
+        let shareStatus = shareStatusRaw.flatMap(ShareStatus.init(rawValue:)) ?? .notShared
+        let updatedAt = record[Field.updatedAt] as? Date ?? Date()
+        let resolvedAppleUserID = record[Field.appleUserID] as? String ?? appleUserID
+
+        return UserProfile(
+            id: profileID,
+            displayName: displayName,
+            avatarColorHex: avatarColorHex,
+            avatarImageData: avatarImageData,
+            shareStatus: shareStatus,
+            updatedAt: updatedAt,
+            appleUserID: resolvedAppleUserID
+        )
+    }
+
     func publish(profile: UserProfile, snapshot: DailyUsageSnapshot) async throws {
         guard let container else {
             throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
@@ -146,6 +200,8 @@ final class CloudKitUsageSnapshotStore {
         for saveResult in result.saveResults.values {
             _ = try saveResult.get()
         }
+
+        try? await publishAcceptedShareMirrors(profile: profile, snapshot: snapshot)
     }
 
     func prepareProfileShare(profile: UserProfile) async throws -> (share: CKShare, container: CKContainer) {
@@ -154,6 +210,7 @@ final class CloudKitUsageSnapshotStore {
         }
 
         try await ensurePrivateZone(in: container)
+        let database = container.privateCloudDatabase
 
         var sharingProfile = profile
         sharingProfile.shareStatus = .sharing
@@ -161,24 +218,136 @@ final class CloudKitUsageSnapshotStore {
 
         let profileRecord = makeProfileRecord(sharingProfile)
         let shareID = CKRecord.ID(recordName: "share-\(profile.id)", zoneID: privateZoneID)
-        let share = CKShare(rootRecord: profileRecord, shareID: shareID)
-        share[CKShare.SystemFieldKey.title] = "\(profile.displayName)'s Screen Time" as CKRecordValue
-        share[CKShare.SystemFieldKey.shareType] = "com.jdco.ScreenTimeSharing.profile" as CKRecordValue
-        share.publicPermission = .none
+        let existingShare = try await existingProfileShare(shareID: shareID, database: database)
+        let share = existingShare ?? CKShare(rootRecord: profileRecord, shareID: shareID)
+        configureProfileShare(share, profile: profile)
 
-        let result = try await container.privateCloudDatabase.modifyRecords(
-            saving: [profileRecord, share],
-            deleting: [],
-            savePolicy: .changedKeys,
-            atomically: true
-        )
-
-        for saveResult in result.saveResults.values {
-            _ = try saveResult.get()
+        let savedShare: CKShare
+        if existingShare == nil {
+            savedShare = try await saveNewShare(
+                rootRecord: profileRecord,
+                share: share,
+                in: database,
+                context: "Creating your invite link"
+            )
+        } else {
+            _ = try await saveRecord(
+                profileRecord,
+                in: database,
+                context: "Saving your share profile"
+            )
+            savedShare = try await saveShare(
+                share,
+                in: database,
+                context: "Updating your invite link"
+            )
         }
 
-        return (share, container)
+        var resolvedShare = savedShare
+        if resolvedShare.url == nil,
+           let refetchedShare = try await existingProfileShare(shareID: shareID, database: database) {
+            resolvedShare = refetchedShare
+        }
+
+        return (resolvedShare, container)
     }
+
+    func publishProfile(_ profile: UserProfile) async throws {
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
+        try await ensurePrivateZone(in: container)
+        let database = container.privateCloudDatabase
+        let shareID = CKRecord.ID(recordName: "share-\(profile.id)", zoneID: privateZoneID)
+        let existingShare = try await existingProfileShare(shareID: shareID, database: database)
+
+        var cloudProfile = profile
+        if existingShare != nil {
+            cloudProfile.shareStatus = .sharing
+        }
+
+        _ = try await saveRecord(
+            makeProfileRecord(cloudProfile),
+            in: database,
+            context: "Updating your profile"
+        )
+
+        if let existingShare {
+            configureProfileShare(existingShare, profile: profile)
+            _ = try await saveShare(
+                existingShare,
+                in: database,
+                context: "Updating your invite profile"
+            )
+        }
+
+        try? await publishAcceptedShareMirrors(profile: profile)
+    }
+
+    #if DEBUG
+    func bootstrapDevelopmentSchema(profile: UserProfile) async throws {
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
+        try await ensurePrivateZone(in: container)
+
+        let now = Date()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let dayStart = calendar.startOfDay(for: now)
+        let snapshot = DailyUsageSnapshot(
+            id: "schema-bootstrap-\(profile.id)",
+            ownerProfileID: profile.id,
+            date: dayStart,
+            calendarIdentifier: String(describing: calendar.identifier),
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            totalDuration: 60,
+            selectedAppDuration: 30,
+            pickupCount: 1,
+            appRows: [
+                SharedAppUsage(
+                    id: "schema-bootstrap-app",
+                    displayName: "Schema Bootstrap",
+                    bundleIdentifier: "com.jdco.schema-bootstrap",
+                    duration: 30
+                )
+            ],
+            lastUpdated: now,
+            capability: .fullAppDetail
+        )
+
+        var bootstrapProfile = profile
+        if bootstrapProfile.avatarImageData == nil {
+            bootstrapProfile.avatarImageData = Self.schemaBootstrapJPEGData
+        }
+        try await publish(profile: bootstrapProfile, snapshot: snapshot)
+        try await bootstrapAvatarImageDataField(profile: bootstrapProfile, in: container.privateCloudDatabase)
+
+        let requestID = "schema-bootstrap-\(profile.id)"
+        let request = BlockFriendRequest(
+            id: requestID,
+            groupID: "schema-bootstrap-group",
+            requestedSeconds: 5 * 60,
+            selectedFriendIDs: ["schema-bootstrap-friend"],
+            message: "Schema bootstrap",
+            requesterID: profile.id,
+            requesterDisplayName: profile.displayName,
+            createdAt: now,
+            expiresAt: now.addingTimeInterval(60 * 60),
+            photoReference: BlockFriendRequestPhotoReference(localIdentifier: "schema-bootstrap-photo")
+        )
+
+        try await publishFriendRequest(
+            request,
+            profile: profile,
+            photoData: Self.schemaBootstrapJPEGData
+        )
+
+        try await deleteSchemaBootstrapRecords(snapshot: snapshot, request: request, profile: profile, in: container.privateCloudDatabase)
+    }
+    #endif
 
     func publishFriendRequest(
         _ request: BlockFriendRequest,
@@ -190,25 +359,41 @@ final class CloudKitUsageSnapshotStore {
         }
 
         try await ensurePrivateZone(in: container)
+        let database = container.privateCloudDatabase
 
-        let profileRecord = makeProfileRecord(profile)
-        let requestRecord = try makeFriendRequestRecord(
-            request,
-            profileRecordID: profileRecord.recordID,
-            existingRecord: nil,
-            photoData: photoData
-        )
+        for friendID in request.selectedFriendIDs {
+            let inboxRecordID = inboxRecordID(ownerProfileID: profile.id, friendID: friendID)
+            let inboxRecord = try await ensureInboxRecord(
+                recordID: inboxRecordID,
+                ownerProfileID: profile.id,
+                friendID: friendID,
+                database: database
+            )
+            try await ensureInboxShare(
+                inboxRecord: inboxRecord,
+                friendID: friendID,
+                profile: profile,
+                database: database
+            )
 
-        let result = try await container.privateCloudDatabase.modifyRecords(
-            saving: [profileRecord, requestRecord.record],
-            deleting: [],
-            savePolicy: .changedKeys,
-            atomically: true
-        )
+            let requestRecord = try makeFriendRequestRecord(
+                request,
+                profileRecordID: inboxRecordID,
+                existingRecord: nil,
+                photoData: photoData
+            )
 
-        try requestRecord.cleanup()
-        for saveResult in result.saveResults.values {
-            _ = try saveResult.get()
+            let result = try await database.modifyRecords(
+                saving: [requestRecord.record],
+                deleting: [],
+                savePolicy: .changedKeys,
+                atomically: true
+            )
+
+            try requestRecord.cleanup()
+            for saveResult in result.saveResults.values {
+                _ = try saveResult.get()
+            }
         }
     }
 
@@ -231,6 +416,7 @@ final class CloudKitUsageSnapshotStore {
     }
 
     func fetchFriendRequests(
+        knownRequestIDs: Set<String> = [],
         savePhotoData: (String, Data) throws -> BlockFriendRequestPhotoReference
     ) async throws -> [BlockFriendRequest] {
         guard let container else {
@@ -239,24 +425,55 @@ final class CloudKitUsageSnapshotStore {
 
         try await ensurePrivateZone(in: container)
 
-        var requests: [BlockFriendRequest] = []
-        requests.append(
-            contentsOf: try await friendRequestRecords(in: container.privateCloudDatabase, zoneID: privateZoneID)
-                .compactMap { record in
-                    makeFriendRequest(record: record, savePhotoData: savePhotoData)
-                }
-        )
+        let knownRequestIDs = Set(knownRequestIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        var requestsByID: [String: BlockFriendRequest] = [:]
+        var firstQueryError: Error?
 
-        for zoneID in sharedZoneStore.load() {
-            requests.append(
-                contentsOf: try await friendRequestRecords(in: container.sharedCloudDatabase, zoneID: zoneID)
-                    .compactMap { record in
-                        makeFriendRequest(record: record, savePhotoData: savePhotoData)
-                    }
+        func merge(records: [CKRecord]) {
+            for request in records.compactMap({ makeFriendRequest(record: $0, savePhotoData: savePhotoData) }) {
+                requestsByID[request.id] = request
+            }
+        }
+
+        if !knownRequestIDs.isEmpty {
+            merge(
+                records: try await friendRequestRecords(
+                    ids: knownRequestIDs,
+                    in: container.privateCloudDatabase,
+                    zoneID: privateZoneID
+                )
             )
         }
 
-        return requests.sorted { friendRequestSortDate($0) > friendRequestSortDate($1) }
+        do {
+            merge(records: try await friendRequestRecords(in: container.privateCloudDatabase, zoneID: privateZoneID))
+        } catch {
+            firstQueryError = firstQueryError ?? error
+        }
+
+        for zoneID in sharedZoneStore.load() {
+            if !knownRequestIDs.isEmpty {
+                merge(
+                    records: try await friendRequestRecords(
+                        ids: knownRequestIDs,
+                        in: container.sharedCloudDatabase,
+                        zoneID: zoneID
+                    )
+                )
+            }
+
+            do {
+                merge(records: try await friendRequestRecords(in: container.sharedCloudDatabase, zoneID: zoneID))
+            } catch {
+                firstQueryError = firstQueryError ?? error
+            }
+        }
+
+        if requestsByID.isEmpty, let firstQueryError {
+            throw firstQueryError
+        }
+
+        return requestsByID.values.sorted { friendRequestSortDate($0) > friendRequestSortDate($1) }
     }
 
     func acceptShare(metadata: CKShare.Metadata) async throws {
@@ -267,47 +484,115 @@ final class CloudKitUsageSnapshotStore {
         let acceptingContainer = CKContainer(identifier: metadata.containerIdentifier)
         let result = try await acceptingContainer.accept([metadata])
 
-        for (_, shareResult) in result {
+        for (acceptedMetadata, shareResult) in result {
             let share = try shareResult.get()
-            sharedZoneStore.insert(share.recordID.zoneID)
+            sharedZoneStore.insert(
+                shareID: share.recordID,
+                rootRecordID: acceptedMetadata.hierarchicalRootRecordID
+            )
         }
     }
 
+    func publishAcceptedShareMirrors(
+        profile: UserProfile,
+        snapshot: DailyUsageSnapshot? = nil
+    ) async throws {
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
+        let shares = sharedZoneStore.loadShares()
+        guard !shares.isEmpty else {
+            return
+        }
+
+        let userRecordID = try await currentUserRecordID(in: container)
+        try await publishParticipantMirrors(
+            profile: profile,
+            snapshot: snapshot,
+            userRecordID: userRecordID,
+            shares: shares,
+            database: container.sharedCloudDatabase
+        )
+    }
+
+    func shareMetadata(for url: URL) async throws -> CKShare.Metadata {
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
+        let result = try await container.shareMetadatas(for: [url])
+        guard let metadataResult = result[url] else {
+            throw CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                context: "Loading friend invite",
+                reason: "iCloud did not return share metadata for this link."
+            )
+        }
+
+        return try metadataResult.get()
+    }
+
     func fetchFriendSummaries(now: Date = Date()) async throws -> [FriendUsageSummary] {
+        try await fetchFriendSummaries(for: nil, now: now)
+    }
+
+    func fetchFriendSummaries(for currentProfile: UserProfile, now: Date = Date()) async throws -> [FriendUsageSummary] {
+        try await fetchFriendSummaries(for: Optional(currentProfile), now: now)
+    }
+
+    private func fetchFriendSummaries(for currentProfile: UserProfile?, now: Date) async throws -> [FriendUsageSummary] {
         guard let container else {
             return []
         }
 
-        var summaries: [FriendUsageSummary] = []
+        var summariesByID: [String: FriendUsageSummary] = [:]
 
-        for zoneID in sharedZoneStore.load() {
-            async let profileRecords = records(
-                ofType: RecordType.userProfile,
-                in: container.sharedCloudDatabase,
-                zoneID: zoneID,
-                sortedBy: Field.updatedAt
-            )
-            async let snapshotRecords = records(
-                ofType: RecordType.dailyUsageSnapshot,
-                in: container.sharedCloudDatabase,
-                zoneID: zoneID,
-                sortedBy: Field.lastUpdated
-            )
+        func merge(_ summary: FriendUsageSummary) {
+            if let existing = summariesByID[summary.id] {
+                summariesByID[summary.id] = preferredSummary(existing, summary)
+            } else {
+                summariesByID[summary.id] = summary
+            }
+        }
 
-            guard let profileRecord = try await profileRecords.first else {
+        for share in sharedZoneStore.loadShares() {
+            let zoneID = share.zoneID
+            guard let profileRecord = try await sharedProfileRecord(
+                rootRecordID: share.rootRecordID,
+                database: container.sharedCloudDatabase,
+                zoneID: zoneID
+            ) else {
                 continue
             }
-            let snapshotRecord = try? await snapshotRecords.first
+            let snapshotRecord = try await latestSharedSnapshotRecord(
+                for: profileRecord,
+                database: container.sharedCloudDatabase,
+                zoneID: zoneID,
+                now: now
+            )
+
+            let shareRecord = try await sharedShareRecord(
+                share: share,
+                profileID: profileID(from: profileRecord),
+                database: container.sharedCloudDatabase
+            )
 
             let summary = makeFriendSummary(
                 profileRecord: profileRecord,
                 snapshotRecord: snapshotRecord,
+                shareRecord: shareRecord,
                 now: now
             )
-            summaries.append(summary)
+            merge(summary)
         }
 
-        return summaries.sorted { lhs, rhs in
+        if let currentProfile {
+            for summary in try await acceptedParticipantSummaries(for: currentProfile, now: now) {
+                merge(summary)
+            }
+        }
+
+        return summariesByID.values.sorted { lhs, rhs in
             (lhs.lastUpdated ?? .distantPast) > (rhs.lastUpdated ?? .distantPast)
         }
     }
@@ -334,15 +619,344 @@ final class CloudKitUsageSnapshotStore {
         }
     }
 
+    private func inboxRecordID(ownerProfileID: String, friendID: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: "inbox-\(ownerProfileID)-\(friendID)", zoneID: privateZoneID)
+    }
+
+    private func ensureInboxRecord(
+        recordID: CKRecord.ID,
+        ownerProfileID: String,
+        friendID: String,
+        database: CKDatabase
+    ) async throws -> CKRecord {
+        let response = try await database.records(for: [recordID])
+        if let result = response[recordID] {
+            do {
+                return try result.get()
+            } catch {
+                if !isUnknownItemError(error) {
+                    throw error
+                }
+            }
+        }
+
+        let record = CKRecord(recordType: RecordType.friendInbox, recordID: recordID)
+        record[Field.inboxOwnerProfileID] = ownerProfileID as CKRecordValue
+        record[Field.inboxFriendID] = friendID as CKRecordValue
+        record[Field.createdAt] = Date() as CKRecordValue
+
+        let saveResult = try await database.modifyRecords(
+            saving: [record],
+            deleting: [],
+            savePolicy: .changedKeys,
+            atomically: false
+        )
+
+        return try savedRecord(for: recordID, from: saveResult.saveResults, context: "Creating friend inbox")
+    }
+
+    private func ensureInboxShare(
+        inboxRecord: CKRecord,
+        friendID: String,
+        profile: UserProfile,
+        database: CKDatabase
+    ) async throws {
+        let shareID = CKRecord.ID(
+            recordName: "inbox-share-\(profile.id)-\(friendID)",
+            zoneID: privateZoneID
+        )
+
+        if let existingShare = try await existingProfileShare(shareID: shareID, database: database) {
+            if existingShare.publicPermission != .none {
+                existingShare.publicPermission = .none
+                _ = try await saveShare(existingShare, in: database, context: "Restricting inbox share")
+            }
+            return
+        }
+
+        let share = CKShare(rootRecord: inboxRecord, shareID: shareID)
+        share[CKShare.SystemFieldKey.title] = "Friend Requests" as CKRecordValue
+        share.publicPermission = .none
+
+        _ = try await saveNewShare(
+            rootRecord: inboxRecord,
+            share: share,
+            in: database,
+            context: "Creating friend inbox share"
+        )
+    }
+
+    private func inboxZoneIDs(for friendID: String, in database: CKDatabase) async throws -> [CKRecordZone.ID] {
+        var zoneIDs: [CKRecordZone.ID] = [privateZoneID]
+        zoneIDs.append(contentsOf: sharedZoneStore.load())
+        return zoneIDs
+    }
+
+    func migrateLegacyFriendRequests(profile: UserProfile) async throws {
+        guard let container else {
+            return
+        }
+
+        try await ensurePrivateZone(in: container)
+        let database = container.privateCloudDatabase
+
+        let query = CKQuery(
+            recordType: RecordType.friendTimeRequest,
+            predicate: NSPredicate(format: "%K == %@", Field.requesterID, profile.id)
+        )
+
+        let response: (matchResults: [(CKRecord.ID, Result<CKRecord, any Error>)], queryCursor: CKQueryOperation.Cursor?)
+        do {
+            response = try await database.records(
+                matching: query,
+                inZoneWith: privateZoneID,
+                desiredKeys: [Field.requestID],
+                resultsLimit: 200
+            )
+        } catch {
+            if isUnknownItemError(error) {
+                return
+            }
+            throw error
+        }
+
+        let legacyRecordIDs = response.matchResults.compactMap { recordID, result -> CKRecord.ID? in
+            guard let record = try? result.get() else {
+                return nil
+            }
+            if record.parent?.recordID.recordName.hasPrefix("inbox-") == true {
+                return nil
+            }
+            return record.recordID
+        }
+
+        guard !legacyRecordIDs.isEmpty else {
+            return
+        }
+
+        let deleteResult = try await database.modifyRecords(
+            saving: [],
+            deleting: legacyRecordIDs,
+            savePolicy: .changedKeys,
+            atomically: false
+        )
+
+        for result in deleteResult.deleteResults.values {
+            do {
+                _ = try result.get()
+            } catch {
+                if !isUnknownItemError(error) {
+                    throw error
+                }
+            }
+        }
+    }
+
+    private func currentUserRecordID(in container: CKContainer) async throws -> CKRecord.ID {
+        try await withCheckedThrowingContinuation { continuation in
+            container.fetchUserRecordID { recordID, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                guard let recordID else {
+                    continuation.resume(
+                        throwing: CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                            context: "Loading your iCloud user",
+                            reason: "iCloud did not return a user record ID."
+                        )
+                    )
+                    return
+                }
+
+                continuation.resume(returning: recordID)
+            }
+        }
+    }
+
+    private func existingProfileShare(shareID: CKRecord.ID, database: CKDatabase) async throws -> CKShare? {
+        let records = try await database.records(for: [shareID])
+        guard let recordResult = records[shareID] else {
+            return nil
+        }
+
+        do {
+            return try recordResult.get() as? CKShare
+        } catch {
+            if let cloudError = error as? CKError,
+               cloudError.code == .unknownItem {
+                return nil
+            }
+
+            throw error
+        }
+    }
+
+    private func saveRecord(_ record: CKRecord, in database: CKDatabase, context: String) async throws -> CKRecord {
+        do {
+            let result = try await database.modifyRecords(
+                saving: [record],
+                deleting: [],
+                savePolicy: .changedKeys,
+                atomically: false
+            )
+
+            return try savedRecord(
+                for: record.recordID,
+                from: result.saveResults,
+                context: context
+            )
+        } catch {
+            if let storeError = error as? CloudKitUsageSnapshotStoreError {
+                throw storeError
+            }
+
+            throw CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                context: context,
+                reason: cloudKitFailureMessage(for: error)
+            )
+        }
+    }
+
+    private func saveShare(_ share: CKShare, in database: CKDatabase, context: String) async throws -> CKShare {
+        let record = try await saveRecord(share, in: database, context: context)
+        guard let savedShare = record as? CKShare else {
+            throw CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                context: context,
+                reason: "iCloud did not return a share record."
+            )
+        }
+
+        return savedShare
+    }
+
+    private func saveNewShare(
+        rootRecord: CKRecord,
+        share: CKShare,
+        in database: CKDatabase,
+        context: String
+    ) async throws -> CKShare {
+        do {
+            let result = try await database.modifyRecords(
+                saving: [rootRecord, share],
+                deleting: [],
+                savePolicy: .changedKeys,
+                atomically: true
+            )
+
+            let record = try savedRecord(
+                for: share.recordID,
+                from: result.saveResults,
+                context: context
+            )
+            guard let savedShare = record as? CKShare else {
+                throw CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                    context: context,
+                    reason: "iCloud did not return a share record."
+                )
+            }
+
+            return savedShare
+        } catch {
+            if let storeError = error as? CloudKitUsageSnapshotStoreError {
+                throw storeError
+            }
+
+            throw CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                context: context,
+                reason: cloudKitFailureMessage(for: error)
+            )
+        }
+    }
+
+    private func savedRecord(
+        for recordID: CKRecord.ID,
+        from saveResults: [CKRecord.ID: Result<CKRecord, any Error>],
+        context: String
+    ) throws -> CKRecord {
+        guard let saveResult = saveResults[recordID] else {
+            throw CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                context: context,
+                reason: "iCloud did not return a save result."
+            )
+        }
+
+        do {
+            return try saveResult.get()
+        } catch {
+            throw CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                context: context,
+                reason: cloudKitFailureMessage(for: error)
+            )
+        }
+    }
+
+    private func cloudKitFailureMessage(for error: Error) -> String {
+        guard let ckError = error as? CKError else {
+            return error.localizedDescription
+        }
+
+        let detail = (ckError.partialErrorsByItemID ?? [:])
+            .map { item in
+                "\(String(describing: item.key)): \(item.value.localizedDescription)"
+            }
+            .sorted()
+            .joined(separator: " ")
+
+        var message = detail.isEmpty ? ckError.localizedDescription : detail
+
+        if ckError.code == .serverRejectedRequest || ckError.code == .unknownItem {
+            message += " In TestFlight this usually means the CloudKit Production schema has not been deployed for this container."
+        }
+
+        return message
+    }
+
     private func makeProfileRecord(_ profile: UserProfile) -> CKRecord {
         let recordID = CKRecord.ID(recordName: "profile-\(profile.id)", zoneID: privateZoneID)
+        return makeProfileRecord(profile, recordID: recordID, includesAvatarImageData: true)
+    }
+
+    private func makeProfileRecord(
+        _ profile: UserProfile,
+        recordID: CKRecord.ID,
+        parentRecordID: CKRecord.ID? = nil,
+        includesAvatarImageData: Bool = false
+    ) -> CKRecord {
         let record = CKRecord(recordType: RecordType.userProfile, recordID: recordID)
+        if let parentRecordID {
+            record.parent = CKRecord.Reference(recordID: parentRecordID, action: .none)
+        }
         record[Field.ownerProfileID] = profile.id as CKRecordValue
+        if let appleUserID = profile.appleUserID, !appleUserID.isEmpty {
+            record[Field.appleUserID] = appleUserID as CKRecordValue
+        }
         record[Field.displayName] = profile.displayName as CKRecordValue
         record[Field.avatarColorHex] = profile.avatarColorHex as CKRecordValue
+        if includesAvatarImageData,
+           let avatarImageData = profile.avatarImageData,
+           !avatarImageData.isEmpty {
+            record[Field.avatarImageData] = avatarImageData as CKRecordValue
+        }
         record[Field.shareStatus] = profile.shareStatus.rawValue as CKRecordValue
         record[Field.updatedAt] = profile.updatedAt as CKRecordValue
         return record
+    }
+
+    private func configureProfileShare(_ share: CKShare, profile: UserProfile) {
+        share[CKShare.SystemFieldKey.title] = "\(profile.displayName)'s Screen Time" as CKRecordValue
+        share[CKShare.SystemFieldKey.shareType] = "com.jdco.ScreenTimeSharing.profile" as CKRecordValue
+        if let avatarImageData = profile.avatarImageData, !avatarImageData.isEmpty {
+            share[CKShare.SystemFieldKey.thumbnailImageData] = avatarImageData as CKRecordValue
+        } else {
+            share[CKShare.SystemFieldKey.thumbnailImageData] = nil
+        }
+        // Participants must write their own `participant-profile-*` mirror record
+        // back into this shared zone for bi-directional discovery, so the share
+        // needs write access. The privacy boundary is enforced per-record-type,
+        // not by share permission.
+        share.publicPermission = .readWrite
     }
 
     private func makeSnapshotRecord(
@@ -350,6 +964,14 @@ final class CloudKitUsageSnapshotStore {
         profileRecordID: CKRecord.ID
     ) -> CKRecord {
         let recordID = CKRecord.ID(recordName: "snapshot-\(payload.recordName)", zoneID: privateZoneID)
+        return makeSnapshotRecord(payload, profileRecordID: profileRecordID, recordID: recordID)
+    }
+
+    private func makeSnapshotRecord(
+        _ payload: DailyUsageSnapshotRecordPayload,
+        profileRecordID: CKRecord.ID,
+        recordID: CKRecord.ID
+    ) -> CKRecord {
         let record = CKRecord(recordType: RecordType.dailyUsageSnapshot, recordID: recordID)
         record.parent = CKRecord.Reference(recordID: profileRecordID, action: .none)
         record[Field.profileReference] = CKRecord.Reference(recordID: profileRecordID, action: .none)
@@ -379,6 +1001,75 @@ final class CloudKitUsageSnapshotStore {
         return record
     }
 
+    #if DEBUG
+    private static let schemaBootstrapJPEGData = Data([0xFF, 0xD8, 0xFF, 0xD9])
+
+    private func bootstrapAvatarImageDataField(profile: UserProfile, in database: CKDatabase) async throws {
+        let recordID = CKRecord.ID(recordName: "schema-bootstrap-avatar-\(profile.id)", zoneID: privateZoneID)
+        let record = makeProfileRecord(profile, recordID: recordID, includesAvatarImageData: true)
+        let saveResult = try await database.modifyRecords(
+            saving: [record],
+            deleting: [],
+            savePolicy: .changedKeys,
+            atomically: false
+        )
+
+        for result in saveResult.saveResults.values {
+            _ = try result.get()
+        }
+
+        let deleteResult = try await database.modifyRecords(
+            saving: [],
+            deleting: [recordID],
+            savePolicy: .changedKeys,
+            atomically: false
+        )
+
+        for result in deleteResult.deleteResults.values {
+            _ = try result.get()
+        }
+    }
+
+    private func deleteSchemaBootstrapRecords(
+        snapshot: DailyUsageSnapshot,
+        request: BlockFriendRequest,
+        profile: UserProfile,
+        in database: CKDatabase
+    ) async throws {
+        let payload = try SnapshotRecordPayloadMapper.payload(from: snapshot)
+        var recordIDs: [CKRecord.ID] = []
+        if let snapshotPayload = payload {
+            recordIDs.append(CKRecord.ID(recordName: "snapshot-\(snapshotPayload.recordName)", zoneID: privateZoneID))
+        }
+        recordIDs.append(CKRecord.ID(recordName: "friend-request-\(request.id)", zoneID: privateZoneID))
+        for friendID in request.selectedFriendIDs {
+            recordIDs.append(CKRecord.ID(recordName: "inbox-share-\(profile.id)-\(friendID)", zoneID: privateZoneID))
+            recordIDs.append(CKRecord.ID(recordName: "inbox-\(profile.id)-\(friendID)", zoneID: privateZoneID))
+        }
+
+        guard !recordIDs.isEmpty else {
+            return
+        }
+
+        let result = try await database.modifyRecords(
+            saving: [],
+            deleting: recordIDs,
+            savePolicy: .changedKeys,
+            atomically: false
+        )
+
+        for deleteResult in result.deleteResults.values {
+            do {
+                _ = try deleteResult.get()
+            } catch {
+                if !isUnknownItemError(error) {
+                    throw error
+                }
+            }
+        }
+    }
+    #endif
+
     private func records(
         ofType recordType: String,
         in database: CKDatabase,
@@ -400,8 +1091,318 @@ final class CloudKitUsageSnapshotStore {
         }
     }
 
+    private func sharedProfileRecord(
+        rootRecordID: CKRecord.ID?,
+        database: CKDatabase,
+        zoneID: CKRecordZone.ID
+    ) async throws -> CKRecord? {
+        if let rootRecordID {
+            let response = try await database.records(for: [rootRecordID])
+            if let result = response[rootRecordID] {
+                do {
+                    return try result.get()
+                } catch {
+                    if !isUnknownItemError(error) {
+                        throw error
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func latestSharedSnapshotRecord(
+        for profileRecord: CKRecord,
+        database: CKDatabase,
+        zoneID: CKRecordZone.ID,
+        now: Date
+    ) async throws -> CKRecord? {
+        let profileID = profileID(from: profileRecord)
+        let recordIDs = recentSnapshotRecordIDs(profileID: profileID, zoneID: zoneID, now: now)
+        guard !recordIDs.isEmpty else {
+            return nil
+        }
+
+        let response = try await database.records(for: recordIDs)
+        let records = response.compactMap { _, result -> CKRecord? in
+            try? result.get()
+        }
+
+        return records.max { lhs, rhs in
+            let lhsDate = lhs[Field.lastUpdated] as? Date ?? .distantPast
+            let rhsDate = rhs[Field.lastUpdated] as? Date ?? .distantPast
+            return lhsDate < rhsDate
+        }
+    }
+
+    private func recentSnapshotRecordIDs(
+        profileID: String,
+        zoneID: CKRecordZone.ID,
+        now: Date,
+        dayCount: Int = 14
+    ) -> [CKRecord.ID] {
+        var currentCalendar = Calendar(identifier: .gregorian)
+        currentCalendar.timeZone = .current
+
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+
+        var recordNames: [String] = []
+        var seenRecordNames = Set<String>()
+
+        for calendar in [currentCalendar, utcCalendar] {
+            for offset in -1...dayCount {
+                guard let date = calendar.date(byAdding: .day, value: -offset, to: now) else {
+                    continue
+                }
+
+                let snapshotID = UsageDateBoundary.snapshotID(
+                    profileID: profileID,
+                    date: date,
+                    calendar: calendar
+                )
+                let recordName = "snapshot-\(snapshotID)"
+                guard seenRecordNames.insert(recordName).inserted else {
+                    continue
+                }
+                recordNames.append(recordName)
+            }
+        }
+
+        return recordNames.map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
+    }
+
+    private func sharedShareRecord(
+        share: SharedZoneStore.AcceptedShare,
+        profileID: String,
+        database: CKDatabase
+    ) async throws -> CKShare? {
+        var recordIDs: [CKRecord.ID] = []
+        var seenRecordNames = Set<String>()
+
+        for recordID in [
+            share.shareID,
+            CKRecord.ID(recordName: "share-\(profileID)", zoneID: share.zoneID)
+        ].compactMap({ $0 }) where seenRecordNames.insert(recordID.recordName).inserted {
+            recordIDs.append(recordID)
+        }
+
+        guard !recordIDs.isEmpty else {
+            return nil
+        }
+
+        let response = try await database.records(for: recordIDs)
+        for recordID in recordIDs {
+            guard let result = response[recordID] else {
+                continue
+            }
+
+            do {
+                if let share = try result.get() as? CKShare {
+                    return share
+                }
+            } catch {
+                if !isUnknownItemError(error) {
+                    throw error
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func acceptedParticipantSummaries(
+        for profile: UserProfile,
+        now: Date
+    ) async throws -> [FriendUsageSummary] {
+        guard let container else {
+            return []
+        }
+
+        let database = container.privateCloudDatabase
+        var recordIDs: [CKRecord.ID] = []
+        var seenRecordNames = Set<String>()
+
+        let shareID = CKRecord.ID(recordName: "share-\(profile.id)", zoneID: privateZoneID)
+        if let share = try await existingProfileShare(shareID: shareID, database: database) {
+            for id in acceptedParticipantProfileRecordIDs(from: share, zoneID: privateZoneID)
+                where seenRecordNames.insert(id.recordName).inserted {
+                recordIDs.append(id)
+            }
+        }
+
+        let participantQuery = CKQuery(
+            recordType: RecordType.userProfile,
+            predicate: NSPredicate(format: "%K != %@", Field.ownerProfileID, profile.id)
+        )
+        do {
+            let queryResponse = try await database.records(
+                matching: participantQuery,
+                inZoneWith: privateZoneID,
+                desiredKeys: nil,
+                resultsLimit: 50
+            )
+            for (_, result) in queryResponse.matchResults {
+                if let record = try? result.get(),
+                   record.recordID.recordName.hasPrefix("participant-profile-"),
+                   seenRecordNames.insert(record.recordID.recordName).inserted {
+                    recordIDs.append(record.recordID)
+                }
+            }
+        } catch {
+            if !isUnknownItemError(error) {
+                throw error
+            }
+        }
+
+        guard !recordIDs.isEmpty else {
+            return []
+        }
+
+        let response = try await database.records(for: recordIDs)
+        var summaries: [FriendUsageSummary] = []
+
+        for recordID in recordIDs {
+            guard let result = response[recordID] else {
+                continue
+            }
+
+            let profileRecord: CKRecord
+            do {
+                profileRecord = try result.get()
+            } catch {
+                if isUnknownItemError(error) {
+                    continue
+                }
+                throw error
+            }
+
+            let snapshotRecord = try await latestSharedSnapshotRecord(
+                for: profileRecord,
+                database: database,
+                zoneID: privateZoneID,
+                now: now
+            )
+            summaries.append(
+                makeFriendSummary(
+                    profileRecord: profileRecord,
+                    snapshotRecord: snapshotRecord,
+                    shareRecord: nil,
+                    now: now
+                )
+            )
+        }
+
+        return summaries
+    }
+
+    private func acceptedParticipantProfileRecordIDs(from share: CKShare, zoneID: CKRecordZone.ID) -> [CKRecord.ID] {
+        var seenRecordNames = Set<String>()
+        return share.participants.compactMap { participant in
+            guard participant.acceptanceStatus == .accepted,
+                  participant.role != .owner,
+                  let userRecordID = participant.userIdentity.userRecordID else {
+                return nil
+            }
+
+            let recordName = participantProfileRecordName(for: userRecordID)
+            guard seenRecordNames.insert(recordName).inserted else {
+                return nil
+            }
+
+            return CKRecord.ID(recordName: recordName, zoneID: zoneID)
+        }
+    }
+
+    private func publishParticipantMirrors(
+        profile: UserProfile,
+        snapshot: DailyUsageSnapshot?,
+        userRecordID: CKRecord.ID,
+        shares: [SharedZoneStore.AcceptedShare],
+        database: CKDatabase
+    ) async throws {
+        for share in shares {
+            guard let rootRecordID = share.rootRecordID else {
+                continue
+            }
+
+            let profileRecordID = CKRecord.ID(
+                recordName: participantProfileRecordName(for: userRecordID),
+                zoneID: share.zoneID
+            )
+            let profileRecord = makeProfileRecord(
+                profile,
+                recordID: profileRecordID,
+                parentRecordID: rootRecordID,
+                includesAvatarImageData: true
+            )
+            var recordsToSave = [profileRecord]
+
+            if let snapshot,
+               let payload = try SnapshotRecordPayloadMapper.payload(from: snapshot) {
+                let snapshotRecordID = CKRecord.ID(
+                    recordName: "snapshot-\(payload.recordName)",
+                    zoneID: share.zoneID
+                )
+                recordsToSave.append(
+                    makeSnapshotRecord(
+                        payload,
+                        profileRecordID: profileRecordID,
+                        recordID: snapshotRecordID
+                    )
+                )
+            }
+
+            do {
+                try await saveParticipantMirrorRecords(recordsToSave, in: database)
+            } catch {
+                guard profile.avatarImageData != nil else {
+                    throw error
+                }
+
+                recordsToSave[0] = makeProfileRecord(
+                    profile,
+                    recordID: profileRecordID,
+                    parentRecordID: rootRecordID,
+                    includesAvatarImageData: false
+                )
+                try await saveParticipantMirrorRecords(recordsToSave, in: database)
+            }
+        }
+    }
+
+    private func saveParticipantMirrorRecords(_ records: [CKRecord], in database: CKDatabase) async throws {
+        let result = try await database.modifyRecords(
+            saving: records,
+            deleting: [],
+            savePolicy: .changedKeys,
+            atomically: false
+        )
+
+        for saveResult in result.saveResults.values {
+            _ = try saveResult.get()
+        }
+    }
+
+    private func participantProfileRecordName(for userRecordID: CKRecord.ID) -> String {
+        "participant-profile-\(recordNameComponent(for: userRecordID.recordName))"
+    }
+
+    private func recordNameComponent(for value: String) -> String {
+        let encoded = Data(value.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return encoded.isEmpty ? "unknown" : encoded
+    }
+
     private func friendRequestRecords(in database: CKDatabase, zoneID: CKRecordZone.ID) async throws -> [CKRecord] {
-        let query = CKQuery(recordType: RecordType.friendTimeRequest, predicate: NSPredicate(value: true))
+        let query = CKQuery(
+            recordType: RecordType.friendTimeRequest,
+            predicate: NSPredicate(format: "%K IN %@", Field.status, BlockRequestStatus.allCases.map(\.rawValue))
+        )
 
         do {
             let response = try await database.records(
@@ -413,6 +1414,29 @@ final class CloudKitUsageSnapshotStore {
 
             return try response.matchResults.map { _, result in
                 try result.get()
+            }
+        } catch {
+            if isUnknownItemError(error) {
+                return []
+            }
+            throw error
+        }
+    }
+
+    private func friendRequestRecords(
+        ids: Set<String>,
+        in database: CKDatabase,
+        zoneID: CKRecordZone.ID
+    ) async throws -> [CKRecord] {
+        let recordIDs = ids.map { CKRecord.ID(recordName: "friend-request-\($0)", zoneID: zoneID) }
+        guard !recordIDs.isEmpty else {
+            return []
+        }
+
+        do {
+            let response = try await database.records(for: recordIDs)
+            return response.compactMap { _, result in
+                try? result.get()
             }
         } catch {
             if isUnknownItemError(error) {
@@ -609,18 +1633,20 @@ final class CloudKitUsageSnapshotStore {
             return false
         }
 
-        return ckError.code == .unknownItem
+        return ckError.code == .unknownItem || ckError.code == .zoneNotFound
     }
 
     private func makeFriendSummary(
         profileRecord: CKRecord,
         snapshotRecord: CKRecord?,
+        shareRecord: CKShare?,
         now: Date
     ) -> FriendUsageSummary {
-        let profileID = profileRecord[Field.ownerProfileID] as? String
-            ?? profileRecord.recordID.recordName.replacingOccurrences(of: "profile-", with: "")
-        let displayName = profileRecord[Field.displayName] as? String ?? "Friend"
+        let profileID = profileID(from: profileRecord)
+        let profileDisplayName = profileRecord[Field.displayName] as? String
+        let displayName = resolvedDisplayName(profileDisplayName: profileDisplayName, shareRecord: shareRecord)
         let avatarColorHex = profileRecord[Field.avatarColorHex] as? String ?? AppConfiguration.defaultAvatarColor
+        let avatarImageData = shareRecord.flatMap(shareThumbnailImageData) ?? profileAvatarImageData(from: profileRecord)
         let totalDuration = (snapshotRecord?[Field.totalDuration] as? NSNumber)?.doubleValue
         let selectedAppDuration = (snapshotRecord?[Field.selectedAppDuration] as? NSNumber)?.doubleValue
         let lastUpdated = snapshotRecord?[Field.lastUpdated] as? Date
@@ -632,12 +1658,99 @@ final class CloudKitUsageSnapshotStore {
             id: profileID,
             displayName: displayName,
             avatarColorHex: avatarColorHex,
+            avatarImageData: avatarImageData,
             totalDuration: totalDuration,
             selectedAppDuration: selectedAppDuration,
             capability: ScreenTimeCapability(status: status, reason: reason),
             lastUpdated: lastUpdated,
             isStale: lastUpdated.map { now.timeIntervalSince($0) > 3_600 } ?? true
         )
+    }
+
+    private func preferredSummary(_ lhs: FriendUsageSummary, _ rhs: FriendUsageSummary) -> FriendUsageSummary {
+        let lhsDate = lhs.lastUpdated ?? .distantPast
+        let rhsDate = rhs.lastUpdated ?? .distantPast
+        var preferred = rhsDate >= lhsDate ? rhs : lhs
+        let fallback = rhsDate >= lhsDate ? lhs : rhs
+
+        if preferred.avatarImageData == nil {
+            preferred.avatarImageData = fallback.avatarImageData
+        }
+
+        if preferred.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || preferred.displayName.localizedCaseInsensitiveCompare("Friend") == .orderedSame
+            || preferred.displayName.localizedCaseInsensitiveCompare("Me") == .orderedSame {
+            preferred.displayName = fallback.displayName
+        }
+
+        if preferred.totalDuration == nil {
+            preferred.totalDuration = fallback.totalDuration
+            preferred.selectedAppDuration = fallback.selectedAppDuration
+            preferred.capability = fallback.capability
+            preferred.lastUpdated = fallback.lastUpdated
+            preferred.isStale = fallback.isStale
+        }
+
+        return preferred
+    }
+
+    private func resolvedDisplayName(profileDisplayName: String?, shareRecord: CKShare?) -> String {
+        let trimmedProfileName = profileDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedProfileName.isEmpty,
+           trimmedProfileName.localizedCaseInsensitiveCompare("Me") != .orderedSame {
+            return trimmedProfileName
+        }
+
+        if let shareTitle = shareRecord?[CKShare.SystemFieldKey.title] as? String,
+           let titleName = profileName(fromShareTitle: shareTitle) {
+            return titleName
+        }
+
+        return trimmedProfileName.isEmpty ? "Friend" : trimmedProfileName
+    }
+
+    private func profileName(fromShareTitle title: String) -> String? {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffixes = ["'s Screen Time", "’s Screen Time"]
+
+        for suffix in suffixes where trimmedTitle.hasSuffix(suffix) {
+            let name = String(trimmedTitle.dropLast(suffix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty, name.localizedCaseInsensitiveCompare("Me") != .orderedSame {
+                return name
+            }
+        }
+
+        return nil
+    }
+
+    private func shareThumbnailImageData(_ share: CKShare) -> Data? {
+        if let data = share[CKShare.SystemFieldKey.thumbnailImageData] as? Data {
+            return data
+        }
+
+        if let data = share[CKShare.SystemFieldKey.thumbnailImageData] as? NSData {
+            return data as Data
+        }
+
+        return nil
+    }
+
+    private func profileAvatarImageData(from profileRecord: CKRecord) -> Data? {
+        if let data = profileRecord[Field.avatarImageData] as? Data {
+            return data
+        }
+
+        if let data = profileRecord[Field.avatarImageData] as? NSData {
+            return data as Data
+        }
+
+        return nil
+    }
+
+    private func profileID(from profileRecord: CKRecord) -> String {
+        profileRecord[Field.ownerProfileID] as? String
+            ?? profileRecord.recordID.recordName.replacingOccurrences(of: "profile-", with: "")
     }
 
     private func friendRequestSortDate(_ request: BlockFriendRequest) -> Date {
@@ -647,9 +1760,29 @@ final class CloudKitUsageSnapshotStore {
 
 @MainActor
 final class SharedZoneStore {
-    private struct StoredZone: Codable, Hashable {
+    struct AcceptedShare: Equatable {
+        var zoneID: CKRecordZone.ID
+        var rootRecordID: CKRecord.ID?
+        var shareID: CKRecord.ID?
+    }
+
+    private struct StoredShare: Codable, Equatable {
         var zoneName: String
         var ownerName: String
+        var rootRecordName: String?
+        var shareRecordName: String?
+
+        var zoneID: CKRecordZone.ID {
+            CKRecordZone.ID(zoneName: zoneName, ownerName: ownerName)
+        }
+
+        var rootRecordID: CKRecord.ID? {
+            rootRecordName.map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
+        }
+
+        var shareID: CKRecord.ID? {
+            shareRecordName.map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
+        }
     }
 
     private let defaults: UserDefaults
@@ -660,23 +1793,44 @@ final class SharedZoneStore {
     }
 
     func load() -> [CKRecordZone.ID] {
-        guard let data = defaults.data(forKey: key),
-              let zones = try? JSONDecoder().decode([StoredZone].self, from: data) else {
-            return []
-        }
+        loadShares().map(\.zoneID)
+    }
 
-        return zones.map {
-            CKRecordZone.ID(zoneName: $0.zoneName, ownerName: $0.ownerName)
+    func loadShares() -> [AcceptedShare] {
+        loadStoredShares().map { share in
+            AcceptedShare(zoneID: share.zoneID, rootRecordID: share.rootRecordID, shareID: share.shareID)
         }
     }
 
-    func insert(_ zoneID: CKRecordZone.ID) {
-        var zones = Set(load().map {
-            StoredZone(zoneName: $0.zoneName, ownerName: $0.ownerName)
-        })
-        zones.insert(StoredZone(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName))
+    func insert(shareID: CKRecord.ID, rootRecordID: CKRecord.ID?) {
+        var shares = loadStoredShares()
+        shares.removeAll { storedShare in
+            storedShare.zoneName == shareID.zoneID.zoneName
+                && storedShare.ownerName == shareID.zoneID.ownerName
+        }
+        shares.append(
+            StoredShare(
+                zoneName: shareID.zoneID.zoneName,
+                ownerName: shareID.zoneID.ownerName,
+                rootRecordName: rootRecordID?.recordName,
+                shareRecordName: shareID.recordName
+            )
+        )
 
-        guard let data = try? JSONEncoder().encode(Array(zones)) else {
+        save(shares)
+    }
+
+    private func loadStoredShares() -> [StoredShare] {
+        guard let data = defaults.data(forKey: key),
+              let shares = try? JSONDecoder().decode([StoredShare].self, from: data) else {
+            return []
+        }
+
+        return shares
+    }
+
+    private func save(_ shares: [StoredShare]) {
+        guard let data = try? JSONEncoder().encode(shares) else {
             return
         }
         defaults.set(data, forKey: key)

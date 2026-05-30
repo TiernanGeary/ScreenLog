@@ -7,6 +7,10 @@ public enum UsageFormatting {
         }
 
         let seconds = max(0, Int(duration.rounded()))
+        if seconds > 0 && seconds < 60 {
+            return "<1m"
+        }
+
         let hours = seconds / 3_600
         let minutes = (seconds % 3_600) / 60
 

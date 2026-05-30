@@ -4,6 +4,7 @@ public struct FriendUsageSummary: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var displayName: String
     public var avatarColorHex: String
+    public var avatarImageData: Data?
     public var totalDuration: TimeInterval?
     public var selectedAppDuration: TimeInterval?
     public var capability: ScreenTimeCapability
@@ -14,6 +15,7 @@ public struct FriendUsageSummary: Codable, Equatable, Identifiable, Sendable {
         id: String,
         displayName: String,
         avatarColorHex: String,
+        avatarImageData: Data? = nil,
         totalDuration: TimeInterval?,
         selectedAppDuration: TimeInterval?,
         capability: ScreenTimeCapability,
@@ -23,6 +25,7 @@ public struct FriendUsageSummary: Codable, Equatable, Identifiable, Sendable {
         self.id = id
         self.displayName = displayName
         self.avatarColorHex = avatarColorHex
+        self.avatarImageData = avatarImageData
         self.totalDuration = totalDuration
         self.selectedAppDuration = selectedAppDuration
         self.capability = capability

@@ -5,7 +5,7 @@ import Foundation
 @Test func durationFormattingUsesCompactHoursAndMinutes() {
     #expect(UsageFormatting.duration(nil) == "Unavailable")
     #expect(UsageFormatting.duration(0) == "0m")
-    #expect(UsageFormatting.duration(59) == "0m")
+    #expect(UsageFormatting.duration(59) == "<1m")
     #expect(UsageFormatting.duration(60) == "1m")
     #expect(UsageFormatting.duration(3_600) == "1h")
     #expect(UsageFormatting.duration(5_460) == "1h 31m")

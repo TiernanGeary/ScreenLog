@@ -174,6 +174,14 @@ struct RequestFeedView: View {
                         friends: model.friendSummaries
                     )
                 },
+                avatarImageData: { request in
+                    FriendRequestFeedDisplay.participantAvatarImageData(
+                        for: request,
+                        direction: .received,
+                        profile: model.profile,
+                        friends: model.friendSummaries
+                    )
+                },
                 groupName: { request in
                     groupName(for: request.groupID)
                 },
@@ -294,6 +302,7 @@ struct RequestFeedView: View {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(Color.green.opacity(0.12))
                         )
+                        .appRoundedButtonHitArea(cornerRadius: 12)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
@@ -416,6 +425,7 @@ private struct FriendRequestPhotoStackView: View {
     let photoData: (BlockFriendRequest) -> Data?
     let participantName: (BlockFriendRequest) -> String
     let avatarColorHex: (BlockFriendRequest) -> String
+    let avatarImageData: (BlockFriendRequest) -> Data?
     let groupName: (BlockFriendRequest) -> String
     let expiresIn: (BlockFriendRequest) -> String
     let onDeny: (BlockFriendRequest) -> Void
@@ -488,6 +498,7 @@ private struct FriendRequestPhotoStackView: View {
             photoData: photoData(request),
             participantName: participantName(request),
             avatarColorHex: avatarColorHex(request),
+            avatarImageData: avatarImageData(request),
             groupName: groupName(request),
             expiresIn: expiresIn(request),
             onDeny: {
@@ -696,6 +707,7 @@ private struct FriendRequestPhotoBookCard: View {
     let photoData: Data?
     let participantName: String
     let avatarColorHex: String
+    let avatarImageData: Data?
     let groupName: String
     let expiresIn: String
     let onDeny: () -> Void
@@ -719,8 +731,12 @@ private struct FriendRequestPhotoBookCard: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top) {
                     HStack(spacing: 10) {
-                        Avatar(colorHex: avatarColorHex, initials: participantName.initials)
-                            .frame(width: 44, height: 44)
+                        ProfileAvatar(
+                            imageData: avatarImageData,
+                            colorHex: avatarColorHex,
+                            initials: participantName.initials,
+                            size: 44
+                        )
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(participantName)
@@ -893,6 +909,12 @@ private struct FriendRequestDetailView: View {
                     profile: model.profile,
                     friends: model.friendSummaries
                 )
+                let avatarImageData = FriendRequestFeedDisplay.participantAvatarImageData(
+                    for: request,
+                    direction: direction,
+                    profile: model.profile,
+                    friends: model.friendSummaries
+                )
 
                 FriendRequestPhotoImage(photoData: model.friendRequestPhotoData(for: request))
                     .frame(maxWidth: .infinity)
@@ -905,8 +927,12 @@ private struct FriendRequestDetailView: View {
                     .shadow(color: .black.opacity(0.18), radius: 18, y: 10)
 
                 VStack(spacing: 9) {
-                    Avatar(colorHex: avatarColorHex, initials: participantName.initials)
-                        .frame(width: 64, height: 64)
+                    ProfileAvatar(
+                        imageData: avatarImageData,
+                        colorHex: avatarColorHex,
+                        initials: participantName.initials,
+                        size: 64
+                    )
 
                     Text(participantName)
                         .font(.title3.weight(.semibold))
@@ -1223,6 +1249,26 @@ private enum FriendRequestFeedDisplay {
         return trimmedFallback.isEmpty ? id : trimmedFallback
     }
 
+    static func participantAvatarImageData(
+        for request: BlockFriendRequest,
+        direction: FriendRequestDirection,
+        profile: UserProfile,
+        friends: [FriendUsageSummary]
+    ) -> Data? {
+        switch direction {
+        case .sent:
+            guard let firstFriendID = request.selectedFriendIDs.first else {
+                return nil
+            }
+            return friendAvatarImageData(firstFriendID, profile: profile, friends: friends)
+        case .received:
+            guard let requesterID = request.requesterID else {
+                return nil
+            }
+            return friendAvatarImageData(requesterID, profile: profile, friends: friends)
+        }
+    }
+
     private static func friendAvatarColorHex(
         _ id: String,
         profile: UserProfile,
@@ -1233,6 +1279,18 @@ private enum FriendRequestFeedDisplay {
         }
 
         return friends.first { $0.id == id }?.avatarColorHex ?? AppConfiguration.defaultAvatarColor
+    }
+
+    private static func friendAvatarImageData(
+        _ id: String,
+        profile: UserProfile,
+        friends: [FriendUsageSummary]
+    ) -> Data? {
+        if id == profile.id {
+            return profile.avatarImageData
+        }
+
+        return friends.first { $0.id == id }?.avatarImageData
     }
 }
 
@@ -2311,6 +2369,7 @@ struct BlockGroupConfigurationView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.accentColor)
             }
+            .appRoundedButtonHitArea(cornerRadius: 16)
 
             if isUnlockedForDisplay(group) {
                 Button(role: .destructive) {
@@ -2328,6 +2387,7 @@ struct BlockGroupConfigurationView: View {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .fill(Color(red: 0.86, green: 0.24, blue: 0.22))
                 }
+                .appRoundedButtonHitArea(cornerRadius: 16)
             }
         }
         .padding(.horizontal, 20)
@@ -2586,6 +2646,7 @@ struct BlockGroupEditorView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.accentColor)
             }
+            .appRoundedButtonHitArea(cornerRadius: 16)
             .disabled(isSaving)
             .opacity(isSaving ? 0.82 : 1)
         }
@@ -2688,7 +2749,6 @@ struct BlockGroupEditorView: View {
             } else {
                 isSaving = true
                 Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 60_000_000)
                     let didSave = onSave(group, nil)
                     if !didSave {
                         saveError = "Could not save this block group. Please check the settings and try again."
@@ -2819,6 +2879,7 @@ private struct BlockGroupPasswordSetupView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color.accentColor)
             }
+            .appRoundedButtonHitArea(cornerRadius: 16)
             .disabled(isSaving)
             .opacity(isSaving ? 0.82 : 1)
         }
@@ -3007,7 +3068,7 @@ struct BlockGroupDraft: Identifiable {
         localUnblocksEnabled = true
         unblocksPerDay = 3
         maxUnblockMinutes = 15
-        friendRequestsEnabled = false
+        friendRequestsEnabled = true
         requiresPassword = true
         createdAt = now
     }

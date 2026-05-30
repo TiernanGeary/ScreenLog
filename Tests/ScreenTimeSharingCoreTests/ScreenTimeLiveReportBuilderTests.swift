@@ -41,6 +41,48 @@ import Testing
     #expect(configuration.appRows.map(\.duration) == [1_500, 1_200, 300])
 }
 
+@Test func liveReportBuilderMergesWebDomainRowsWithAppRows() throws {
+    let start = Date(timeIntervalSinceReferenceDate: 0)
+    let middle = start.addingTimeInterval(3_600)
+    let end = middle.addingTimeInterval(3_600)
+
+    let configuration = ScreenTimeLiveReportBuilder.configuration(
+        segments: [
+            ScreenTimeReportSegmentInput(
+                dateInterval: DateInterval(start: start, end: middle),
+                totalActivityDuration: 1_800,
+                pickupCount: 1,
+                appRows: [
+                    SharedAppUsage(
+                        id: SharedAppUsage.webDomainID(for: "robinhood.com"),
+                        displayName: "robinhood.com",
+                        bundleIdentifier: nil,
+                        duration: 1_200
+                    ),
+                    SharedAppUsage(id: "testflight", displayName: "TestFlight", bundleIdentifier: "com.apple.TestFlight", duration: 30)
+                ]
+            ),
+            ScreenTimeReportSegmentInput(
+                dateInterval: DateInterval(start: middle, end: end),
+                totalActivityDuration: 1_200,
+                pickupCount: 2,
+                appRows: [
+                    SharedAppUsage(
+                        id: SharedAppUsage.webDomainID(for: "ROBINHOOD.COM"),
+                        displayName: "ROBINHOOD.COM",
+                        bundleIdentifier: nil,
+                        duration: 900
+                    )
+                ]
+            )
+        ]
+    )
+
+    #expect(configuration.appRows.map(\.displayName) == ["robinhood.com", "TestFlight"])
+    #expect(configuration.appRows.map(\.duration) == [2_100, 30])
+    #expect(configuration.appRows.first?.isWebDomain == true)
+}
+
 @Test func liveReportBuilderClampsNegativeDurationsAndPickups() throws {
     let start = Date(timeIntervalSinceReferenceDate: 0)
     let end = start.addingTimeInterval(3_600)

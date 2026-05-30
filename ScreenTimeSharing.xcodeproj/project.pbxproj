@@ -22,6 +22,8 @@
 		B10000000000000000000013 /* DeviceActivityScreenTimeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000010 /* DeviceActivityScreenTimeProvider.swift */; };
 		B10000000000000000000014 /* AppGroupWidgetCacheWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000011 /* AppGroupWidgetCacheWriter.swift */; };
 		B10000000000000000000015 /* CloudKitUsageSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000012 /* CloudKitUsageSnapshotStore.swift */; };
+		B10000000000000000000033 /* AppleSignInService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000027 /* AppleSignInService.swift */; };
+		B10000000000000000000034 /* SubscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000028 /* SubscriptionService.swift */; };
 		B10000000000000000000016 /* CloudShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000013 /* CloudShareSheet.swift */; };
 		B10000000000000000000017 /* CloudKitShareAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000014 /* CloudKitShareAcceptance.swift */; };
 		B10000000000000000000018 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000015 /* RootView.swift */; };
@@ -39,20 +41,7 @@
 		B10000000000000000000030 /* ScreenTimeReportStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000009 /* ScreenTimeReportStorage.swift */; };
 		B10000000000000000000031 /* ScreenTimeReportContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000025 /* ScreenTimeReportContext.swift */; };
 		B10000000000000000000032 /* ScreenTimeReportBridgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000026 /* ScreenTimeReportBridgeView.swift */; };
-		B20000000000000000000001 /* CapabilityStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* CapabilityStatus.swift */; };
-		B20000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* Models.swift */; };
-		B20000000000000000000003 /* DateBoundaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* DateBoundaries.swift */; };
-		B20000000000000000000004 /* UsageFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* UsageFormatting.swift */; };
-		B20000000000000000000005 /* WidgetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000005 /* WidgetCache.swift */; };
-		B20000000000000000000006 /* SnapshotRecordPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000006 /* SnapshotRecordPayload.swift */; };
-		B20000000000000000000007 /* WidgetCacheReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000001 /* WidgetCacheReader.swift */; };
-		B20000000000000000000008 /* WidgetFriendConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000002 /* WidgetFriendConfiguration.swift */; };
-		B20000000000000000000009 /* FriendUsageWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000003 /* FriendUsageWidget.swift */; };
-		B20000000000000000000010 /* ScreenTimeSharingWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000004 /* ScreenTimeSharingWidgetBundle.swift */; };
-		B20000000000000000000011 /* AccountabilityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000007 /* AccountabilityModels.swift */; };
-		B20000000000000000000012 /* StatsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000007 /* StatsWidget.swift */; };
 		B30000000000000000000001 /* Resources/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000006 /* Resources/Assets.xcassets */; };
-		B40000000000000000000001 /* ScreenTimeSharingWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* ScreenTimeSharingWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B40000000000000000000002 /* ScreenLogActivityMonitorExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F10000000000000000000010 /* ScreenLogActivityMonitorExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B40000000000000000000003 /* ScreenLogShieldActionExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F20000000000000000000010 /* ScreenLogShieldActionExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B40000000000000000000004 /* ScreenLogShieldConfigurationExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F30000000000000000000010 /* ScreenLogShieldConfigurationExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -60,12 +49,8 @@
 		B50000000000000000000003 /* BlockingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* BlockingModels.swift */; };
 		B50000000000000000000004 /* ExtensionBlockingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000001 /* ExtensionBlockingSupport.swift */; };
 		B50000000000000000000005 /* ScreenLogActivityMonitorExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* ScreenLogActivityMonitorExtension.swift */; };
-		B60000000000000000000003 /* BlockingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* BlockingModels.swift */; };
-		B60000000000000000000004 /* ExtensionBlockingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000001 /* ExtensionBlockingSupport.swift */; };
 		B60000000000000000000005 /* ScreenLogShieldActionExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* ScreenLogShieldActionExtension.swift */; };
 		B70000000000000000000001 /* ScreenLogShieldConfigurationExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000001 /* ScreenLogShieldConfigurationExtension.swift */; };
-		B70000000000000000000002 /* BlockingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000008 /* BlockingModels.swift */; };
-		B70000000000000000000003 /* ExtensionBlockingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000001 /* ExtensionBlockingSupport.swift */; };
 		B80000000000000000000001 /* CapabilityStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* CapabilityStatus.swift */; };
 		B80000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* Models.swift */; };
 		B80000000000000000000003 /* DateBoundaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* DateBoundaries.swift */; };
@@ -76,13 +61,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		A00000000000000000000022 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = A00000000000000000000001 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = A00000000000000000000011;
-			remoteInfo = ScreenTimeSharingWidget;
-		};
 		F10000000000000000000030 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = A00000000000000000000001 /* Project object */;
@@ -120,8 +98,8 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				B40000000000000000000001 /* ScreenTimeSharingWidget.appex in Embed Foundation Extensions */,
 				B40000000000000000000002 /* ScreenLogActivityMonitorExtension.appex in Embed Foundation Extensions */,
+				B40000000000000000000003 /* ScreenLogShieldActionExtension.appex in Embed Foundation Extensions */,
 				B40000000000000000000004 /* ScreenLogShieldConfigurationExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
@@ -142,7 +120,6 @@
 
 /* Begin PBXFileReference section */
 		A00000000000000000000012 /* ScreenTimeSharing.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScreenTimeSharing.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A00000000000000000000013 /* ScreenTimeSharingWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ScreenTimeSharingWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000001 /* CapabilityStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapabilityStatus.swift; sourceTree = "<group>"; };
 		C00000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		C00000000000000000000003 /* DateBoundaries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateBoundaries.swift; sourceTree = "<group>"; };
@@ -164,6 +141,8 @@
 		D00000000000000000000010 /* DeviceActivityScreenTimeProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceActivityScreenTimeProvider.swift; sourceTree = "<group>"; };
 		D00000000000000000000011 /* AppGroupWidgetCacheWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroupWidgetCacheWriter.swift; sourceTree = "<group>"; };
 		D00000000000000000000012 /* CloudKitUsageSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitUsageSnapshotStore.swift; sourceTree = "<group>"; };
+		D00000000000000000000027 /* AppleSignInService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInService.swift; sourceTree = "<group>"; };
+		D00000000000000000000028 /* SubscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionService.swift; sourceTree = "<group>"; };
 		D00000000000000000000013 /* CloudShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudShareSheet.swift; sourceTree = "<group>"; };
 		D00000000000000000000014 /* CloudKitShareAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitShareAcceptance.swift; sourceTree = "<group>"; };
 		D00000000000000000000015 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -178,13 +157,6 @@
 		D00000000000000000000024 /* BlockingSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockingSettingsView.swift; sourceTree = "<group>"; };
 		D00000000000000000000025 /* ScreenTimeReportContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeReportContext.swift; sourceTree = "<group>"; };
 		D00000000000000000000026 /* ScreenTimeReportBridgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeReportBridgeView.swift; sourceTree = "<group>"; };
-		E00000000000000000000001 /* WidgetCacheReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetCacheReader.swift; sourceTree = "<group>"; };
-		E00000000000000000000002 /* WidgetFriendConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetFriendConfiguration.swift; sourceTree = "<group>"; };
-		E00000000000000000000003 /* FriendUsageWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendUsageWidget.swift; sourceTree = "<group>"; };
-		E00000000000000000000004 /* ScreenTimeSharingWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeSharingWidgetBundle.swift; sourceTree = "<group>"; };
-		E00000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		E00000000000000000000006 /* ScreenTimeSharingWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ScreenTimeSharingWidget.entitlements; sourceTree = "<group>"; };
-		E00000000000000000000007 /* StatsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsWidget.swift; sourceTree = "<group>"; };
 		F10000000000000000000001 /* ExtensionBlockingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionBlockingSupport.swift; sourceTree = "<group>"; };
 		F10000000000000000000002 /* ScreenLogActivityMonitorExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenLogActivityMonitorExtension.swift; sourceTree = "<group>"; };
 		F10000000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -207,13 +179,6 @@
 
 /* Begin PBXFrameworksBuildPhase section */
 		A00000000000000000000015 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A00000000000000000000019 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -255,7 +220,6 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000004 /* ScreenTimeSharing */,
-				A00000000000000000000005 /* ScreenTimeSharingWidget */,
 				F10000000000000000000020 /* ScreenLogActivityMonitorExtension */,
 				F20000000000000000000020 /* ScreenLogShieldActionExtension */,
 				F30000000000000000000020 /* ScreenLogShieldConfigurationExtension */,
@@ -269,7 +233,6 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000012 /* ScreenTimeSharing.app */,
-				A00000000000000000000013 /* ScreenTimeSharingWidget.appex */,
 				F10000000000000000000010 /* ScreenLogActivityMonitorExtension.appex */,
 				F20000000000000000000010 /* ScreenLogShieldActionExtension.appex */,
 				F30000000000000000000010 /* ScreenLogShieldConfigurationExtension.appex */,
@@ -291,20 +254,6 @@
 				D00000000000000000000005 /* ScreenTimeSharing.entitlements */,
 			);
 			path = ScreenTimeSharing;
-			sourceTree = "<group>";
-		};
-		A00000000000000000000005 /* ScreenTimeSharingWidget */ = {
-			isa = PBXGroup;
-			children = (
-				E00000000000000000000001 /* WidgetCacheReader.swift */,
-				E00000000000000000000002 /* WidgetFriendConfiguration.swift */,
-				E00000000000000000000003 /* FriendUsageWidget.swift */,
-				E00000000000000000000007 /* StatsWidget.swift */,
-				E00000000000000000000004 /* ScreenTimeSharingWidgetBundle.swift */,
-				E00000000000000000000005 /* Info.plist */,
-				E00000000000000000000006 /* ScreenTimeSharingWidget.entitlements */,
-			);
-			path = ScreenTimeSharingWidget;
 			sourceTree = "<group>";
 		};
 		A00000000000000000000006 /* Sources/ScreenTimeSharingCore */ = {
@@ -337,6 +286,8 @@
 				D00000000000000000000022 /* BlockingSelectionCodec.swift */,
 				D00000000000000000000023 /* BlockingEnforcementService.swift */,
 				D00000000000000000000025 /* ScreenTimeReportContext.swift */,
+				D00000000000000000000027 /* AppleSignInService.swift */,
+				D00000000000000000000028 /* SubscriptionService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -415,8 +366,8 @@
 			buildRules = (
 			);
 			dependencies = (
-				A00000000000000000000021 /* PBXTargetDependency */,
 				F10000000000000000000031 /* PBXTargetDependency */,
+				F20000000000000000000031 /* PBXTargetDependency */,
 				F30000000000000000000031 /* PBXTargetDependency */,
 				F40000000000000000000031 /* PBXTargetDependency */,
 			);
@@ -424,23 +375,6 @@
 			productName = ScreenTimeSharing;
 			productReference = A00000000000000000000012 /* ScreenTimeSharing.app */;
 			productType = "com.apple.product-type.application";
-		};
-		A00000000000000000000011 /* ScreenTimeSharingWidget */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = A00000000000000000000096 /* Build configuration list for PBXNativeTarget "ScreenTimeSharingWidget" */;
-			buildPhases = (
-				A00000000000000000000018 /* Sources */,
-				A00000000000000000000019 /* Frameworks */,
-				A00000000000000000000020 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = ScreenTimeSharingWidget;
-			productName = ScreenTimeSharingWidget;
-			productReference = A00000000000000000000013 /* ScreenTimeSharingWidget.appex */;
-			productType = "com.apple.product-type.app-extension";
 		};
 		F10000000000000000000040 /* ScreenLogActivityMonitorExtension */ = {
 			isa = PBXNativeTarget;
@@ -518,12 +452,9 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1600;
-				LastUpgradeCheck = 1640;
+				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					A00000000000000000000010 = {
-						CreatedOnToolsVersion = 16.0;
-					};
-					A00000000000000000000011 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 					F10000000000000000000040 = {
@@ -554,7 +485,6 @@
 			projectRoot = "";
 			targets = (
 				A00000000000000000000010 /* ScreenTimeSharing */,
-				A00000000000000000000011 /* ScreenTimeSharingWidget */,
 				F10000000000000000000040 /* ScreenLogActivityMonitorExtension */,
 				F20000000000000000000040 /* ScreenLogShieldActionExtension */,
 				F30000000000000000000040 /* ScreenLogShieldConfigurationExtension */,
@@ -569,13 +499,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				B30000000000000000000001 /* Resources/Assets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A00000000000000000000020 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -632,6 +555,8 @@
 				B10000000000000000000013 /* DeviceActivityScreenTimeProvider.swift in Sources */,
 				B10000000000000000000014 /* AppGroupWidgetCacheWriter.swift in Sources */,
 				B10000000000000000000015 /* CloudKitUsageSnapshotStore.swift in Sources */,
+				B10000000000000000000033 /* AppleSignInService.swift in Sources */,
+				B10000000000000000000034 /* SubscriptionService.swift in Sources */,
 				B10000000000000000000016 /* CloudShareSheet.swift in Sources */,
 				B10000000000000000000017 /* CloudKitShareAcceptance.swift in Sources */,
 				B10000000000000000000027 /* BlockingSelectionCodec.swift in Sources */,
@@ -646,25 +571,6 @@
 				B10000000000000000000022 /* SettingsView.swift in Sources */,
 				B10000000000000000000023 /* SharedViewBits.swift in Sources */,
 				B10000000000000000000032 /* ScreenTimeReportBridgeView.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		A00000000000000000000018 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				B20000000000000000000001 /* CapabilityStatus.swift in Sources */,
-				B20000000000000000000002 /* Models.swift in Sources */,
-				B20000000000000000000003 /* DateBoundaries.swift in Sources */,
-				B20000000000000000000004 /* UsageFormatting.swift in Sources */,
-				B20000000000000000000005 /* WidgetCache.swift in Sources */,
-				B20000000000000000000006 /* SnapshotRecordPayload.swift in Sources */,
-				B20000000000000000000011 /* AccountabilityModels.swift in Sources */,
-				B20000000000000000000007 /* WidgetCacheReader.swift in Sources */,
-				B20000000000000000000008 /* WidgetFriendConfiguration.swift in Sources */,
-				B20000000000000000000009 /* FriendUsageWidget.swift in Sources */,
-				B20000000000000000000012 /* StatsWidget.swift in Sources */,
-				B20000000000000000000010 /* ScreenTimeSharingWidgetBundle.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -711,11 +617,6 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		A00000000000000000000021 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = A00000000000000000000011 /* ScreenTimeSharingWidget */;
-			targetProxy = A00000000000000000000022 /* PBXContainerItemProxy */;
-		};
 		F10000000000000000000031 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = F10000000000000000000040 /* ScreenLogActivityMonitorExtension */;
@@ -743,6 +644,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -796,7 +698,8 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG DENY_INTERNAL_DEBUG";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
@@ -805,6 +708,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -851,6 +755,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				VALIDATE_PRODUCT = YES;
@@ -863,7 +768,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ScreenTimeSharing/ScreenTimeSharing.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenTimeSharing/Info.plist;
@@ -886,7 +791,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ScreenTimeSharing/ScreenTimeSharing.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenTimeSharing/Info.plist;
@@ -903,61 +808,13 @@
 			};
 			name = Release;
 		};
-		A00000000000000000000097 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = ScreenTimeSharingWidget/ScreenTimeSharingWidget.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = ScreenTimeSharingWidget/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.jdco.ScreenTimeSharing.ScreenLogWidget;
-				PRODUCT_NAME = ScreenTimeSharingWidget;
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Debug;
-		};
-		A00000000000000000000098 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = ScreenTimeSharingWidget/ScreenTimeSharingWidget.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = ScreenTimeSharingWidget/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.jdco.ScreenTimeSharing.ScreenLogWidget;
-				PRODUCT_NAME = ScreenTimeSharingWidget;
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Release;
-		};
 		F10000000000000000000091 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogActivityMonitorExtension/ScreenLogActivityMonitorExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogActivityMonitorExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -981,7 +838,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogActivityMonitorExtension/ScreenLogActivityMonitorExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogActivityMonitorExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1005,10 +862,10 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldActionExtension/ScreenLogShieldActionExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				ENABLE_DEBUG_DYLIB = NO;
-				GENERATE_INFOPLIST_FILE = NO;
 				GCC_OPTIMIZATION_LEVEL = s;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogShieldActionExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1033,7 +890,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldActionExtension/ScreenLogShieldActionExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogShieldActionExtension/Info.plist;
@@ -1058,10 +915,10 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldConfigurationExtension/ScreenLogShieldConfigurationExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				ENABLE_DEBUG_DYLIB = NO;
-				GENERATE_INFOPLIST_FILE = NO;
 				GCC_OPTIMIZATION_LEVEL = s;
+				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogShieldConfigurationExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1086,7 +943,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldConfigurationExtension/ScreenLogShieldConfigurationExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogShieldConfigurationExtension/Info.plist;
@@ -1111,7 +968,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogDeviceActivityReportExtension/ScreenLogDeviceActivityReportExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogDeviceActivityReportExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1135,7 +992,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogDeviceActivityReportExtension/ScreenLogDeviceActivityReportExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 202605292350;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogDeviceActivityReportExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1170,15 +1027,6 @@
 			buildConfigurations = (
 				A00000000000000000000094 /* Debug */,
 				A00000000000000000000095 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		A00000000000000000000096 /* Build configuration list for PBXNativeTarget "ScreenTimeSharingWidget" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A00000000000000000000097 /* Debug */,
-				A00000000000000000000098 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

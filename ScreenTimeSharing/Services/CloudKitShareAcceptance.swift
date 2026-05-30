@@ -78,12 +78,46 @@ final class FriendRequestNotificationCenter {
     }
 }
 
+struct ShieldFriendRequestNotificationService {
+    static let categoryIdentifier = "shield-friend-time-request"
+    static let groupIDUserInfoKey = "shieldFriendRequestGroupID"
+}
+
+@MainActor
+final class ShieldFriendRequestNotificationCenter {
+    static let shared = ShieldFriendRequestNotificationCenter()
+
+    var handler: ((String?) -> Void)? {
+        didSet {
+            flush()
+        }
+    }
+
+    private var pendingGroupIDs: [String?] = []
+
+    func receive(groupID: String?) {
+        pendingGroupIDs.append(groupID)
+        flush()
+    }
+
+    private func flush() {
+        guard let handler else {
+            return
+        }
+
+        let pending = pendingGroupIDs
+        pendingGroupIDs.removeAll()
+        pending.forEach(handler)
+    }
+}
+
 extension AppDelegate: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        guard notification.request.content.categoryIdentifier == FriendRequestNotificationService.categoryIdentifier else {
+        guard notification.request.content.categoryIdentifier == FriendRequestNotificationService.categoryIdentifier
+            || notification.request.content.categoryIdentifier == ShieldFriendRequestNotificationService.categoryIdentifier else {
             return []
         }
 
@@ -94,6 +128,16 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
+        if response.notification.request.content.categoryIdentifier == ShieldFriendRequestNotificationService.categoryIdentifier {
+            let groupID = response.notification.request.content.userInfo[
+                ShieldFriendRequestNotificationService.groupIDUserInfoKey
+            ] as? String
+            await MainActor.run {
+                ShieldFriendRequestNotificationCenter.shared.receive(groupID: groupID)
+            }
+            return
+        }
+
         guard let requestID = response.notification.request.content.userInfo[FriendRequestNotificationService.requestIDUserInfoKey] as? String else {
             return
         }

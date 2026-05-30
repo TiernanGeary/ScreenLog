@@ -8,10 +8,16 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var isShowingShareSheet = false
     @State private var isEditingDisplayName = false
+    @State private var isShowingProfilePhotoOptions = false
+    @State private var isShowingProfilePhotoLibrary = false
+    @State private var isShowingProfileCamera = false
     @State private var draftDisplayName = ""
     @State private var selectedProfilePhotoItem: PhotosPickerItem?
     @State private var profilePhotoCropItem: ProfilePhotoCropItem?
     @State private var selectedCollectionPhoto: AcceptedRequestPhotoItem?
+    #if canImport(UIKit)
+    @State private var pendingProfileCameraImage: UIImage?
+    #endif
 
     private let photoBoardColumns = [
         GridItem(.flexible(), spacing: 10),
@@ -39,6 +45,7 @@ struct SettingsView: View {
                     }
                 }
 
+                #if DEBUG && DENY_INTERNAL_DEBUG
                 AppSection("Readiness") {
                     AppCard {
                         LabeledContent("Screen Time", value: model.screenTimeAuthorization)
@@ -73,15 +80,25 @@ struct SettingsView: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.tint)
                         AppCardDivider()
-                        LabeledContent("iCloud", value: model.cloudAvailability.label)
-                            .appCardRow()
+                        Button {
+                            AppHaptics.buttonTap()
+                            Task {
+                                await model.bootstrapCloudKitDevelopmentSchema()
+                            }
+                        } label: {
+                            Label("Bootstrap CloudKit Schema", systemImage: "icloud.and.arrow.up")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
                         AppCardDivider()
-                        LabeledContent("Widget cache", value: "\(model.friendSummaries.count) friends")
+                        LabeledContent("iCloud", value: model.cloudAvailability.label)
                             .appCardRow()
                     }
                 }
+                #endif
 
-                #if DEBUG && targetEnvironment(simulator)
+                #if DEBUG && DENY_INTERNAL_DEBUG && targetEnvironment(simulator)
                 AppSection("Simulator Demo") {
                     AppCard {
                         Button {
@@ -93,31 +110,6 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.tint)
-
-                        AppCardDivider()
-
-                        Button {
-                            AppHaptics.buttonTap()
-                            model.seedDemoFriends()
-                        } label: {
-                            Label("Add Demo Friends", systemImage: "person.2.badge.plus")
-                                .appCardRow()
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-
-                        AppCardDivider()
-
-                        Button(role: .destructive) {
-                            AppHaptics.buttonTap()
-                            model.clearDemoFriends()
-                        } label: {
-                            Label("Clear Demo Friends", systemImage: "trash")
-                                .appCardRow()
-                        }
-                        .buttonStyle(.plain)
-
-                        AppCardDivider()
 
                         Button {
                             AppHaptics.buttonTap()
@@ -146,6 +138,30 @@ struct SettingsView: View {
                 .presentationDetents([.height(310)])
                 .presentationDragIndicator(.visible)
             }
+            .photosPicker(
+                isPresented: $isShowingProfilePhotoLibrary,
+                selection: $selectedProfilePhotoItem,
+                matching: .images,
+                photoLibrary: .shared()
+            )
+            #if canImport(UIKit)
+            .fullScreenCover(
+                isPresented: $isShowingProfileCamera,
+                onDismiss: {
+                    if let pendingProfileCameraImage {
+                        profilePhotoCropItem = ProfilePhotoCropItem(image: pendingProfileCameraImage)
+                        self.pendingProfileCameraImage = nil
+                    }
+                }
+            ) {
+                ProfileCameraPicker { image in
+                    pendingProfileCameraImage = image
+                    isShowingProfileCamera = false
+                } onCancel: {
+                    isShowingProfileCamera = false
+                }
+            }
+            #endif
             .fullScreenCover(item: $profilePhotoCropItem) { item in
                 ProfilePhotoCropView(image: item.image) { croppedImageData in
                     model.updateProfile(avatarImageData: croppedImageData)
@@ -166,7 +182,10 @@ struct SettingsView: View {
         let profile = model.profile
 
         return VStack(spacing: 13) {
-            PhotosPicker(selection: $selectedProfilePhotoItem, matching: .images, photoLibrary: .shared()) {
+            Button {
+                AppHaptics.buttonTap()
+                isShowingProfilePhotoOptions = true
+            } label: {
                 ProfileAvatar(
                     imageData: profile.avatarImageData,
                     colorHex: profile.avatarColorHex,
@@ -187,9 +206,26 @@ struct SettingsView: View {
                 }
             }
             .buttonStyle(.plain)
-            .simultaneousGesture(TapGesture().onEnded {
-                AppHaptics.buttonTap()
-            })
+            .confirmationDialog("Profile Photo", isPresented: $isShowingProfilePhotoOptions, titleVisibility: .visible) {
+                #if canImport(UIKit)
+                Button("Take Photo") {
+                    AppHaptics.buttonTap()
+                    guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+                        model.message = "Camera is unavailable on this device."
+                        return
+                    }
+
+                    isShowingProfileCamera = true
+                }
+                #endif
+
+                Button("Choose from Library") {
+                    AppHaptics.buttonTap()
+                    isShowingProfilePhotoLibrary = true
+                }
+
+                Button("Cancel", role: .cancel) {}
+            }
             .accessibilityLabel("Change profile icon")
 
             Button {
@@ -472,7 +508,7 @@ private struct AcceptedRequestPhotoImage: View {
     }
 }
 
-private struct EditDisplayNameSheet: View {
+struct EditDisplayNameSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var displayName: String
     let onSave: (String) -> Void
@@ -576,6 +612,7 @@ private struct EditDisplayNameSheet: View {
                 .padding(.vertical, 14)
                 .background(saveButtonBackground)
                 .foregroundStyle(saveButtonTextColor)
+                .appRoundedButtonHitArea(cornerRadius: 14)
         }
         .buttonStyle(.plain)
         .disabled(trimmedDisplayName.isEmpty)
@@ -602,12 +639,60 @@ private struct EditDisplayNameSheet: View {
 }
 
 #if canImport(UIKit)
-private struct ProfilePhotoCropItem: Identifiable {
+struct ProfilePhotoCropItem: Identifiable {
     let id = UUID()
     let image: UIImage
 }
 
-private struct ProfilePhotoCropView: View {
+struct ProfileCameraPicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+
+        if UIImagePickerController.isCameraDeviceAvailable(.front) {
+            picker.cameraDevice = .front
+        }
+
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: ProfileCameraPicker
+
+        init(parent: ProfileCameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            guard let image = info[.originalImage] as? UIImage else {
+                parent.onCancel()
+                return
+            }
+
+            parent.onCapture(image)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.onCancel()
+        }
+    }
+}
+
+struct ProfilePhotoCropView: View {
     @Environment(\.dismiss) private var dismiss
     let image: UIImage
     let onSave: (Data) -> Void
@@ -654,6 +739,7 @@ private struct ProfilePhotoCropView: View {
                         .padding(.vertical, 14)
                         .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .foregroundStyle(.white)
+                        .appRoundedButtonHitArea(cornerRadius: 14)
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 20)

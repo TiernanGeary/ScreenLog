@@ -212,7 +212,7 @@ private struct StatsWidgetView: View {
                 .foregroundStyle(.secondary)
             Text("No stats yet")
                 .font(.headline)
-            Text("Open ScreenLog to start accountability.")
+            Text("Open deny to start accountability.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

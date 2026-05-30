@@ -1,4 +1,9 @@
+import AuthenticationServices
+import PhotosUI
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
@@ -7,13 +12,39 @@ struct OnboardingView: View {
     @State private var age: Double = 25
     @State private var avgScreenTime: Double = 4
     @State private var isAuthorizing = false
+    @State private var isSigningIn = false
+    @State private var signInError: String?
+    @State private var draftDisplayName = ""
+    @State private var draftAvatarImageData: Data?
+    @State private var hasLoadedProfileDraft = false
+    @State private var isShowingProfilePhotoOptions = false
+    @State private var isShowingProfilePhotoLibrary = false
+    @State private var isShowingProfileCamera = false
+    @State private var selectedProfilePhotoItem: PhotosPickerItem?
+    @State private var profilePhotoCropItem: ProfilePhotoCropItem?
+    #if canImport(UIKit)
+    @State private var pendingProfileCameraImage: UIImage?
+    #endif
 
-    private let totalPages = 5
+    private let totalPages = 6
     private var lastPage: Int { totalPages - 1 }
+    private var profilePage: Int { lastPage - 1 }
+
+    private var trimmedDraftDisplayName: String {
+        draftDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isPrimaryDisabled: Bool {
+        if currentPage == profilePage {
+            return !model.isAuthenticated || trimmedDraftDisplayName.isEmpty
+        }
+        return false
+    }
 
     private var primaryTitle: String {
         switch currentPage {
         case lastPage: return "Let's Get Started!"
+        case profilePage: return model.isAuthenticated ? "Save and Continue" : "Sign in to Continue"
         case 2: return "Get Started"
         default: return "Continue"
         }
@@ -30,10 +61,36 @@ struct OnboardingView: View {
                         ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
                         WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
                         FriendMonitorPage(isActive: currentPage == 3).tag(3)
-                        FinalPage(isActive: currentPage == 4).tag(4)
+                        AppleSignInProfilePage(
+                            displayName: $draftDisplayName,
+                            avatarImageData: draftAvatarImageData,
+                            avatarColorHex: model.profile.avatarColorHex,
+                            isAuthenticated: model.isAuthenticated,
+                            isSigningIn: isSigningIn,
+                            signInError: signInError,
+                            isActive: currentPage == profilePage,
+                            onSignIn: { performAppleSignIn() },
+                            onPhotoTap: {
+                                AppHaptics.buttonTap()
+                                isShowingProfilePhotoOptions = true
+                            }
+                        )
+                        .tag(profilePage)
+                        FinalPage(isActive: currentPage == lastPage).tag(lastPage)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .animation(.easeInOut, value: currentPage)
+                    .onChange(of: currentPage) { oldPage, newPage in
+                        guard oldPage == profilePage, newPage != profilePage else {
+                            return
+                        }
+
+                        if trimmedDraftDisplayName.isEmpty, newPage > profilePage {
+                            withAnimation { currentPage = profilePage }
+                        } else if !trimmedDraftDisplayName.isEmpty {
+                            saveProfileDraft()
+                        }
+                    }
 
                     pageIndicator
                         .padding(.top, 8)
@@ -45,11 +102,11 @@ struct OnboardingView: View {
                 }
             }
             .toolbar {
-                if currentPage < lastPage {
+                if currentPage < lastPage && currentPage != profilePage {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Skip") {
                             Haptics.tap()
-                            withAnimation { currentPage = lastPage }
+                            withAnimation { currentPage = profilePage }
                         }
                     }
                 }
@@ -61,6 +118,60 @@ struct OnboardingView: View {
                     Color.black.opacity(0.35).ignoresSafeArea()
                     ProgressView().controlSize(.large).tint(.white)
                 }
+            }
+            .photosPicker(
+                isPresented: $isShowingProfilePhotoLibrary,
+                selection: $selectedProfilePhotoItem,
+                matching: .images,
+                photoLibrary: .shared()
+            )
+            #if canImport(UIKit)
+            .fullScreenCover(
+                isPresented: $isShowingProfileCamera,
+                onDismiss: {
+                    if let pendingProfileCameraImage {
+                        profilePhotoCropItem = ProfilePhotoCropItem(image: pendingProfileCameraImage)
+                        self.pendingProfileCameraImage = nil
+                    }
+                }
+            ) {
+                ProfileCameraPicker { image in
+                    pendingProfileCameraImage = image
+                    isShowingProfileCamera = false
+                } onCancel: {
+                    isShowingProfileCamera = false
+                }
+            }
+            #endif
+            .fullScreenCover(item: $profilePhotoCropItem) { item in
+                ProfilePhotoCropView(image: item.image) { croppedImageData in
+                    draftAvatarImageData = croppedImageData
+                    profilePhotoCropItem = nil
+                }
+            }
+            .confirmationDialog("Profile Photo", isPresented: $isShowingProfilePhotoOptions, titleVisibility: .visible) {
+                #if canImport(UIKit)
+                Button("Take Photo") {
+                    AppHaptics.buttonTap()
+                    guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+                        model.message = "Camera is unavailable on this device."
+                        return
+                    }
+
+                    isShowingProfileCamera = true
+                }
+                #endif
+
+                Button("Choose from Library") {
+                    AppHaptics.buttonTap()
+                    isShowingProfilePhotoLibrary = true
+                }
+
+                Button("Cancel", role: .cancel) {}
+            }
+            .onAppear(perform: loadProfileDraftIfNeeded)
+            .onChange(of: selectedProfilePhotoItem) { _, item in
+                loadSelectedProfilePhoto(item)
             }
         }
         .preferredColorScheme(.dark)
@@ -80,8 +191,7 @@ struct OnboardingView: View {
     private var primaryButton: some View {
         Button {
             if currentPage < lastPage {
-                Haptics.tap()
-                withAnimation { currentPage += 1 }
+                advanceFromCurrentPage()
             } else {
                 Haptics.success()
                 Task {
@@ -98,6 +208,87 @@ struct OnboardingView: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
+        .disabled(isPrimaryDisabled)
+        .opacity(isPrimaryDisabled ? 0.52 : 1)
+    }
+
+    private func advanceFromCurrentPage() {
+        if currentPage == profilePage {
+            saveProfileDraft()
+        }
+
+        Haptics.tap()
+        withAnimation { currentPage += 1 }
+    }
+
+    private func performAppleSignIn() {
+        guard !isSigningIn else { return }
+        isSigningIn = true
+        signInError = nil
+        Task {
+            do {
+                _ = try await model.signInWithApple()
+                draftDisplayName = model.profile.displayName == "Me" ? "" : model.profile.displayName
+                draftAvatarImageData = model.profile.avatarImageData
+                hasLoadedProfileDraft = true
+            } catch {
+                if (error as NSError).code != ASAuthorizationError.canceled.rawValue {
+                    signInError = error.localizedDescription
+                }
+            }
+            isSigningIn = false
+        }
+    }
+
+    private func loadProfileDraftIfNeeded() {
+        guard !hasLoadedProfileDraft else {
+            return
+        }
+
+        hasLoadedProfileDraft = true
+        draftDisplayName = model.profile.displayName == "Me" ? "" : model.profile.displayName
+        draftAvatarImageData = model.profile.avatarImageData
+    }
+
+    private func saveProfileDraft() {
+        guard !trimmedDraftDisplayName.isEmpty else {
+            return
+        }
+
+        model.updateProfile(displayName: trimmedDraftDisplayName, avatarImageData: draftAvatarImageData)
+    }
+
+    private func loadSelectedProfilePhoto(_ item: PhotosPickerItem?) {
+        guard let item else {
+            return
+        }
+
+        Task {
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                await MainActor.run {
+                    selectedProfilePhotoItem = nil
+                }
+                return
+            }
+
+            #if canImport(UIKit)
+            guard let image = UIImage(data: data) else {
+                await MainActor.run {
+                    selectedProfilePhotoItem = nil
+                }
+                return
+            }
+
+            await MainActor.run {
+                profilePhotoCropItem = ProfilePhotoCropItem(image: image)
+                selectedProfilePhotoItem = nil
+            }
+            #else
+            await MainActor.run {
+                selectedProfilePhotoItem = nil
+            }
+            #endif
+        }
     }
 }
 
@@ -366,6 +557,347 @@ private struct FriendMonitorPage: View {
                 try? await Task.sleep(for: .milliseconds(50))
                 entered = true
             }
+        }
+    }
+}
+
+// MARK: - Profile setup
+
+private struct ProfileSetupPage: View {
+    @Binding var displayName: String
+    let avatarImageData: Data?
+    let avatarColorHex: String
+    let isActive: Bool
+    let onChangePhoto: () -> Void
+
+    @FocusState private var isNameFocused: Bool
+    @State private var entered = false
+
+    private var trimmedDisplayName: String {
+        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var avatarInitials: String {
+        trimmedDisplayName.isEmpty ? "?" : trimmedDisplayName.initials
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 26) {
+                Spacer(minLength: 56)
+
+                VStack(spacing: 14) {
+                    Button(action: onChangePhoto) {
+                        ProfileAvatar(
+                            imageData: avatarImageData,
+                            colorHex: avatarColorHex,
+                            initials: avatarInitials,
+                            size: 118
+                        )
+                        .overlay(alignment: .bottomTrailing) {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 34, height: 34)
+                                .background(Color.accentColor, in: Circle())
+                                .overlay {
+                                    Circle()
+                                        .strokeBorder(.black, lineWidth: 2)
+                                }
+                                .offset(x: 4, y: 4)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Set profile photo")
+
+                    Text("Set up your profile")
+                        .font(.largeTitle.bold())
+                        .multilineTextAlignment(.center)
+
+                    Text("Friends will see this name and photo when you send invites or request time.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 18)
+                }
+                .opacity(entered ? 1 : 0)
+                .offset(y: entered ? 0 : 14)
+                .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
+
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("USERNAME")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 10) {
+                        TextField("Your name", text: $displayName)
+                            .font(.title3.weight(.semibold))
+                            .textInputAutocapitalization(.words)
+                            .disableAutocorrection(true)
+                            .submitLabel(.done)
+                            .focused($isNameFocused)
+                            .onSubmit {
+                                isNameFocused = false
+                            }
+
+                        if !displayName.isEmpty {
+                            Button {
+                                AppHaptics.buttonTap()
+                                displayName = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Clear name")
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 58)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.white.opacity(0.10))
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                trimmedDisplayName.isEmpty
+                                    ? Color.orange.opacity(0.50)
+                                    : Color.white.opacity(isNameFocused ? 0.28 : 0.12),
+                                lineWidth: 1
+                            )
+                    }
+
+                    if trimmedDisplayName.isEmpty {
+                        Text("Add a name to continue.")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .opacity(entered ? 1 : 0)
+                .offset(y: entered ? 0 : 14)
+                .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
+
+                Spacer(minLength: 20)
+            }
+            .padding(.horizontal, 20)
+        }
+        .onTapGesture {
+            isNameFocused = false
+        }
+        .onChange(of: isActive, initial: true) { _, nowActive in
+            entered = false
+            guard nowActive else {
+                isNameFocused = false
+                return
+            }
+
+            Task {
+                try? await Task.sleep(for: .milliseconds(50))
+                entered = true
+                try? await Task.sleep(for: .milliseconds(260))
+                isNameFocused = true
+            }
+        }
+    }
+}
+
+// MARK: - Apple Sign In + Profile
+
+private struct AppleSignInProfilePage: View {
+    @Binding var displayName: String
+    let avatarImageData: Data?
+    let avatarColorHex: String
+    let isAuthenticated: Bool
+    let isSigningIn: Bool
+    let signInError: String?
+    let isActive: Bool
+    let onSignIn: () -> Void
+    let onPhotoTap: () -> Void
+
+    @FocusState private var isNameFocused: Bool
+    @State private var entered = false
+
+    private var trimmedDisplayName: String {
+        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var avatarInitials: String {
+        trimmedDisplayName.isEmpty ? "?" : trimmedDisplayName.initials
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 26) {
+                Spacer(minLength: 56)
+
+                if isAuthenticated {
+                    profileEditor
+                } else {
+                    signInContent
+                }
+
+                Spacer(minLength: 20)
+            }
+            .padding(.horizontal, 20)
+        }
+        .onTapGesture {
+            isNameFocused = false
+        }
+        .onChange(of: isActive, initial: true) { _, nowActive in
+            entered = false
+            guard nowActive else {
+                isNameFocused = false
+                return
+            }
+            Task {
+                try? await Task.sleep(for: .milliseconds(50))
+                entered = true
+            }
+        }
+    }
+
+    private var signInContent: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "person.crop.circle.badge.checkmark")
+                .font(.system(size: 64, weight: .thin))
+                .foregroundStyle(.secondary)
+
+            Text("Sign in with Apple")
+                .font(.largeTitle.bold())
+                .multilineTextAlignment(.center)
+
+            Text("Your Apple ID keeps your account safe and lets you recover it on a new device.")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 18)
+
+            SignInWithAppleButton(.signIn, onRequest: { request in
+                request.requestedScopes = [.fullName, .email]
+            }, onCompletion: { _ in })
+            .signInWithAppleButtonStyle(.white)
+            .frame(height: 54)
+            .cornerRadius(14)
+            .disabled(isSigningIn)
+            .overlay {
+                Button(action: onSignIn) {
+                    Color.clear
+                }
+                .disabled(isSigningIn)
+            }
+
+            if isSigningIn {
+                ProgressView()
+                    .tint(.white)
+            }
+
+            if let signInError {
+                Text(signInError)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .opacity(entered ? 1 : 0)
+        .offset(y: entered ? 0 : 14)
+        .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
+    }
+
+    private var profileEditor: some View {
+        VStack(spacing: 26) {
+            VStack(spacing: 14) {
+                Button(action: onPhotoTap) {
+                    ProfileAvatar(
+                        imageData: avatarImageData,
+                        colorHex: avatarColorHex,
+                        initials: avatarInitials,
+                        size: 118
+                    )
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(Color.accentColor, in: Circle())
+                            .overlay {
+                                Circle()
+                                    .strokeBorder(.black, lineWidth: 2)
+                            }
+                            .offset(x: 4, y: 4)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Set profile photo")
+
+                Text("Set up your profile")
+                    .font(.largeTitle.bold())
+                    .multilineTextAlignment(.center)
+
+                Text("Friends will see this name and photo when you send invites or request time.")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 18)
+            }
+            .opacity(entered ? 1 : 0)
+            .offset(y: entered ? 0 : 14)
+            .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text("USERNAME")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 10) {
+                    TextField("Your name", text: $displayName)
+                        .font(.title3.weight(.semibold))
+                        .textInputAutocapitalization(.words)
+                        .disableAutocorrection(true)
+                        .submitLabel(.done)
+                        .focused($isNameFocused)
+                        .onSubmit { isNameFocused = false }
+
+                    if !displayName.isEmpty {
+                        Button {
+                            AppHaptics.buttonTap()
+                            displayName = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 58)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color.white.opacity(0.10))
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(
+                            trimmedDisplayName.isEmpty
+                                ? Color.orange.opacity(0.50)
+                                : Color.white.opacity(isNameFocused ? 0.28 : 0.12),
+                            lineWidth: 1
+                        )
+                }
+
+                if trimmedDisplayName.isEmpty {
+                    Text("Add a name to continue.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.horizontal, 24)
+            .opacity(entered ? 1 : 0)
+            .offset(y: entered ? 0 : 14)
+            .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
         }
     }
 }

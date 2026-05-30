@@ -9,13 +9,12 @@ struct StatsView: View {
     @State private var selectedRange: StatsRange = .day
     @State private var selectedDate = Date()
     @State private var selectedChartBucketID: String?
-    @State private var mountedReportKeys: Set<StatsReportKey> = []
 
     private var summary: UsageStatsSummary {
         UsageStatsBuilder.summary(
             range: selectedRange,
             selectedDate: selectedDate,
-            history: model.usageHistory
+            history: statsHistory
         )
     }
 
@@ -23,7 +22,7 @@ struct StatsView: View {
         UsageStatsBuilder.chartBuckets(
             range: selectedRange,
             selectedDate: selectedDate,
-            history: model.usageHistory,
+            history: statsHistory,
             hourlyDurationsByDayID: model.hourlyUsageByDayID
         )
     }
@@ -41,7 +40,7 @@ struct StatsView: View {
             return nil
         }
 
-        return UsageStatsBuilder.snapshot(for: selectedChartBucket.date, in: model.usageHistory)
+        return UsageStatsBuilder.snapshot(for: selectedChartBucket.date, in: statsHistory)
     }
 
     private var personalEntry: LeaderboardEntry? {
@@ -52,7 +51,7 @@ struct StatsView: View {
         UsageStatsBuilder.appUsageRows(
             range: selectedRange,
             selectedDate: selectedDate,
-            history: model.usageHistory
+            history: statsHistory
         )
     }
 
@@ -60,108 +59,121 @@ struct StatsView: View {
         StatsReportKey(range: selectedRange, selectedDate: selectedDate)
     }
 
-    private var reportDisplayKeys: [StatsReportKey] {
-        var keys = mountedReportKeys
-        keys.insert(currentReportKey)
-        return keys.sorted { lhs, rhs in
-            if lhs.range.rawValue != rhs.range.rawValue {
-                return lhs.range.rawValue < rhs.range.rawValue
-            }
-
-            return lhs.selectedDate < rhs.selectedDate
+    private var statsHistory: [DailyUsageSnapshot] {
+        guard let snapshot = model.localSnapshot, snapshot.hasScreenTimeData else {
+            return model.usageHistory
         }
+
+        return UsageHistoryCodec.upserting(snapshot, into: model.usageHistory)
+    }
+
+    private var shouldShowLiveStatsFallback: Bool {
+        model.hasScreenTimeAuthorization
+            && !summary.hasScreenTimeData
+            && appUsageRows.isEmpty
     }
 
     var body: some View {
         NavigationStack {
-            AppScreenScroll {
-                VStack(alignment: .leading, spacing: 14) {
-                    StatsRangeSelector(selection: $selectedRange)
-
-                    if selectedRange == .day {
-                        DayDateStrip(selectedDate: $selectedDate)
-                    } else {
-                        PeriodNavigator(
-                            range: selectedRange,
-                            selectedDate: $selectedDate,
-                            title: summary.periodLabel
-                        )
-                    }
-                }
-
-                if model.hasScreenTimeAuthorization {
-                    AppCard(cornerRadius: 24, opacity: 0.78) {
-                        ZStack {
-                            ForEach(reportDisplayKeys) { key in
-                                ScreenTimeLiveStatsReport(
-                                    range: key.range,
-                                    selectedDate: key.selectedDate
-                                )
-                                .opacity(key == currentReportKey ? 1 : 0)
-                                .allowsHitTesting(key == currentReportKey)
-                                .accessibilityHidden(key != currentReportKey)
-                            }
-                        }
-                        .frame(height: liveReportHeight)
-                        .appCardRow(verticalPadding: 14)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        UsageSummaryCard(
-                            summary: summary,
-                            selectedBucket: selectedChartBucket,
-                            selectedPickupCount: selectedChartSnapshot?.pickupCount,
-                            requestCount: personalEntry?.requestCount ?? 0
-                        )
-                    }
-
-                    UsageChartSection(
-                        range: selectedRange,
-                        buckets: chartBuckets,
-                        selectedBucketID: $selectedChartBucketID
-                    )
-
-                    MostUsedAppsSection(
-                        range: selectedRange,
-                        apps: appUsageRows,
-                        hasScreenTimeData: summary.hasScreenTimeData
-                    )
-                }
+            AppScreenScroll(backgroundStyle: .white) {
+                statsContent
             }
             .navigationTitle("Stats")
             .onAppear {
-                model.reloadUsageHistoryFromSharedStorage()
                 model.setLeaderboardWindow(selectedRange.leaderboardWindow)
-                rememberCurrentReportKey()
+                primeStatsReport()
             }
             .onChange(of: selectedRange) { _, newRange in
-                model.reloadUsageHistoryFromSharedStorage()
                 model.setLeaderboardWindow(newRange.leaderboardWindow)
                 if newRange == .day {
                     selectedDate = Date()
                 }
                 selectedChartBucketID = nil
-                rememberCurrentReportKey()
+                primeStatsReport()
             }
             .onChange(of: selectedDate) {
-                model.reloadUsageHistoryFromSharedStorage()
                 selectedChartBucketID = nil
-                rememberCurrentReportKey()
+                primeStatsReport()
             }
         }
     }
 
-    private func rememberCurrentReportKey() {
-        mountedReportKeys.insert(currentReportKey)
+    private var statsContent: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 14) {
+                StatsRangeSelector(selection: $selectedRange)
+
+                if selectedRange == .day {
+                    DayDateStrip(selectedDate: $selectedDate)
+                } else {
+                    PeriodNavigator(
+                        range: selectedRange,
+                        selectedDate: $selectedDate,
+                        title: summary.periodLabel
+                    )
+                }
+            }
+
+            if shouldShowLiveStatsFallback {
+                liveStatsFallback
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    UsageSummaryCard(
+                        summary: summary,
+                        selectedBucket: selectedChartBucket,
+                        selectedPickupCount: selectedChartSnapshot?.pickupCount,
+                        requestCount: personalEntry?.requestCount ?? 0
+                    )
+                }
+
+                UsageChartSection(
+                    range: selectedRange,
+                    buckets: chartBuckets,
+                    selectedBucketID: $selectedChartBucketID
+                )
+
+                MostUsedAppsSection(
+                    range: selectedRange,
+                    apps: appUsageRows,
+                    hasScreenTimeData: summary.hasScreenTimeData
+                )
+            }
+        }
     }
 
-    private var liveReportHeight: CGFloat {
-        switch selectedRange {
+    private func primeStatsReport() {
+        model.reloadUsageHistoryFromSharedStorage()
+        model.requestScreenTimeReportRefresh()
+    }
+
+    private var liveStatsFallback: some View {
+        AppCard(cornerRadius: 24, opacity: 0.78) {
+            ScreenTimeLiveStatsReport(
+                range: currentReportKey.range,
+                selectedDate: currentReportKey.selectedDate
+            )
+            .frame(height: liveReportLoaderHeight(for: currentReportKey.range))
+            .allowsHitTesting(false)
+            .appCardRow(verticalPadding: 14)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func liveReportLoaderHeight(for range: StatsRange) -> CGFloat {
+        switch range {
         case .day:
             return 560
         case .week, .month:
             return 580
         }
+    }
+}
+
+private extension DailyUsageSnapshot {
+    var hasScreenTimeData: Bool {
+        (totalDuration ?? 0) > 0
+            || pickupCount != nil
+            || !appRows.isEmpty
     }
 }
 
@@ -211,6 +223,7 @@ private struct StatsRangeSelector: View {
                                     .shadow(color: Color.blue.opacity(0.20), radius: 8, x: 0, y: 3)
                             }
                         }
+                        .appCapsuleButtonHitArea()
                 }
                 .buttonStyle(.plain)
             }
@@ -230,12 +243,12 @@ private struct StatsRangeSelector: View {
 
     private var backgroundColor: Color {
         colorScheme == .dark
-            ? Color(uiColor: .secondarySystemGroupedBackground)
+            ? Color(red: 0.075, green: 0.085, blue: 0.10)
             : Color.white.opacity(0.72)
     }
 
     private var borderColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.86)
+        colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.86)
     }
 }
 
@@ -598,7 +611,7 @@ private struct MostUsedAppsSection: View {
     }
 
     var body: some View {
-        AppSection("Most Used Apps") {
+        AppSection("Most Used") {
             AppCard {
                 if apps.isEmpty {
                     ContentUnavailableView(
@@ -622,6 +635,7 @@ private struct MostUsedAppsSection: View {
                     }
                 }
             }
+            .allowsHitTesting(false)
         }
     }
 
@@ -631,10 +645,10 @@ private struct MostUsedAppsSection: View {
 
     private var emptyDescription: String {
         if hasScreenTimeData {
-            return "App-level rows are unavailable for this \(range.label.lowercased())."
+            return "App and website rows are unavailable for this \(range.label.lowercased())."
         }
 
-        return "Refresh Screen Time after usage is available."
+        return "Usage appears after Apple provides Screen Time data."
     }
 }
 
@@ -654,7 +668,11 @@ private struct MostUsedAppRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 24, alignment: .leading)
 
-            AppUsageIcon(name: app.displayName, applicationTokenData: app.applicationTokenData)
+            AppUsageIcon(
+                name: app.displayName,
+                applicationTokenData: app.applicationTokenData,
+                isWebDomain: app.isWebDomain
+            )
 
             VStack(alignment: .leading, spacing: 7) {
                 HStack(alignment: .firstTextBaseline) {
@@ -694,7 +712,6 @@ private struct UsageBarChart: View {
     @Binding var selectedBucketID: String?
     @State private var isPressSelectionActive = false
     @State private var pinnedBucketID: String?
-    @State private var pendingGestureLocation: CGPoint?
 
     private let chartHoldDuration = 0.18
 
@@ -756,39 +773,8 @@ private struct UsageBarChart: View {
         }
         .chartOverlay { proxy in
             GeometryReader { geometry in
-                Rectangle()
-                    .fill(.clear)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                pendingGestureLocation = value.location
-                                guard isPressSelectionActive else {
-                                    return
-                                }
-
-                                updatePressSelection(at: value.location, proxy: proxy, geometry: geometry)
-                            }
-                            .onEnded { _ in
-                                endPressSelection()
-                            }
-                    )
-                    .simultaneousGesture(
-                        SpatialTapGesture()
-                            .onEnded { value in
-                                togglePinnedSelection(at: value.location, proxy: proxy, geometry: geometry)
-                            }
-                    )
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: chartHoldDuration, maximumDistance: .infinity)
-                            .onEnded { _ in
-                                isPressSelectionActive = true
-                                AppHaptics.buttonTap()
-                                if let pendingGestureLocation {
-                                    updatePressSelection(at: pendingGestureLocation, proxy: proxy, geometry: geometry)
-                                }
-                            }
-                    )
+                chartInteractionOverlay(proxy: proxy, geometry: geometry)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
         .onChange(of: selectedBucketID) { _, newValue in
@@ -851,6 +837,53 @@ private struct UsageBarChart: View {
         }
     }
 
+    @ViewBuilder
+    private func chartInteractionOverlay(proxy: ChartProxy, geometry: GeometryProxy) -> some View {
+        #if canImport(UIKit)
+        ScrollFriendlyChartInteractionOverlay(
+            minimumPressDuration: chartHoldDuration,
+            onTap: { location in
+                togglePinnedSelection(at: location, proxy: proxy, geometry: geometry)
+            },
+            onPressChanged: { location in
+                beginPressSelection()
+                updatePressSelection(at: location, proxy: proxy, geometry: geometry)
+            },
+            onPressEnded: {
+                endPressSelection()
+            }
+        )
+        #else
+        Rectangle()
+            .fill(.clear)
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                SpatialTapGesture()
+                    .onEnded { value in
+                        togglePinnedSelection(at: value.location, proxy: proxy, geometry: geometry)
+                    }
+            )
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: chartHoldDuration, maximumDistance: 12)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .onChanged { value in
+                        switch value {
+                        case .first(true):
+                            beginPressSelection()
+                        case .second(true, let drag?):
+                            beginPressSelection()
+                            updatePressSelection(at: drag.location, proxy: proxy, geometry: geometry)
+                        default:
+                            break
+                        }
+                    }
+                    .onEnded { _ in
+                        endPressSelection()
+                    }
+            )
+        #endif
+    }
+
     private func bucketID(
         at location: CGPoint,
         proxy: ChartProxy,
@@ -910,12 +943,212 @@ private struct UsageBarChart: View {
 
     private func endPressSelection() {
         guard isPressSelectionActive else {
-            pendingGestureLocation = nil
             return
         }
 
         isPressSelectionActive = false
-        pendingGestureLocation = nil
         selectedBucketID = pinnedBucketID
     }
+
+    private func beginPressSelection() {
+        guard !isPressSelectionActive else {
+            return
+        }
+
+        isPressSelectionActive = true
+        AppHaptics.buttonTap()
+    }
 }
+
+#if canImport(UIKit)
+private struct ScrollFriendlyChartInteractionOverlay: UIViewRepresentable {
+    let minimumPressDuration: TimeInterval
+    let onTap: (CGPoint) -> Void
+    let onPressChanged: (CGPoint) -> Void
+    let onPressEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            onTap: onTap,
+            onPressChanged: onPressChanged,
+            onPressEnded: onPressEnded
+        )
+    }
+
+    func makeUIView(context: Context) -> ChartGestureHostView {
+        let view = ChartGestureHostView()
+        view.backgroundColor = .clear
+        view.isOpaque = false
+        view.coordinator = context.coordinator
+        context.coordinator.minimumPressDuration = minimumPressDuration
+        return view
+    }
+
+    func updateUIView(_ uiView: ChartGestureHostView, context: Context) {
+        context.coordinator.onTap = onTap
+        context.coordinator.onPressChanged = onPressChanged
+        context.coordinator.onPressEnded = onPressEnded
+        context.coordinator.minimumPressDuration = minimumPressDuration
+        context.coordinator.installGesturesIfNeeded(from: uiView)
+    }
+
+    static func dismantleUIView(_ uiView: ChartGestureHostView, coordinator: Coordinator) {
+        coordinator.removeGestures()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onTap: (CGPoint) -> Void
+        var onPressChanged: (CGPoint) -> Void
+        var onPressEnded: () -> Void
+        var minimumPressDuration: TimeInterval = 0.18
+        private weak var hostView: UIView?
+        private weak var gestureTargetView: UIView?
+        private var tapGesture: UITapGestureRecognizer?
+        private var pressGesture: UILongPressGestureRecognizer?
+
+        init(
+            onTap: @escaping (CGPoint) -> Void,
+            onPressChanged: @escaping (CGPoint) -> Void,
+            onPressEnded: @escaping () -> Void
+        ) {
+            self.onTap = onTap
+            self.onPressChanged = onPressChanged
+            self.onPressEnded = onPressEnded
+        }
+
+        func installGesturesIfNeeded(from hostView: UIView) {
+            self.hostView = hostView
+
+            guard let targetView = hostView.enclosingScrollView else {
+                return
+            }
+
+            if gestureTargetView === targetView {
+                pressGesture?.minimumPressDuration = minimumPressDuration
+                return
+            }
+
+            removeGestures()
+            gestureTargetView = targetView
+
+            let tapGesture = UITapGestureRecognizer(
+                target: self,
+                action: #selector(handleTap(_:))
+            )
+            tapGesture.cancelsTouchesInView = false
+            tapGesture.delaysTouchesBegan = false
+            tapGesture.delegate = self
+
+            let pressGesture = UILongPressGestureRecognizer(
+                target: self,
+                action: #selector(handlePress(_:))
+            )
+            pressGesture.minimumPressDuration = minimumPressDuration
+            pressGesture.allowableMovement = 12
+            pressGesture.cancelsTouchesInView = false
+            pressGesture.delaysTouchesBegan = false
+            pressGesture.delegate = self
+
+            targetView.addGestureRecognizer(tapGesture)
+            targetView.addGestureRecognizer(pressGesture)
+
+            self.tapGesture = tapGesture
+            self.pressGesture = pressGesture
+        }
+
+        func removeGestures() {
+            if let tapGesture {
+                gestureTargetView?.removeGestureRecognizer(tapGesture)
+            }
+
+            if let pressGesture {
+                gestureTargetView?.removeGestureRecognizer(pressGesture)
+            }
+
+            tapGesture = nil
+            pressGesture = nil
+            gestureTargetView = nil
+        }
+
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended,
+                  let location = chartLocation(for: recognizer) else {
+                return
+            }
+
+            onTap(location)
+        }
+
+        @objc func handlePress(_ recognizer: UILongPressGestureRecognizer) {
+            guard let location = chartLocation(for: recognizer) else {
+                return
+            }
+
+            switch recognizer.state {
+            case .began, .changed:
+                onPressChanged(location)
+            case .ended, .cancelled, .failed:
+                onPressEnded()
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let hostView else {
+                return false
+            }
+
+            let location = touch.location(in: hostView)
+            return hostView.bounds.contains(location)
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            chartLocation(for: gestureRecognizer) != nil
+        }
+
+        private func chartLocation(for recognizer: UIGestureRecognizer) -> CGPoint? {
+            guard let hostView else {
+                return nil
+            }
+
+            let location = recognizer.location(in: hostView)
+            guard hostView.bounds.contains(location) else {
+                return nil
+            }
+
+            return location
+        }
+    }
+}
+
+private final class ChartGestureHostView: UIView {
+    weak var coordinator: ScrollFriendlyChartInteractionOverlay.Coordinator?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        coordinator?.installGesturesIfNeeded(from: self)
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        false
+    }
+}
+
+private extension UIView {
+    var enclosingScrollView: UIScrollView? {
+        if let scrollView = self as? UIScrollView {
+            return scrollView
+        }
+
+        return superview?.enclosingScrollView
+    }
+}
+#endif
