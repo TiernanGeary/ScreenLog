@@ -1,5 +1,4 @@
 import CloudKit
-import LinkPresentation
 import SwiftUI
 import UIKit
 
@@ -10,8 +9,10 @@ struct CloudShareSheet: View {
     let profile: UserProfile
 
     @State private var phase: InviteLinkPhase = .creating
-    @State private var isShowingSystemShareSheet = false
     @State private var didCopyLink = false
+    @State private var preparedShare: CKShare?
+    @State private var preparedContainer: CKContainer?
+    @State private var sharingPayload: CloudSharePayload?
 
     var body: some View {
         NavigationStack {
@@ -60,9 +61,9 @@ struct CloudShareSheet: View {
                     VStack(spacing: 12) {
                         Button {
                             AppHaptics.buttonTap()
-                            isShowingSystemShareSheet = true
+                            presentCloudSharing()
                         } label: {
-                            Label("Share Link", systemImage: "square.and.arrow.up")
+                            Label("Share Invite", systemImage: "square.and.arrow.up")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
@@ -123,12 +124,24 @@ struct CloudShareSheet: View {
             .task {
                 await createInviteLink()
             }
-            .sheet(isPresented: $isShowingSystemShareSheet) {
-                if case .ready(let url) = phase {
-                    InviteURLActivitySheet(url: url, profileName: profile.displayName)
+            .sheet(item: $sharingPayload) { payload in
+                CloudSharingControllerView(
+                    share: payload.share,
+                    container: payload.container,
+                    profileName: profile.displayName
+                ) {
+                    sharingPayload = nil
                 }
+                .ignoresSafeArea()
             }
         }
+    }
+
+    private func presentCloudSharing() {
+        guard let preparedShare, let preparedContainer else {
+            return
+        }
+        sharingPayload = CloudSharePayload(share: preparedShare, container: preparedContainer)
     }
 
     private func createInviteLink() async {
@@ -141,8 +154,10 @@ struct CloudShareSheet: View {
                 throw InviteLinkError.missingShareURL
             }
 
+            preparedShare = result.share
+            preparedContainer = result.container
             phase = .ready(url)
-            isShowingSystemShareSheet = true
+            presentCloudSharing()
         } catch {
             phase = .failed(error.localizedDescription)
         }
@@ -163,50 +178,60 @@ private enum InviteLinkError: LocalizedError {
     }
 }
 
-private struct InviteURLActivitySheet: UIViewControllerRepresentable {
-    let url: URL
-    let profileName: String
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let item = InviteURLActivityItem(url: url, profileName: profileName)
-        return UIActivityViewController(activityItems: [item], applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+private struct CloudSharePayload: Identifiable {
+    let id = UUID()
+    let share: CKShare
+    let container: CKContainer
 }
 
-private final class InviteURLActivityItem: NSObject, UIActivityItemSource {
-    let url: URL
+/// Presents Apple's native CloudKit sharing UI. Sending the invite as a real
+/// CKShare invitation (rather than a bare iCloud URL) makes iOS reliably hand the
+/// tapped link off to the app instead of opening the iCloud.com web page.
+private struct CloudSharingControllerView: UIViewControllerRepresentable {
+    let share: CKShare
+    let container: CKContainer
     let profileName: String
+    let onFinish: () -> Void
 
-    init(url: URL, profileName: String) {
-        self.url = url
-        self.profileName = profileName
+    func makeUIViewController(context: Context) -> UICloudSharingController {
+        let controller = UICloudSharingController(share: share, container: container)
+        controller.delegate = context.coordinator
+        // Friends need write access (to write their participant mirror + approvals
+        // back into the channel), and link-based sharing keeps the existing UX.
+        controller.availablePermissions = [.allowReadWrite, .allowPublic]
+        return controller
     }
 
-    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
-        url
+    func updateUIViewController(_ uiViewController: UICloudSharingController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(profileName: profileName, onFinish: onFinish)
     }
 
-    func activityViewController(
-        _ activityViewController: UIActivityViewController,
-        itemForActivityType activityType: UIActivity.ActivityType?
-    ) -> Any? {
-        url
-    }
+    final class Coordinator: NSObject, UICloudSharingControllerDelegate {
+        let profileName: String
+        let onFinish: () -> Void
 
-    func activityViewController(
-        _ activityViewController: UIActivityViewController,
-        subjectForActivityType activityType: UIActivity.ActivityType?
-    ) -> String {
-        "deny invite"
-    }
+        init(profileName: String, onFinish: @escaping () -> Void) {
+            self.profileName = profileName
+            self.onFinish = onFinish
+        }
 
-    func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
-        let metadata = LPLinkMetadata()
-        metadata.title = "\(profileName) invited you to deny"
-        metadata.originalURL = url
-        metadata.url = url
-        return metadata
+        func itemTitle(for csc: UICloudSharingController) -> String? {
+            "\(profileName)'s Screen Time"
+        }
+
+        func cloudSharingController(
+            _ csc: UICloudSharingController,
+            failedToSaveShareWithError error: any Error
+        ) {
+            onFinish()
+        }
+
+        func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {}
+
+        func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {
+            onFinish()
+        }
     }
 }
