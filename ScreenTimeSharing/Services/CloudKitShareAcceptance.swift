@@ -3,6 +3,17 @@ import UIKit
 import UserNotifications
 
 @MainActor
+final class RemoteChangeCenter {
+    static let shared = RemoteChangeCenter()
+
+    var handler: (() async -> Void)?
+
+    func handleRemoteChange() async {
+        await handler?()
+    }
+}
+
+@MainActor
 final class CloudKitShareAcceptanceCenter {
     static let shared = CloudKitShareAcceptanceCenter()
 
@@ -36,7 +47,38 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        application.registerForRemoteNotifications()
         return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        // CloudKit manages the APNs token itself; nothing to forward.
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: any Error
+    ) {
+        // Non-fatal: push just won't arrive; the app still syncs on launch/foreground.
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        guard CKNotification(fromRemoteNotificationDictionary: userInfo) != nil else {
+            completionHandler(.noData)
+            return
+        }
+
+        Task { @MainActor in
+            await RemoteChangeCenter.shared.handleRemoteChange()
+            completionHandler(.newData)
+        }
     }
 
     func application(

@@ -23,6 +23,9 @@ struct ScreenTimeSharingApp: App {
                     ShieldFriendRequestNotificationCenter.shared.handler = { groupID in
                         model.openPendingShieldFriendRequestFromNotification(groupID: groupID)
                     }
+                    RemoteChangeCenter.shared.handler = {
+                        await model.handleRemoteChange()
+                    }
                 }
                 .onOpenURL { url in
                     guard url.host()?.localizedCaseInsensitiveContains("icloud.com") == true else {

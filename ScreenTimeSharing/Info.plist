@@ -22,6 +22,10 @@
 	<string>202605281236</string>
 	<key>CKSharingSupported</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>deny needs the camera so you can take profile photos and send live pleading photos with time requests.</string>
 	<key>UILaunchScreen</key>

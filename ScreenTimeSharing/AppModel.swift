@@ -383,6 +383,7 @@ final class AppModel: ObservableObject {
         await subscriptionService.checkEntitlements()
         await subscriptionService.loadProducts()
         cloudAvailability = await snapshotStore.cloudAvailability()
+        await snapshotStore.ensureSubscriptions()
         await migrateLegacyFriendRequestRecords()
         await publishProfileUpdateToCloud()
         await reloadFriends()
@@ -1130,6 +1131,14 @@ final class AppModel: ObservableObject {
         } catch {
             message = "Could not refresh friends: \(error.localizedDescription)"
         }
+    }
+
+    /// Invoked when a CloudKit push wakes the app (foreground or background): pull
+    /// the latest friends + requests so the existing notification logic posts the
+    /// approve/deny/new-request alerts even when the app wasn't open.
+    func handleRemoteChange() async {
+        await reloadFriends()
+        await syncFriendRequests()
     }
 
     func syncFriendRequests() async {

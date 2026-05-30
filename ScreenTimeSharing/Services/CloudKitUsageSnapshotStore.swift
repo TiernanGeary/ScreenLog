@@ -131,6 +131,33 @@ final class CloudKitUsageSnapshotStore {
         }
     }
 
+    /// Registers silent CloudKit push subscriptions so the app is woken in the
+    /// background when a friend writes into our private zone (an approval) or when
+    /// a new request lands in a channel we've accepted (shared database). On wake,
+    /// the app syncs and the existing notification logic posts the alert.
+    func ensureSubscriptions() async {
+        guard let container else {
+            return
+        }
+        await saveDatabaseSubscription(id: "private-db-changes-v1", database: container.privateCloudDatabase)
+        await saveDatabaseSubscription(id: "shared-db-changes-v1", database: container.sharedCloudDatabase)
+    }
+
+    private func saveDatabaseSubscription(id: String, database: CKDatabase) async {
+        let subscription = CKDatabaseSubscription(subscriptionID: id)
+        let notificationInfo = CKSubscription.NotificationInfo()
+        notificationInfo.shouldSendContentAvailable = true
+        subscription.notificationInfo = notificationInfo
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            database.save(subscription) { _, _ in
+                // Best-effort and idempotent: saving an existing subscription ID
+                // succeeds, so transient/duplicate errors are safe to ignore.
+                continuation.resume()
+            }
+        }
+    }
+
     func fetchExistingProfile(id appleUserID: String) async throws -> UserProfile? {
         guard let container else {
             return nil
