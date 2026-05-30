@@ -48,7 +48,6 @@ final class CloudKitUsageSnapshotStore {
         static let userProfile = "UserProfile"
         static let dailyUsageSnapshot = "DailyUsageSnapshot"
         static let friendTimeRequest = "FriendTimeRequest"
-        static let friendInbox = "FriendInbox"
     }
 
     private enum Field {
@@ -84,8 +83,7 @@ final class CloudKitUsageSnapshotStore {
         static let expiresAt = "expiresAt"
         static let approvedExpiresAt = "approvedExpiresAt"
         static let photoAsset = "photoAsset"
-        static let inboxFriendID = "inboxFriendID"
-        static let inboxOwnerProfileID = "inboxOwnerProfileID"
+        static let channelID = "channelID"
     }
 
     private let container: CKContainer?
@@ -187,10 +185,11 @@ final class CloudKitUsageSnapshotStore {
 
         try await ensurePrivateZone(in: container)
 
+        let database = container.privateCloudDatabase
         let profileRecord = makeProfileRecord(profile)
         let snapshotRecord = makeSnapshotRecord(payload, profileRecordID: profileRecord.recordID)
 
-        let result = try await container.privateCloudDatabase.modifyRecords(
+        let result = try await database.modifyRecords(
             saving: [profileRecord, snapshotRecord],
             deleting: [],
             savePolicy: .changedKeys,
@@ -199,6 +198,40 @@ final class CloudKitUsageSnapshotStore {
 
         for saveResult in result.saveResults.values {
             _ = try saveResult.get()
+        }
+
+        // Mirror the updated profile + latest snapshot into every owned channel so
+        // friends who accepted any invite see fresh data.
+        if let channelRecords = try? await ownChannelRecords(database: database, profileID: profile.id) {
+            for channelRoot in channelRecords {
+                guard let channelUUID = channelUUID(from: channelRoot, profileID: profile.id) else {
+                    continue
+                }
+                applyProfileFields(profile, to: channelRoot)
+                channelRoot[Field.channelID] = channelUUID as CKRecordValue
+
+                let snapshotRecordID = CKRecord.ID(
+                    recordName: "snapshot-\(channelUUID)-\(payload.recordName)",
+                    zoneID: privateZoneID
+                )
+                let channelSnapshot = makeSnapshotRecord(
+                    payload,
+                    profileRecordID: channelRoot.recordID,
+                    recordID: snapshotRecordID
+                )
+
+                let channelResult = try? await database.modifyRecords(
+                    saving: [channelRoot, channelSnapshot],
+                    deleting: [],
+                    savePolicy: .changedKeys,
+                    atomically: true
+                )
+                if let channelResult {
+                    for saveResult in channelResult.saveResults.values {
+                        _ = try? saveResult.get()
+                    }
+                }
+            }
         }
 
         try? await publishAcceptedShareMirrors(profile: profile, snapshot: snapshot)
@@ -216,32 +249,31 @@ final class CloudKitUsageSnapshotStore {
         sharingProfile.shareStatus = .sharing
         sharingProfile.updatedAt = Date()
 
-        let profileRecord = makeProfileRecord(sharingProfile)
-        let shareID = CKRecord.ID(recordName: "share-\(profile.id)", zoneID: privateZoneID)
-        let existingShare = try await existingProfileShare(shareID: shareID, database: database)
-        let share = existingShare ?? CKShare(rootRecord: profileRecord, shareID: shareID)
+        // Each invite gets its own private channel (pairwise share). Whoever
+        // accepts THIS invite link is paired to THIS channel only.
+        let channelUUID = UUID().uuidString
+        let channelRootName = channelRootRecordName(profileID: profile.id, channelUUID: channelUUID)
+        let channelRootID = CKRecord.ID(recordName: channelRootName, zoneID: privateZoneID)
+        let channelRoot = makeProfileRecord(
+            sharingProfile,
+            recordID: channelRootID,
+            includesAvatarImageData: true
+        )
+        channelRoot[Field.channelID] = channelUUID as CKRecordValue
+
+        let shareID = CKRecord.ID(
+            recordName: "channel-share-\(profile.id)-\(channelUUID)",
+            zoneID: privateZoneID
+        )
+        let share = CKShare(rootRecord: channelRoot, shareID: shareID)
         configureProfileShare(share, profile: profile)
 
-        let savedShare: CKShare
-        if existingShare == nil {
-            savedShare = try await saveNewShare(
-                rootRecord: profileRecord,
-                share: share,
-                in: database,
-                context: "Creating your invite link"
-            )
-        } else {
-            _ = try await saveRecord(
-                profileRecord,
-                in: database,
-                context: "Saving your share profile"
-            )
-            savedShare = try await saveShare(
-                share,
-                in: database,
-                context: "Updating your invite link"
-            )
-        }
+        let savedShare = try await saveNewShare(
+            rootRecord: channelRoot,
+            share: share,
+            in: database,
+            context: "Creating your invite link"
+        )
 
         var resolvedShare = savedShare
         if resolvedShare.url == nil,
@@ -259,11 +291,11 @@ final class CloudKitUsageSnapshotStore {
 
         try await ensurePrivateZone(in: container)
         let database = container.privateCloudDatabase
-        let shareID = CKRecord.ID(recordName: "share-\(profile.id)", zoneID: privateZoneID)
-        let existingShare = try await existingProfileShare(shareID: shareID, database: database)
+
+        let channelRecords = (try? await ownChannelRecords(database: database, profileID: profile.id)) ?? []
 
         var cloudProfile = profile
-        if existingShare != nil {
+        if !channelRecords.isEmpty {
             cloudProfile.shareStatus = .sharing
         }
 
@@ -273,12 +305,17 @@ final class CloudKitUsageSnapshotStore {
             context: "Updating your profile"
         )
 
-        if let existingShare {
-            configureProfileShare(existingShare, profile: profile)
-            _ = try await saveShare(
-                existingShare,
+        // Propagate name/avatar changes to every channel root so friends see them.
+        for channelRoot in channelRecords {
+            guard let channelUUID = channelUUID(from: channelRoot, profileID: profile.id) else {
+                continue
+            }
+            applyProfileFields(profile, to: channelRoot)
+            channelRoot[Field.channelID] = channelUUID as CKRecordValue
+            _ = try? await saveRecord(
+                channelRoot,
                 in: database,
-                context: "Updating your invite profile"
+                context: "Updating your channel profile"
             )
         }
 
@@ -353,13 +390,52 @@ final class CloudKitUsageSnapshotStore {
             photoReference: BlockFriendRequestPhotoReference(localIdentifier: "schema-bootstrap-photo")
         )
 
-        try await publishFriendRequest(
+        // publishFriendRequest only writes into a real accepted channel, so for
+        // schema bootstrap we create a throwaway channel root (materializes the
+        // `channelID` field) and write the request under it (materializes the
+        // FriendTimeRequest fields), then delete both.
+        let bootstrapChannelUUID = "schema-bootstrap-channel"
+        let channelRootID = CKRecord.ID(
+            recordName: channelRootRecordName(profileID: profile.id, channelUUID: bootstrapChannelUUID),
+            zoneID: privateZoneID
+        )
+        let channelRoot = makeProfileRecord(
+            bootstrapProfile,
+            recordID: channelRootID,
+            includesAvatarImageData: true
+        )
+        channelRoot[Field.channelID] = bootstrapChannelUUID as CKRecordValue
+
+        let requestRecordID = CKRecord.ID(
+            recordName: "friend-request-\(bootstrapChannelUUID)-\(requestID)",
+            zoneID: privateZoneID
+        )
+        let requestRecord = try makeFriendRequestRecord(
             request,
-            profile: profile,
+            recordID: requestRecordID,
+            profileRecordID: channelRootID,
+            existingRecord: nil,
             photoData: Self.schemaBootstrapJPEGData
         )
 
-        try await deleteSchemaBootstrapRecords(snapshot: snapshot, request: request, profile: profile, in: container.privateCloudDatabase)
+        let bootstrapResult = try await container.privateCloudDatabase.modifyRecords(
+            saving: [channelRoot, requestRecord.record],
+            deleting: [],
+            savePolicy: .changedKeys,
+            atomically: true
+        )
+        try requestRecord.cleanup()
+        for saveResult in bootstrapResult.saveResults.values {
+            _ = try saveResult.get()
+        }
+
+        try await deleteSchemaBootstrapRecords(
+            snapshot: snapshot,
+            channelRootID: channelRootID,
+            requestRecordID: requestRecordID,
+            profile: profile,
+            in: container.privateCloudDatabase
+        )
     }
     #endif
 
@@ -375,39 +451,29 @@ final class CloudKitUsageSnapshotStore {
         try await ensurePrivateZone(in: container)
         let database = container.privateCloudDatabase
 
-        // Resolve each selected friend's CloudKit identity so we can grant them
-        // (and only them) write access to their private inbox share.
-        let userRecordIDsByFriendID = (try? await friendUserRecordIDs(
-            for: request.selectedFriendIDs,
-            profile: profile,
-            database: database
-        )) ?? [:]
-        let participantsByUserRecordName = (try? await shareParticipants(
-            for: Array(Set(userRecordIDsByFriendID.values)),
-            in: container
+        // Deliver the request only into the private channel(s) belonging to each
+        // selected friend. A friend without an accepted channel yet is skipped.
+        let channelRootIDsByFriendID = (try? await channelRootIDsByFriendID(
+            database: database,
+            profileID: profile.id
         )) ?? [:]
 
         for friendID in request.selectedFriendIDs {
-            let friendParticipant = userRecordIDsByFriendID[friendID]
-                .flatMap { participantsByUserRecordName[$0.recordName] }
-            let inboxRecordID = inboxRecordID(ownerProfileID: profile.id, friendID: friendID)
-            let inboxRecord = try await ensureInboxRecord(
-                recordID: inboxRecordID,
-                ownerProfileID: profile.id,
-                friendID: friendID,
-                database: database
-            )
-            try await ensureInboxShare(
-                inboxRecord: inboxRecord,
-                friendID: friendID,
-                friendParticipant: friendParticipant,
-                profile: profile,
-                database: database
-            )
+            guard let channelRootID = channelRootIDsByFriendID[friendID] else {
+                continue
+            }
+            guard let channelUUID = channelUUID(fromRecordName: channelRootID.recordName, profileID: profile.id) else {
+                continue
+            }
 
+            let requestRecordID = CKRecord.ID(
+                recordName: "friend-request-\(channelUUID)-\(request.id)",
+                zoneID: privateZoneID
+            )
             let requestRecord = try makeFriendRequestRecord(
                 request,
-                profileRecordID: inboxRecordID,
+                recordID: requestRecordID,
+                profileRecordID: channelRootID,
                 existingRecord: nil,
                 photoData: photoData
             )
@@ -464,15 +530,10 @@ final class CloudKitUsageSnapshotStore {
             }
         }
 
-        if !knownRequestIDs.isEmpty {
-            merge(
-                records: try await friendRequestRecords(
-                    ids: knownRequestIDs,
-                    in: container.privateCloudDatabase,
-                    zoneID: privateZoneID
-                )
-            )
-        }
+        // Request records are channel-scoped, so we rely on the type-based scan
+        // (which returns channel-parented requests) rather than constructing
+        // recordIDs from known request IDs.
+        _ = knownRequestIDs
 
         do {
             merge(records: try await friendRequestRecords(in: container.privateCloudDatabase, zoneID: privateZoneID))
@@ -481,16 +542,6 @@ final class CloudKitUsageSnapshotStore {
         }
 
         for zoneID in await allSharedZoneIDs(in: container) {
-            if !knownRequestIDs.isEmpty {
-                merge(
-                    records: try await friendRequestRecords(
-                        ids: knownRequestIDs,
-                        in: container.sharedCloudDatabase,
-                        zoneID: zoneID
-                    )
-                )
-            }
-
             do {
                 merge(records: try await friendRequestRecords(in: container.sharedCloudDatabase, zoneID: zoneID))
             } catch {
@@ -648,186 +699,6 @@ final class CloudKitUsageSnapshotStore {
         }
     }
 
-    private func inboxRecordID(ownerProfileID: String, friendID: String) -> CKRecord.ID {
-        CKRecord.ID(recordName: "inbox-\(ownerProfileID)-\(friendID)", zoneID: privateZoneID)
-    }
-
-    private func ensureInboxRecord(
-        recordID: CKRecord.ID,
-        ownerProfileID: String,
-        friendID: String,
-        database: CKDatabase
-    ) async throws -> CKRecord {
-        let response = try await database.records(for: [recordID])
-        if let result = response[recordID] {
-            do {
-                return try result.get()
-            } catch {
-                if !isUnknownItemError(error) {
-                    throw error
-                }
-            }
-        }
-
-        let record = CKRecord(recordType: RecordType.friendInbox, recordID: recordID)
-        record[Field.inboxOwnerProfileID] = ownerProfileID as CKRecordValue
-        record[Field.inboxFriendID] = friendID as CKRecordValue
-        record[Field.createdAt] = Date() as CKRecordValue
-
-        let saveResult = try await database.modifyRecords(
-            saving: [record],
-            deleting: [],
-            savePolicy: .changedKeys,
-            atomically: false
-        )
-
-        return try savedRecord(for: recordID, from: saveResult.saveResults, context: "Creating friend inbox")
-    }
-
-    private func ensureInboxShare(
-        inboxRecord: CKRecord,
-        friendID: String,
-        friendParticipant: CKShare.Participant?,
-        profile: UserProfile,
-        database: CKDatabase
-    ) async throws {
-        let shareID = CKRecord.ID(
-            recordName: "inbox-share-\(profile.id)-\(friendID)",
-            zoneID: privateZoneID
-        )
-
-        if let existingShare = try await existingProfileShare(shareID: shareID, database: database) {
-            var changed = false
-            if existingShare.publicPermission != .none {
-                existingShare.publicPermission = .none
-                changed = true
-            }
-            if let friendParticipant, addParticipantIfNeeded(friendParticipant, to: existingShare) {
-                changed = true
-            }
-            if changed {
-                _ = try await saveShare(existingShare, in: database, context: "Updating inbox share")
-            }
-            return
-        }
-
-        let share = CKShare(rootRecord: inboxRecord, shareID: shareID)
-        share[CKShare.SystemFieldKey.title] = "Friend Requests" as CKRecordValue
-        // Keep the inbox private to its single recipient: no public access, only
-        // the explicitly-added friend participant can read it and write replies.
-        share.publicPermission = .none
-        if let friendParticipant {
-            _ = addParticipantIfNeeded(friendParticipant, to: share)
-        }
-
-        _ = try await saveNewShare(
-            rootRecord: inboxRecord,
-            share: share,
-            in: database,
-            context: "Creating friend inbox share"
-        )
-    }
-
-    /// Adds the friend to the inbox share with read/write access (so they can
-    /// receive the request and write the approval back) unless already present.
-    @discardableResult
-    private func addParticipantIfNeeded(_ participant: CKShare.Participant, to share: CKShare) -> Bool {
-        guard let target = participant.userIdentity.userRecordID else {
-            return false
-        }
-        let alreadyPresent = share.participants.contains { existing in
-            existing.userIdentity.userRecordID == target
-        }
-        guard !alreadyPresent else {
-            return false
-        }
-        participant.permission = .readWrite
-        share.addParticipant(participant)
-        return true
-    }
-
-    /// Resolves selected friend profile IDs to their CloudKit user record IDs by
-    /// cross-referencing this user's profile-share participants with the mirrored
-    /// `participant-profile-*` records that carry each friend's profile ID.
-    private func friendUserRecordIDs(
-        for friendProfileIDs: [String],
-        profile: UserProfile,
-        database: CKDatabase
-    ) async throws -> [String: CKRecord.ID] {
-        guard !friendProfileIDs.isEmpty else {
-            return [:]
-        }
-
-        let shareID = CKRecord.ID(recordName: "share-\(profile.id)", zoneID: privateZoneID)
-        guard let share = try await existingProfileShare(shareID: shareID, database: database) else {
-            return [:]
-        }
-
-        var userRecordIDByMirrorName: [String: CKRecord.ID] = [:]
-        var mirrorRecordIDs: [CKRecord.ID] = []
-        for participant in share.participants {
-            guard participant.role != .owner,
-                  let userRecordID = participant.userIdentity.userRecordID else {
-                continue
-            }
-            let mirrorName = participantProfileRecordName(for: userRecordID)
-            if userRecordIDByMirrorName[mirrorName] == nil {
-                userRecordIDByMirrorName[mirrorName] = userRecordID
-                mirrorRecordIDs.append(CKRecord.ID(recordName: mirrorName, zoneID: privateZoneID))
-            }
-        }
-
-        guard !mirrorRecordIDs.isEmpty else {
-            return [:]
-        }
-
-        let wantedProfileIDs = Set(friendProfileIDs)
-        let response = try await database.records(for: mirrorRecordIDs)
-        var result: [String: CKRecord.ID] = [:]
-        for (recordID, recordResult) in response {
-            guard let record = try? recordResult.get(),
-                  let ownerProfileID = record[Field.ownerProfileID] as? String,
-                  wantedProfileIDs.contains(ownerProfileID),
-                  let userRecordID = userRecordIDByMirrorName[recordID.recordName] else {
-                continue
-            }
-            result[ownerProfileID] = userRecordID
-        }
-        return result
-    }
-
-    /// Fetches `CKShare.Participant` objects for the given user record IDs so they
-    /// can be added to a share. Keyed by user record name.
-    private func shareParticipants(
-        for userRecordIDs: [CKRecord.ID],
-        in container: CKContainer
-    ) async throws -> [String: CKShare.Participant] {
-        guard !userRecordIDs.isEmpty else {
-            return [:]
-        }
-
-        let lookupInfos = userRecordIDs.map { CKUserIdentity.LookupInfo(userRecordID: $0) }
-        return try await withCheckedThrowingContinuation { continuation in
-            let operation = CKFetchShareParticipantsOperation(userIdentityLookupInfos: lookupInfos)
-            var participants: [String: CKShare.Participant] = [:]
-            operation.perShareParticipantResultBlock = { _, result in
-                if case .success(let participant) = result,
-                   let recordName = participant.userIdentity.userRecordID?.recordName {
-                    participants[recordName] = participant
-                }
-            }
-            operation.fetchShareParticipantsResultBlock = { result in
-                switch result {
-                case .success:
-                    continuation.resume(returning: participants)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-            container.add(operation)
-        }
-    }
-
     /// All zones the user can reach in the shared database — the persisted set
     /// plus any newly delivered shares (e.g. a friend's inbox) discovered live.
     private func allSharedZoneIDs(in container: CKContainer) async -> [CKRecordZone.ID] {
@@ -849,12 +720,6 @@ final class CloudKitUsageSnapshotStore {
                 add(zone.zoneID)
             }
         }
-        return zoneIDs
-    }
-
-    private func inboxZoneIDs(for friendID: String, in database: CKDatabase) async throws -> [CKRecordZone.ID] {
-        var zoneIDs: [CKRecordZone.ID] = [privateZoneID]
-        zoneIDs.append(contentsOf: sharedZoneStore.load())
         return zoneIDs
     }
 
@@ -1084,6 +949,98 @@ final class CloudKitUsageSnapshotStore {
         return makeProfileRecord(profile, recordID: recordID, includesAvatarImageData: true)
     }
 
+    private func channelRootRecordName(profileID: String, channelUUID: String) -> String {
+        "channel-\(profileID)-\(channelUUID)"
+    }
+
+    /// Extracts the channel UUID from a channel root record (preferring the
+    /// `channelID` field, falling back to parsing the record name).
+    private func channelUUID(from record: CKRecord, profileID: String) -> String? {
+        if let channelID = record[Field.channelID] as? String, !channelID.isEmpty {
+            return channelID
+        }
+        return channelUUID(fromRecordName: record.recordID.recordName, profileID: profileID)
+    }
+
+    private func channelUUID(fromRecordName recordName: String, profileID: String) -> String? {
+        let prefix = "channel-\(profileID)-"
+        guard recordName.hasPrefix(prefix) else {
+            return nil
+        }
+        let suffix = String(recordName.dropFirst(prefix.count))
+        return suffix.isEmpty ? nil : suffix
+    }
+
+    /// Returns the owner's channel-root records (one per invite channel) living
+    /// in the owner's private zone.
+    private func ownChannelRecords(database: CKDatabase, profileID: String) async throws -> [CKRecord] {
+        let query = CKQuery(
+            recordType: RecordType.userProfile,
+            predicate: NSPredicate(format: "%K == %@", Field.ownerProfileID, profileID)
+        )
+
+        let response: (matchResults: [(CKRecord.ID, Result<CKRecord, any Error>)], queryCursor: CKQueryOperation.Cursor?)
+        do {
+            response = try await database.records(
+                matching: query,
+                inZoneWith: privateZoneID,
+                desiredKeys: nil,
+                resultsLimit: 200
+            )
+        } catch {
+            if isUnknownItemError(error) {
+                return []
+            }
+            throw error
+        }
+
+        let prefix = "channel-\(profileID)-"
+        return response.matchResults.compactMap { _, result -> CKRecord? in
+            guard let record = try? result.get(),
+                  record.recordID.recordName.hasPrefix(prefix) else {
+                return nil
+            }
+            return record
+        }
+    }
+
+    /// Maps each friend's profile ID to the channel root record they accepted, by
+    /// inspecting the `participant-profile-*` mirror records (written by accepters)
+    /// and reading their `parent` (= channel root) + `ownerProfileID` (= friendID).
+    private func channelRootIDsByFriendID(database: CKDatabase, profileID: String) async throws -> [String: CKRecord.ID] {
+        let query = CKQuery(
+            recordType: RecordType.userProfile,
+            predicate: NSPredicate(format: "%K != %@", Field.ownerProfileID, profileID)
+        )
+
+        let response: (matchResults: [(CKRecord.ID, Result<CKRecord, any Error>)], queryCursor: CKQueryOperation.Cursor?)
+        do {
+            response = try await database.records(
+                matching: query,
+                inZoneWith: privateZoneID,
+                desiredKeys: nil,
+                resultsLimit: 200
+            )
+        } catch {
+            if isUnknownItemError(error) {
+                return [:]
+            }
+            throw error
+        }
+
+        var result: [String: CKRecord.ID] = [:]
+        for (_, recordResult) in response.matchResults {
+            guard let record = try? recordResult.get(),
+                  record.recordID.recordName.hasPrefix("participant-profile-"),
+                  let friendID = record[Field.ownerProfileID] as? String,
+                  let channelRootID = record.parent?.recordID else {
+                continue
+            }
+            result[friendID] = channelRootID
+        }
+        return result
+    }
+
     private func makeProfileRecord(
         _ profile: UserProfile,
         recordID: CKRecord.ID,
@@ -1108,6 +1065,24 @@ final class CloudKitUsageSnapshotStore {
         record[Field.shareStatus] = profile.shareStatus.rawValue as CKRecordValue
         record[Field.updatedAt] = profile.updatedAt as CKRecordValue
         return record
+    }
+
+    /// Copies the profile's display fields onto an existing record in place so the
+    /// record's identity (recordID, parent, share association) is preserved.
+    private func applyProfileFields(_ profile: UserProfile, to record: CKRecord) {
+        record[Field.ownerProfileID] = profile.id as CKRecordValue
+        if let appleUserID = profile.appleUserID, !appleUserID.isEmpty {
+            record[Field.appleUserID] = appleUserID as CKRecordValue
+        }
+        record[Field.displayName] = profile.displayName as CKRecordValue
+        record[Field.avatarColorHex] = profile.avatarColorHex as CKRecordValue
+        if let avatarImageData = profile.avatarImageData, !avatarImageData.isEmpty {
+            record[Field.avatarImageData] = avatarImageData as CKRecordValue
+        } else {
+            record[Field.avatarImageData] = nil
+        }
+        record[Field.shareStatus] = profile.shareStatus.rawValue as CKRecordValue
+        record[Field.updatedAt] = profile.updatedAt as CKRecordValue
     }
 
     private func configureProfileShare(_ share: CKShare, profile: UserProfile) {
@@ -1198,7 +1173,8 @@ final class CloudKitUsageSnapshotStore {
 
     private func deleteSchemaBootstrapRecords(
         snapshot: DailyUsageSnapshot,
-        request: BlockFriendRequest,
+        channelRootID: CKRecord.ID,
+        requestRecordID: CKRecord.ID,
         profile: UserProfile,
         in database: CKDatabase
     ) async throws {
@@ -1207,11 +1183,8 @@ final class CloudKitUsageSnapshotStore {
         if let snapshotPayload = payload {
             recordIDs.append(CKRecord.ID(recordName: "snapshot-\(snapshotPayload.recordName)", zoneID: privateZoneID))
         }
-        recordIDs.append(CKRecord.ID(recordName: "friend-request-\(request.id)", zoneID: privateZoneID))
-        for friendID in request.selectedFriendIDs {
-            recordIDs.append(CKRecord.ID(recordName: "inbox-share-\(profile.id)-\(friendID)", zoneID: privateZoneID))
-            recordIDs.append(CKRecord.ID(recordName: "inbox-\(profile.id)-\(friendID)", zoneID: privateZoneID))
-        }
+        recordIDs.append(requestRecordID)
+        recordIDs.append(channelRootID)
 
         guard !recordIDs.isEmpty else {
             return
@@ -1589,78 +1562,58 @@ final class CloudKitUsageSnapshotStore {
         }
     }
 
-    private func friendRequestRecords(
-        ids: Set<String>,
-        in database: CKDatabase,
-        zoneID: CKRecordZone.ID
-    ) async throws -> [CKRecord] {
-        let recordIDs = ids.map { CKRecord.ID(recordName: "friend-request-\($0)", zoneID: zoneID) }
-        guard !recordIDs.isEmpty else {
-            return []
-        }
-
-        do {
-            let response = try await database.records(for: recordIDs)
-            return response.compactMap { _, result in
-                try? result.get()
-            }
-        } catch {
-            if isUnknownItemError(error) {
-                return []
-            }
-            throw error
-        }
-    }
-
     private func updateFriendRequest(
         _ request: BlockFriendRequest,
         database: CKDatabase,
         zoneID: CKRecordZone.ID
     ) async throws -> Bool {
-        guard let existingRecord = try await friendRequestRecord(id: request.id, database: database, zoneID: zoneID) else {
+        // Request records are channel-scoped now, so their recordName isn't
+        // derivable from request.id. Query by the requestID field instead and
+        // update every matching record in place.
+        let existingRecords = try await friendRequestRecords(
+            requestID: request.id,
+            database: database,
+            zoneID: zoneID
+        )
+        guard !existingRecords.isEmpty else {
             return false
         }
 
-        let updatedRecord = try makeFriendRequestRecord(
-            request,
-            profileRecordID: existingRecord.parent?.recordID,
-            existingRecord: existingRecord,
-            photoData: nil
-        )
-        let result = try await database.modifyRecords(
-            saving: [updatedRecord.record],
-            deleting: [],
-            savePolicy: .changedKeys,
-            atomically: true
-        )
+        var didUpdate = false
+        for existingRecord in existingRecords {
+            let updatedRecord = try makeFriendRequestRecord(
+                request,
+                recordID: existingRecord.recordID,
+                profileRecordID: existingRecord.parent?.recordID,
+                existingRecord: existingRecord,
+                photoData: nil
+            )
+            let result = try await database.modifyRecords(
+                saving: [updatedRecord.record],
+                deleting: [],
+                savePolicy: .changedKeys,
+                atomically: true
+            )
 
-        try updatedRecord.cleanup()
-        for saveResult in result.saveResults.values {
-            _ = try saveResult.get()
+            try updatedRecord.cleanup()
+            for saveResult in result.saveResults.values {
+                _ = try saveResult.get()
+            }
+            didUpdate = true
         }
-        return true
+        return didUpdate
     }
 
-    private func friendRequestRecord(
-        id: String,
+    private func friendRequestRecords(
+        requestID: String,
         database: CKDatabase,
         zoneID: CKRecordZone.ID
-    ) async throws -> CKRecord? {
-        let recordID = CKRecord.ID(recordName: "friend-request-\(id)", zoneID: zoneID)
-        let response = try await database.records(for: [recordID])
-
-        guard let result = response[recordID] else {
-            return nil
-        }
-
-        do {
-            return try result.get()
-        } catch {
-            if isUnknownItemError(error) {
-                return nil
-            }
-            throw error
-        }
+    ) async throws -> [CKRecord] {
+        // Reuse the status-based scan (status is already a queryable field) and
+        // filter by requestID in code, so we don't require a separate queryable
+        // index on requestID in the CloudKit schema.
+        let records = try await friendRequestRecords(in: database, zoneID: zoneID)
+        return records.filter { ($0[Field.requestID] as? String) == requestID }
     }
 
     private struct PreparedFriendRequestRecord {
@@ -1676,13 +1629,14 @@ final class CloudKitUsageSnapshotStore {
 
     private func makeFriendRequestRecord(
         _ request: BlockFriendRequest,
+        recordID: CKRecord.ID,
         profileRecordID: CKRecord.ID?,
         existingRecord: CKRecord?,
         photoData: Data?
     ) throws -> PreparedFriendRequestRecord {
         let record = existingRecord ?? CKRecord(
             recordType: RecordType.friendTimeRequest,
-            recordID: CKRecord.ID(recordName: "friend-request-\(request.id)", zoneID: privateZoneID)
+            recordID: recordID
         )
 
         if let profileRecordID {
