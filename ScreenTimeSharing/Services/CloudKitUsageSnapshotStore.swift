@@ -322,10 +322,19 @@ final class CloudKitUsageSnapshotStore {
         if bootstrapProfile.avatarImageData == nil {
             bootstrapProfile.avatarImageData = Self.schemaBootstrapJPEGData
         }
+        // Ensure the appleUserID field (and its queryable index) materializes in
+        // the schema even before a real sign-in writes it.
+        if bootstrapProfile.appleUserID == nil {
+            bootstrapProfile.appleUserID = "schema-bootstrap-apple-id"
+        }
         try await publish(profile: bootstrapProfile, snapshot: snapshot)
         try await bootstrapAvatarImageDataField(profile: bootstrapProfile, in: container.privateCloudDatabase)
 
         let requestID = "schema-bootstrap-\(profile.id)"
+        // Populate every optional field with a non-nil value: CloudKit only
+        // adds a field to the schema when a saved record carries a value for it,
+        // so an approved request is required to create approvedByFriendID,
+        // resolvedAt, collectedAt, and approvedExpiresAt.
         let request = BlockFriendRequest(
             id: requestID,
             groupID: "schema-bootstrap-group",
@@ -334,8 +343,13 @@ final class CloudKitUsageSnapshotStore {
             message: "Schema bootstrap",
             requesterID: profile.id,
             requesterDisplayName: profile.displayName,
+            approvedByFriendID: profile.id,
+            status: .collected,
             createdAt: now,
+            resolvedAt: now,
+            collectedAt: now,
             expiresAt: now.addingTimeInterval(60 * 60),
+            approvedExpiresAt: now.addingTimeInterval(60 * 60),
             photoReference: BlockFriendRequestPhotoReference(localIdentifier: "schema-bootstrap-photo")
         )
 
@@ -361,7 +375,21 @@ final class CloudKitUsageSnapshotStore {
         try await ensurePrivateZone(in: container)
         let database = container.privateCloudDatabase
 
+        // Resolve each selected friend's CloudKit identity so we can grant them
+        // (and only them) write access to their private inbox share.
+        let userRecordIDsByFriendID = (try? await friendUserRecordIDs(
+            for: request.selectedFriendIDs,
+            profile: profile,
+            database: database
+        )) ?? [:]
+        let participantsByUserRecordName = (try? await shareParticipants(
+            for: Array(Set(userRecordIDsByFriendID.values)),
+            in: container
+        )) ?? [:]
+
         for friendID in request.selectedFriendIDs {
+            let friendParticipant = userRecordIDsByFriendID[friendID]
+                .flatMap { participantsByUserRecordName[$0.recordName] }
             let inboxRecordID = inboxRecordID(ownerProfileID: profile.id, friendID: friendID)
             let inboxRecord = try await ensureInboxRecord(
                 recordID: inboxRecordID,
@@ -372,6 +400,7 @@ final class CloudKitUsageSnapshotStore {
             try await ensureInboxShare(
                 inboxRecord: inboxRecord,
                 friendID: friendID,
+                friendParticipant: friendParticipant,
                 profile: profile,
                 database: database
             )
@@ -408,7 +437,7 @@ final class CloudKitUsageSnapshotStore {
             return
         }
 
-        for zoneID in sharedZoneStore.load() {
+        for zoneID in await allSharedZoneIDs(in: container) {
             if try await updateFriendRequest(request, database: container.sharedCloudDatabase, zoneID: zoneID) {
                 return
             }
@@ -451,7 +480,7 @@ final class CloudKitUsageSnapshotStore {
             firstQueryError = firstQueryError ?? error
         }
 
-        for zoneID in sharedZoneStore.load() {
+        for zoneID in await allSharedZoneIDs(in: container) {
             if !knownRequestIDs.isEmpty {
                 merge(
                     records: try await friendRequestRecords(
@@ -658,6 +687,7 @@ final class CloudKitUsageSnapshotStore {
     private func ensureInboxShare(
         inboxRecord: CKRecord,
         friendID: String,
+        friendParticipant: CKShare.Participant?,
         profile: UserProfile,
         database: CKDatabase
     ) async throws {
@@ -667,16 +697,28 @@ final class CloudKitUsageSnapshotStore {
         )
 
         if let existingShare = try await existingProfileShare(shareID: shareID, database: database) {
+            var changed = false
             if existingShare.publicPermission != .none {
                 existingShare.publicPermission = .none
-                _ = try await saveShare(existingShare, in: database, context: "Restricting inbox share")
+                changed = true
+            }
+            if let friendParticipant, addParticipantIfNeeded(friendParticipant, to: existingShare) {
+                changed = true
+            }
+            if changed {
+                _ = try await saveShare(existingShare, in: database, context: "Updating inbox share")
             }
             return
         }
 
         let share = CKShare(rootRecord: inboxRecord, shareID: shareID)
         share[CKShare.SystemFieldKey.title] = "Friend Requests" as CKRecordValue
+        // Keep the inbox private to its single recipient: no public access, only
+        // the explicitly-added friend participant can read it and write replies.
         share.publicPermission = .none
+        if let friendParticipant {
+            _ = addParticipantIfNeeded(friendParticipant, to: share)
+        }
 
         _ = try await saveNewShare(
             rootRecord: inboxRecord,
@@ -684,6 +726,130 @@ final class CloudKitUsageSnapshotStore {
             in: database,
             context: "Creating friend inbox share"
         )
+    }
+
+    /// Adds the friend to the inbox share with read/write access (so they can
+    /// receive the request and write the approval back) unless already present.
+    @discardableResult
+    private func addParticipantIfNeeded(_ participant: CKShare.Participant, to share: CKShare) -> Bool {
+        guard let target = participant.userIdentity.userRecordID else {
+            return false
+        }
+        let alreadyPresent = share.participants.contains { existing in
+            existing.userIdentity.userRecordID == target
+        }
+        guard !alreadyPresent else {
+            return false
+        }
+        participant.permission = .readWrite
+        share.addParticipant(participant)
+        return true
+    }
+
+    /// Resolves selected friend profile IDs to their CloudKit user record IDs by
+    /// cross-referencing this user's profile-share participants with the mirrored
+    /// `participant-profile-*` records that carry each friend's profile ID.
+    private func friendUserRecordIDs(
+        for friendProfileIDs: [String],
+        profile: UserProfile,
+        database: CKDatabase
+    ) async throws -> [String: CKRecord.ID] {
+        guard !friendProfileIDs.isEmpty else {
+            return [:]
+        }
+
+        let shareID = CKRecord.ID(recordName: "share-\(profile.id)", zoneID: privateZoneID)
+        guard let share = try await existingProfileShare(shareID: shareID, database: database) else {
+            return [:]
+        }
+
+        var userRecordIDByMirrorName: [String: CKRecord.ID] = [:]
+        var mirrorRecordIDs: [CKRecord.ID] = []
+        for participant in share.participants {
+            guard participant.role != .owner,
+                  let userRecordID = participant.userIdentity.userRecordID else {
+                continue
+            }
+            let mirrorName = participantProfileRecordName(for: userRecordID)
+            if userRecordIDByMirrorName[mirrorName] == nil {
+                userRecordIDByMirrorName[mirrorName] = userRecordID
+                mirrorRecordIDs.append(CKRecord.ID(recordName: mirrorName, zoneID: privateZoneID))
+            }
+        }
+
+        guard !mirrorRecordIDs.isEmpty else {
+            return [:]
+        }
+
+        let wantedProfileIDs = Set(friendProfileIDs)
+        let response = try await database.records(for: mirrorRecordIDs)
+        var result: [String: CKRecord.ID] = [:]
+        for (recordID, recordResult) in response {
+            guard let record = try? recordResult.get(),
+                  let ownerProfileID = record[Field.ownerProfileID] as? String,
+                  wantedProfileIDs.contains(ownerProfileID),
+                  let userRecordID = userRecordIDByMirrorName[recordID.recordName] else {
+                continue
+            }
+            result[ownerProfileID] = userRecordID
+        }
+        return result
+    }
+
+    /// Fetches `CKShare.Participant` objects for the given user record IDs so they
+    /// can be added to a share. Keyed by user record name.
+    private func shareParticipants(
+        for userRecordIDs: [CKRecord.ID],
+        in container: CKContainer
+    ) async throws -> [String: CKShare.Participant] {
+        guard !userRecordIDs.isEmpty else {
+            return [:]
+        }
+
+        let lookupInfos = userRecordIDs.map { CKUserIdentity.LookupInfo(userRecordID: $0) }
+        return try await withCheckedThrowingContinuation { continuation in
+            let operation = CKFetchShareParticipantsOperation(userIdentityLookupInfos: lookupInfos)
+            var participants: [String: CKShare.Participant] = [:]
+            operation.perShareParticipantResultBlock = { _, result in
+                if case .success(let participant) = result,
+                   let recordName = participant.userIdentity.userRecordID?.recordName {
+                    participants[recordName] = participant
+                }
+            }
+            operation.fetchShareParticipantsResultBlock = { result in
+                switch result {
+                case .success:
+                    continuation.resume(returning: participants)
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+            container.add(operation)
+        }
+    }
+
+    /// All zones the user can reach in the shared database — the persisted set
+    /// plus any newly delivered shares (e.g. a friend's inbox) discovered live.
+    private func allSharedZoneIDs(in container: CKContainer) async -> [CKRecordZone.ID] {
+        var seenKeys = Set<String>()
+        var zoneIDs: [CKRecordZone.ID] = []
+
+        func add(_ zoneID: CKRecordZone.ID) {
+            let key = "\(zoneID.zoneName)|\(zoneID.ownerName)"
+            if seenKeys.insert(key).inserted {
+                zoneIDs.append(zoneID)
+            }
+        }
+
+        for zoneID in sharedZoneStore.load() {
+            add(zoneID)
+        }
+        if let zones = try? await container.sharedCloudDatabase.allRecordZones() {
+            for zone in zones {
+                add(zone.zoneID)
+            }
+        }
+        return zoneIDs
     }
 
     private func inboxZoneIDs(for friendID: String, in database: CKDatabase) async throws -> [CKRecordZone.ID] {

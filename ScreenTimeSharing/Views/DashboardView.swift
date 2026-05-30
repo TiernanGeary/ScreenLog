@@ -1838,14 +1838,14 @@ struct FriendApprovalRequestView: View {
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
+                    .background {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(canSendRequest ? Color.accentColor : Color.secondary.opacity(0.18))
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .buttonStyle(.plain)
             .foregroundStyle(canSendRequest ? Color.white : Color.secondary)
-            .background {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(canSendRequest ? Color.accentColor : Color.secondary.opacity(0.18))
-            }
-            .appRoundedButtonHitArea(cornerRadius: 16)
             .disabled(!canSendRequest)
         }
         .padding(.horizontal, 20)

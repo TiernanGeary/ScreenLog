@@ -1144,6 +1144,10 @@ final class AppModel: ObservableObject {
 
         do {
             let knownRequestIDs = Set(blockingState.friendRequests.map(\.id))
+            let previousStatusByID = Dictionary(
+                blockingState.friendRequests.map { ($0.id, $0.status) },
+                uniquingKeysWith: { current, _ in current }
+            )
             let cloudRequests = try await snapshotStore.fetchFriendRequests(
                 knownRequestIDs: knownRequestIDs
             ) { [friendRequestPhotoStore] id, data in
@@ -1155,9 +1159,27 @@ final class AppModel: ObservableObject {
             try persistBlockingState()
             refreshLocalAccountabilityStats()
             syncFriendRequestNotifications()
+            notifySentRequestStatusChanges(previousStatusByID: previousStatusByID)
             writeWidgetCacheSnapshot()
         } catch {
             message = "Could not sync friend requests: \(error.localizedDescription)"
+        }
+    }
+
+    /// Fires a local notification on the requester's device when one of their
+    /// sent requests transitions into approved/denied after a cloud sync.
+    private func notifySentRequestStatusChanges(previousStatusByID: [String: BlockRequestStatus]) {
+        for request in blockingState.friendRequests {
+            guard request.isSent(byAny: currentFriendIdentityIDs),
+                  request.status == .approved || request.status == .denied,
+                  previousStatusByID[request.id] != request.status else {
+                continue
+            }
+
+            friendRequestNotificationService.scheduleStatusUpdateNotification(
+                for: request,
+                groupName: groupName(forNotification: request.groupID)
+            )
         }
     }
 
@@ -2189,6 +2211,7 @@ struct FriendRequestNotificationService {
 
     private let defaults: UserDefaults
     private let notifiedRequestIDsKey = "NotifiedFriendRequestIDs.v1"
+    private let notifiedStatusKey = "NotifiedFriendRequestStatusIDs.v1"
 
     init(defaults: UserDefaults? = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)) {
         self.defaults = defaults ?? .standard
@@ -2230,6 +2253,65 @@ struct FriendRequestNotificationService {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
         center.removeDeliveredNotifications(withIdentifiers: [identifier])
+    }
+
+    /// Notifies the original requester when a friend approves or denies their
+    /// sent request. De-duplicated per (request, event) so it fires only once.
+    func scheduleStatusUpdateNotification(for request: BlockFriendRequest, groupName: String) {
+        let event: String
+        let title: String
+        let body: String
+        switch request.status {
+        case .approved:
+            event = "approved"
+            title = "Request approved"
+            let duration = BlockingDisplayFormatter.durationLabel(request.requestedSeconds)
+            body = "Collect \(duration) for \(groupName) before it expires."
+        case .denied:
+            event = "denied"
+            title = "Request denied"
+            body = "Your time request for \(groupName) was denied."
+        default:
+            return
+        }
+
+        guard rememberStatusNotification(for: request.id, event: event) else {
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.categoryIdentifier = Self.categoryIdentifier
+        content.userInfo = [Self.requestIDUserInfoKey: request.id]
+
+        let notificationRequest = UNNotificationRequest(
+            identifier: "\(notificationIdentifier(for: request.id))-\(event)",
+            content: content,
+            trigger: nil
+        )
+
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            guard granted else {
+                return
+            }
+
+            center.add(notificationRequest)
+        }
+    }
+
+    private func rememberStatusNotification(for requestID: String, event: String) -> Bool {
+        let key = "\(requestID)#\(event)"
+        var keys = Set(defaults.stringArray(forKey: notifiedStatusKey) ?? [])
+        guard !keys.contains(key) else {
+            return false
+        }
+
+        keys.insert(key)
+        defaults.set(Array(keys), forKey: notifiedStatusKey)
+        return true
     }
 
     private func rememberNotification(for requestID: String) -> Bool {
