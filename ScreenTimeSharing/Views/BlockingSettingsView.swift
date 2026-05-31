@@ -2069,6 +2069,7 @@ struct BlockGroupConfigurationView: View {
 
     @State private var passwordAction: PasswordProtectedAction?
     @State private var editorDraft: BlockGroupDraft?
+    @State private var editorPassword: String?
     @State private var isConfirmingDelete = false
     @State private var pendingDeletePassword: String?
 
@@ -2193,6 +2194,7 @@ struct BlockGroupConfigurationView: View {
                     passwordAction = nil
                     switch resolvedAction {
                     case .edit:
+                        editorPassword = verifiedPassword
                         editorDraft = BlockGroupDraft(group: group)
                     case .toggleEnabled:
                         _ = model.toggleBlockGroup(group, password: verifiedPassword)
@@ -2202,18 +2204,32 @@ struct BlockGroupConfigurationView: View {
                     }
                 } onSetPassword: { group in
                     passwordAction = nil
+                    editorPassword = nil
                     editorDraft = BlockGroupDraft(group: group)
                 }
             }
             .sheet(item: $editorDraft) { draft in
                 NavigationStack {
-                    BlockGroupEditorView(initialDraft: draft) { group, password in
-                        let didSave = model.upsertBlockGroup(group, password: password)
-                        if didSave {
-                            editorDraft = nil
+                    BlockGroupEditorView(
+                        initialDraft: draft,
+                        canDelete: !draft.isNew,
+                        onSave: { group, password in
+                            let didSave = model.upsertBlockGroup(group, password: password)
+                            if didSave {
+                                editorDraft = nil
+                            }
+                            return didSave
+                        },
+                        onDelete: {
+                            guard let group else {
+                                return
+                            }
+                            if model.deleteBlockGroup(group, password: editorPassword) {
+                                editorDraft = nil
+                                dismiss()
+                            }
                         }
-                        return didSave
-                    }
+                    )
                 }
             }
             .alert("Delete Block Group?", isPresented: $isConfirmingDelete) {
@@ -2370,25 +2386,6 @@ struct BlockGroupConfigurationView: View {
                     .fill(Color.accentColor)
             }
             .appRoundedButtonHitArea(cornerRadius: 16)
-
-            if isUnlockedForDisplay(group) {
-                Button(role: .destructive) {
-                    AppHaptics.buttonTap()
-                    passwordAction = PasswordProtectedAction(kind: .delete, groupID: group.id)
-                } label: {
-                    Text("Delete Block Group")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.white)
-                .background {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color(red: 0.86, green: 0.24, blue: 0.22))
-                }
-                .appRoundedButtonHitArea(cornerRadius: 16)
-            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
@@ -2438,38 +2435,76 @@ struct BlockGroupEditorView: View {
     @State private var passwordSetupGroup: BlockGroup?
     @State private var saveError: String?
     @State private var isSaving = false
+    @FocusState private var isNameFieldFocused: Bool
+    @State private var isConfirmingDelete = false
+    let canDelete: Bool
     let onSave: (BlockGroup, String?) -> Bool
+    let onDelete: (() -> Void)?
 
-    init(initialDraft: BlockGroupDraft, onSave: @escaping (BlockGroup, String?) -> Bool) {
+    init(
+        initialDraft: BlockGroupDraft,
+        canDelete: Bool = false,
+        onSave: @escaping (BlockGroup, String?) -> Bool,
+        onDelete: (() -> Void)? = nil
+    ) {
         _draft = State(initialValue: initialDraft)
+        self.canDelete = canDelete
         self.onSave = onSave
+        self.onDelete = onDelete
+    }
+
+    private func onDeleteDraft() {
+        onDelete?()
     }
 
     var body: some View {
         AppScreenScroll(backgroundStyle: .white) {
             AppSection("Status") {
                 AppCard {
-                    Toggle(
-                        isOn: $draft.isEnabled
-                    ) {
-                        HStack(spacing: 12) {
-                            Image(systemName: draft.isEnabled ? "checkmark.circle.fill" : "pause.circle.fill")
-                                .foregroundStyle(draft.isEnabled ? Color.green : Color.secondary)
-                                .frame(width: 24)
+                    VStack(spacing: 14) {
+                        HStack(spacing: 10) {
+                            TextField("New Block Group", text: $draft.name)
+                                .font(.headline)
+                                .textInputAutocapitalization(.words)
+                                .submitLabel(.done)
+                                .focused($isNameFieldFocused)
+                                .accessibilityLabel("Block group name")
 
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(draft.isEnabled ? "Active" : "Inactive")
+                            Button {
+                                AppHaptics.buttonTap()
+                                isNameFieldFocused = true
+                            } label: {
+                                Image(systemName: "pencil")
                                     .font(.subheadline.weight(.semibold))
-                                Text(draft.isEnabled ? "This block group is currently enforcing." : "This block group is paused.")
-                                    .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
+                            .accessibilityLabel("Edit group name")
                         }
-                    }
-                    .tint(.green)
-                    .appCardRow(verticalPadding: 12)
-                    .onChange(of: draft.isEnabled) {
-                        AppHaptics.selectionChanged()
+                        .appCardRow(verticalPadding: 4)
+
+                        Divider()
+
+                        Toggle(
+                            isOn: $draft.isEnabled
+                        ) {
+                            HStack(spacing: 12) {
+                                Image(systemName: draft.isEnabled ? "checkmark.circle.fill" : "pause.circle.fill")
+                                    .foregroundStyle(draft.isEnabled ? Color.green : Color.secondary)
+                                    .frame(width: 24)
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(draft.isEnabled ? "Active" : "Inactive")
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(draft.isEnabled ? "This block group is currently enforcing." : "This block group is paused.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .tint(.green)
+                        .onChange(of: draft.isEnabled) {
+                            AppHaptics.selectionChanged()
+                        }
                     }
                 }
             }
@@ -2561,9 +2596,37 @@ struct BlockGroupEditorView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 4)
             }
+
+            if canDelete, onDelete != nil {
+                Button(role: .destructive) {
+                    AppHaptics.buttonTap()
+                    isConfirmingDelete = true
+                } label: {
+                    Text("Delete Block Group")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.white)
+                .background {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color(red: 0.86, green: 0.24, blue: 0.22))
+                }
+                .appRoundedButtonHitArea(cornerRadius: 16)
+                .padding(.top, 8)
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .disabled(isSaving)
+        .alert("Delete Block Group?", isPresented: $isConfirmingDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                onDeleteDraft()
+            }
+        } message: {
+            Text("This permanently removes \(draft.name.isEmpty ? "this block group" : draft.name) and its rules.")
+        }
         .safeAreaInset(edge: .bottom) {
             saveButton
         }
@@ -2577,13 +2640,9 @@ struct BlockGroupEditorView: View {
             }
 
             ToolbarItem(placement: .principal) {
-                TextField("New Block Group", text: $draft.name)
+                Text(draft.name.isEmpty ? "New Block Group" : draft.name)
                     .font(.headline)
-                    .multilineTextAlignment(.center)
-                    .textInputAutocapitalization(.words)
-                    .submitLabel(.done)
-                    .frame(width: 210)
-                    .accessibilityLabel("Block group name")
+                    .lineLimit(1)
             }
         }
         .sheet(isPresented: $isShowingActivityPicker) {

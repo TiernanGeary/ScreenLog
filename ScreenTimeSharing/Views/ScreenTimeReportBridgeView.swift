@@ -158,8 +158,13 @@ struct ScreenTimeLiveStatsReport: View {
     }
 
     private var reportIdentity: String {
+        // Identity is stable per (range, period) so navigating between dates and
+        // back reuses an already-loaded report instead of tearing it down and
+        // showing the loading state again. (Previously this also included
+        // screenTimeReportRefreshID, which changed on every date switch and
+        // forced a full reload each time.)
         let start = UsageStatsBuilder.periodInterval(for: range, containing: selectedDate).start
-        return "\(range.id)-\(start.timeIntervalSinceReferenceDate)-\(model.screenTimeReportRefreshID.uuidString)"
+        return "\(range.id)-\(start.timeIntervalSinceReferenceDate)"
     }
 
     private var segmentInterval: DeviceActivityFilter.SegmentInterval {

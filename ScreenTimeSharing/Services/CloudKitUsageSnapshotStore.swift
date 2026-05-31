@@ -1285,14 +1285,37 @@ final class CloudKitUsageSnapshotStore {
         now: Date
     ) async throws -> CKRecord? {
         let profileID = profileID(from: profileRecord)
-        let recordIDs = recentSnapshotRecordIDs(profileID: profileID, zoneID: zoneID, now: now)
-        guard !recordIDs.isEmpty else {
-            return nil
+
+        // Channel snapshots are named `snapshot-<channelUUID>-<id>`, so we can't
+        // reconstruct their record IDs. Scan the shared zone for the friend's
+        // DailyUsageSnapshot records by type and pick the newest in code.
+        var records: [CKRecord] = []
+        do {
+            let query = CKQuery(
+                recordType: RecordType.dailyUsageSnapshot,
+                predicate: NSPredicate(format: "%K == %@", Field.ownerProfileID, profileID)
+            )
+            let response = try await database.records(
+                matching: query,
+                inZoneWith: zoneID,
+                desiredKeys: nil,
+                resultsLimit: 50
+            )
+            records = response.matchResults.compactMap { try? $0.1.get() }
+        } catch {
+            if !isUnknownItemError(error) {
+                throw error
+            }
         }
 
-        let response = try await database.records(for: recordIDs)
-        let records = response.compactMap { _, result -> CKRecord? in
-            try? result.get()
+        // Fall back to the legacy record-ID lookup (pre-channel snapshots named
+        // `snapshot-<id>`) if the type scan returned nothing.
+        if records.isEmpty {
+            let recordIDs = recentSnapshotRecordIDs(profileID: profileID, zoneID: zoneID, now: now)
+            if !recordIDs.isEmpty {
+                let response = try await database.records(for: recordIDs)
+                records = response.compactMap { try? $0.1.get() }
+            }
         }
 
         return records.max { lhs, rhs in
