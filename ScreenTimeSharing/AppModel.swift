@@ -266,6 +266,8 @@ final class AppModel: ObservableObject {
     private let blockingEnforcementService: BlockingEnforcementService
     private let friendRequestNotificationService: FriendRequestNotificationService
     private let friendRequestPhotoStore: FriendRequestPhotoStore
+    private let pushServerClient = PushServerClient()
+    private var apnsDeviceToken: String?
     private let usageHistoryDefaults: UserDefaults?
     private let onboardingKey = "HasCompletedOnboarding.v1"
     private static let denyStartedAtKey = "DenyStartedAt.v1"
@@ -845,6 +847,13 @@ final class AppModel: ObservableObject {
         saveBlockingStateWithStatus("Friend request sent.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
+        let senderName = profile.displayName == "Me" ? "A friend" : profile.displayName
+        sendPushNotification(
+            toProfileIDs: selectedFriendIDs,
+            title: "New time request",
+            body: "\(senderName) is asking you to approve extra time.",
+            requestID: request.id
+        )
         Task {
             await publishFriendRequestToCloud(request, photoData: photoJPEGData)
         }
@@ -876,6 +885,13 @@ final class AppModel: ObservableObject {
         saveBlockingStateWithStatus("Request approved.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
+        let approverName = profile.displayName == "Me" ? "Your friend" : profile.displayName
+        sendPushNotification(
+            toProfileIDs: [resolvedRequest.requesterID].compactMap { $0 },
+            title: "Request approved",
+            body: "\(approverName) approved your time request. Tap to collect.",
+            requestID: resolvedRequest.id
+        )
         Task {
             await publishFriendRequestUpdateToCloud(resolvedRequest)
         }
@@ -902,6 +918,13 @@ final class AppModel: ObservableObject {
         saveBlockingStateWithStatus("Request denied.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
+        let denierName = profile.displayName == "Me" ? "Your friend" : profile.displayName
+        sendPushNotification(
+            toProfileIDs: [resolvedRequest.requesterID].compactMap { $0 },
+            title: "Request denied",
+            body: "\(denierName) denied your time request.",
+            requestID: resolvedRequest.id
+        )
         Task {
             await publishFriendRequestUpdateToCloud(resolvedRequest)
         }
@@ -1139,6 +1162,36 @@ final class AppModel: ObservableObject {
     func handleRemoteChange() async {
         await reloadFriends()
         await syncFriendRequests()
+    }
+
+    /// Stores the APNs device token and registers it with the push server against
+    /// this user's profile, so friends can trigger alert pushes to this device.
+    func registerPushDeviceToken(_ token: String) {
+        apnsDeviceToken = token
+        let profileID = profile.id
+        Task {
+            await pushServerClient.register(profileID: profileID, deviceToken: token)
+        }
+    }
+
+    /// Sends an alert push (via the push server) to each recipient of an event,
+    /// so they're notified even if their app is force-quit.
+    private func sendPushNotification(toProfileIDs: [String], title: String, body: String, requestID: String?) {
+        let recipients = Set(toProfileIDs.filter { !$0.isEmpty && $0 != profile.id })
+        guard !recipients.isEmpty else {
+            return
+        }
+
+        Task { [pushServerClient] in
+            for recipient in recipients {
+                await pushServerClient.notify(
+                    toProfileID: recipient,
+                    title: title,
+                    body: body,
+                    requestID: requestID
+                )
+            }
+        }
     }
 
     func syncFriendRequests() async {

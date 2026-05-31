@@ -1,0 +1,19 @@
+name = "deny-push-server"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Token registry: profileID -> APNs device token (+ environment).
+# Create with:  npx wrangler kv namespace create TOKENS
+# then paste the returned id below.
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "3f2454b1b7e24df5bd00549fa7fe66a6"
+
+# Non-secret APNs config. Secrets (APNS_AUTH_KEY, APP_SHARED_SECRET) are set via
+# `npx wrangler secret put <NAME>` and are NOT stored here.
+[vars]
+APNS_KEY_ID = "456GY87Z3Y"
+APNS_TEAM_ID = "4944GXK8S2"
+APNS_BUNDLE_ID = "com.jdco.ScreenTimeSharing"
+# Use "production" for TestFlight/App Store builds, "sandbox" for development builds.
+APNS_ENVIRONMENT = "production"

@@ -24,6 +24,7 @@
 		B10000000000000000000015 /* CloudKitUsageSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000012 /* CloudKitUsageSnapshotStore.swift */; };
 		B10000000000000000000033 /* AppleSignInService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000027 /* AppleSignInService.swift */; };
 		B10000000000000000000034 /* SubscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000028 /* SubscriptionService.swift */; };
+		B10000000000000000000035 /* PushServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000029 /* PushServerClient.swift */; };
 		B10000000000000000000016 /* CloudShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000013 /* CloudShareSheet.swift */; };
 		B10000000000000000000017 /* CloudKitShareAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000014 /* CloudKitShareAcceptance.swift */; };
 		B10000000000000000000018 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000015 /* RootView.swift */; };
@@ -143,6 +144,7 @@
 		D00000000000000000000012 /* CloudKitUsageSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitUsageSnapshotStore.swift; sourceTree = "<group>"; };
 		D00000000000000000000027 /* AppleSignInService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInService.swift; sourceTree = "<group>"; };
 		D00000000000000000000028 /* SubscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionService.swift; sourceTree = "<group>"; };
+		D00000000000000000000029 /* PushServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushServerClient.swift; sourceTree = "<group>"; };
 		D00000000000000000000013 /* CloudShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudShareSheet.swift; sourceTree = "<group>"; };
 		D00000000000000000000014 /* CloudKitShareAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitShareAcceptance.swift; sourceTree = "<group>"; };
 		D00000000000000000000015 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -288,6 +290,7 @@
 				D00000000000000000000025 /* ScreenTimeReportContext.swift */,
 				D00000000000000000000027 /* AppleSignInService.swift */,
 				D00000000000000000000028 /* SubscriptionService.swift */,
+				D00000000000000000000029 /* PushServerClient.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -557,6 +560,7 @@
 				B10000000000000000000015 /* CloudKitUsageSnapshotStore.swift in Sources */,
 				B10000000000000000000033 /* AppleSignInService.swift in Sources */,
 				B10000000000000000000034 /* SubscriptionService.swift in Sources */,
+				B10000000000000000000035 /* PushServerClient.swift in Sources */,
 				B10000000000000000000016 /* CloudShareSheet.swift in Sources */,
 				B10000000000000000000017 /* CloudKitShareAcceptance.swift in Sources */,
 				B10000000000000000000027 /* BlockingSelectionCodec.swift in Sources */,
@@ -768,7 +772,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ScreenTimeSharing/ScreenTimeSharing.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenTimeSharing/Info.plist;
@@ -791,7 +795,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = ScreenTimeSharing/ScreenTimeSharing.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenTimeSharing/Info.plist;
@@ -814,7 +818,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogActivityMonitorExtension/ScreenLogActivityMonitorExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogActivityMonitorExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -838,7 +842,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogActivityMonitorExtension/ScreenLogActivityMonitorExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogActivityMonitorExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -862,7 +866,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldActionExtension/ScreenLogShieldActionExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				ENABLE_DEBUG_DYLIB = NO;
 				GCC_OPTIMIZATION_LEVEL = s;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -890,7 +894,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldActionExtension/ScreenLogShieldActionExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogShieldActionExtension/Info.plist;
@@ -915,7 +919,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldConfigurationExtension/ScreenLogShieldConfigurationExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				ENABLE_DEBUG_DYLIB = NO;
 				GCC_OPTIMIZATION_LEVEL = s;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -943,7 +947,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogShieldConfigurationExtension/ScreenLogShieldConfigurationExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogShieldConfigurationExtension/Info.plist;
@@ -968,7 +972,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogDeviceActivityReportExtension/ScreenLogDeviceActivityReportExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogDeviceActivityReportExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -992,7 +996,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = ScreenLogDeviceActivityReportExtension/ScreenLogDeviceActivityReportExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202605301459;
+				CURRENT_PROJECT_VERSION = 202605311310;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenLogDeviceActivityReportExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

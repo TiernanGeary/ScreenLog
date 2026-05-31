@@ -11,6 +11,18 @@ enum AppConfiguration {
         "com.jdco.deny.subscription.yearly"
     ]
 
+    /// Push notification server (Cloudflare Worker). Set the URL after deploying.
+    /// Until set, push registration/sends are skipped (CloudKit silent push still
+    /// works as a fallback).
+    static let pushServerBaseURL = "https://deny-push-server.tiernan-33a.workers.dev"
+    /// Shared secret sent in the `x-deny-secret` header; must match the Worker's
+    /// APP_SHARED_SECRET. Replaced at deploy time.
+    static let pushServerSharedSecret = "97127fb9fd313f27fb3d5556706347e6cd735617f5826a8dfbf95c179548d840"
+
+    static var isPushServerConfigured: Bool {
+        !pushServerBaseURL.contains("REPLACE_WITH") && !pushServerSharedSecret.contains("REPLACE_WITH")
+    }
+
     static func randomAvatarColorHex() -> String {
         avatarFallbackColors.randomElement() ?? defaultAvatarColor
     }

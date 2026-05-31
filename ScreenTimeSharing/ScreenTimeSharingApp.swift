@@ -26,6 +26,9 @@ struct ScreenTimeSharingApp: App {
                     RemoteChangeCenter.shared.handler = {
                         await model.handleRemoteChange()
                     }
+                    RemoteChangeCenter.shared.deviceTokenHandler = { token in
+                        model.registerPushDeviceToken(token)
+                    }
                 }
                 .onOpenURL { url in
                     guard url.host()?.localizedCaseInsensitiveContains("icloud.com") == true else {

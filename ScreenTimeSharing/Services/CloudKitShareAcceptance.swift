@@ -8,8 +8,23 @@ final class RemoteChangeCenter {
 
     var handler: (() async -> Void)?
 
+    var deviceTokenHandler: ((String) -> Void)? {
+        didSet {
+            if let pendingDeviceToken {
+                deviceTokenHandler?(pendingDeviceToken)
+            }
+        }
+    }
+
+    private var pendingDeviceToken: String?
+
     func handleRemoteChange() async {
         await handler?()
+    }
+
+    func receiveDeviceToken(_ token: String) {
+        pendingDeviceToken = token
+        deviceTokenHandler?(token)
     }
 }
 
@@ -55,7 +70,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
-        // CloudKit manages the APNs token itself; nothing to forward.
+        // CloudKit manages its own token; we also forward it to the push server
+        // so it can send alert pushes that arrive even when the app is force-quit.
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        Task { @MainActor in
+            RemoteChangeCenter.shared.receiveDeviceToken(token)
+        }
     }
 
     func application(
