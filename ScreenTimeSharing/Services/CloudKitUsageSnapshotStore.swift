@@ -466,11 +466,16 @@ final class CloudKitUsageSnapshotStore {
     }
     #endif
 
+    /// Publishes a friend request into each selected friend's private channel.
+    /// Returns the number of friends it could actually deliver to — a friend who
+    /// hasn't accepted an invite yet has no channel and is skipped, so the caller
+    /// can warn the user instead of failing silently.
+    @discardableResult
     func publishFriendRequest(
         _ request: BlockFriendRequest,
         profile: UserProfile,
         photoData: Data?
-    ) async throws {
+    ) async throws -> Int {
         guard let container else {
             throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
         }
@@ -485,6 +490,7 @@ final class CloudKitUsageSnapshotStore {
             profileID: profile.id
         )) ?? [:]
 
+        var deliveredCount = 0
         for friendID in request.selectedFriendIDs {
             guard let channelRootID = channelRootIDsByFriendID[friendID] else {
                 continue
@@ -516,7 +522,9 @@ final class CloudKitUsageSnapshotStore {
             for saveResult in result.saveResults.values {
                 _ = try saveResult.get()
             }
+            deliveredCount += 1
         }
+        return deliveredCount
     }
 
     func updateFriendRequest(_ request: BlockFriendRequest) async throws {

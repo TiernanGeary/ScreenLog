@@ -1254,7 +1254,10 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            try await snapshotStore.publishFriendRequest(request, profile: profile, photoData: photoData)
+            let deliveredCount = try await snapshotStore.publishFriendRequest(request, profile: profile, photoData: photoData)
+            if deliveredCount == 0 {
+                message = "Couldn't deliver this request. Your friend needs to accept your invite link before requests reach them."
+            }
         } catch {
             message = "Friend request saved locally. Cloud sync failed: \(error.localizedDescription)"
         }

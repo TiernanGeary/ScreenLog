@@ -62,7 +62,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        application.registerForRemoteNotifications()
+        // Explicitly request alert permission up front. registerForRemoteNotifications()
+        // returns an APNs token even without alert permission, so a server *alert*
+        // push is silently dropped by iOS unless the user has authorized alerts.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
+            DispatchQueue.main.async {
+                application.registerForRemoteNotifications()
+            }
+        }
         return true
     }
 
