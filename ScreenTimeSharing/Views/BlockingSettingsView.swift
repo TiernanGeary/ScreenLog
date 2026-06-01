@@ -1493,6 +1493,11 @@ struct BlockingSettingsView: View {
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.secondary)
                     }
+                    #if DENY_INTERNAL_DEBUG
+                    Text("dbg me=\(model.profile.id.prefix(6)) req=\(request.requesterID?.prefix(6) ?? "nil") to=[\(request.selectedFriendIDs.map { String($0.prefix(6)) }.joined(separator: ","))]")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.orange)
+                    #endif
                 }
 
                 Spacer(minLength: 8)
