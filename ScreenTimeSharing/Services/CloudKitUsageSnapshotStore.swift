@@ -516,15 +516,17 @@ final class CloudKitUsageSnapshotStore {
         var deliveredFriendIDs = Set<String>()
 
         // Pass 1: friends who accepted MY invite — their participant mirror lives
-        // in my private zone, parented to the channel I own. Write into that.
+        // in my private zone, parented to the root I own. Write into that. Works
+        // for new channel roots AND legacy profile/share roots (pre-rewrite
+        // friendships), so we don't silently skip established friends.
         for friendID in request.selectedFriendIDs {
-            guard let channelRootID = channelRootIDsByFriendID[friendID],
-                  let channelUUID = channelUUID(fromRecordName: channelRootID.recordName, profileID: profile.id) else {
+            guard let channelRootID = channelRootIDsByFriendID[friendID] else {
                 continue
             }
+            let channelToken = channelToken(forRootRecordName: channelRootID.recordName)
 
             let requestRecordID = CKRecord.ID(
-                recordName: "friend-request-\(channelUUID)-\(request.id)",
+                recordName: "friend-request-\(channelToken)-\(request.id)",
                 zoneID: privateZoneID
             )
             let requestRecord = try makeFriendRequestRecord(
@@ -1083,6 +1085,18 @@ final class CloudKitUsageSnapshotStore {
         }
         let suffix = String(recordName.dropFirst(prefix.count))
         return suffix.isEmpty ? nil : suffix
+    }
+
+    /// A collision-safe token derived from a channel/profile root record name,
+    /// used to name request records uniquely per channel. Works for the new
+    /// `channel-<id>-<uuid>` roots AND legacy `profile-<id>` / `share-<id>` roots
+    /// from friendships established before the channel rewrite.
+    private func channelToken(forRootRecordName recordName: String) -> String {
+        let allowed = recordName.unicodeScalars.map { scalar -> Character in
+            CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : "-"
+        }
+        let token = String(allowed)
+        return token.isEmpty ? "root" : token
     }
 
     /// Returns the owner's channel-root records (one per invite channel) living

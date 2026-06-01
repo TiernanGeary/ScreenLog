@@ -687,8 +687,12 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
     }
 
     public func isSent(byAny userIDs: Set<String>) -> Bool {
+        // A request always records its requester. If the requester is unknown,
+        // treat it as NOT sent by me — otherwise a received request whose
+        // requesterID failed to load would be misattributed as one I sent
+        // (showing the sender's photo/profile as if it were mine).
         guard let requesterID else {
-            return true
+            return false
         }
 
         return userIDs.contains(requesterID)
