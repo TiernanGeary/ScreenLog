@@ -1254,9 +1254,12 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            let deliveredCount = try await snapshotStore.publishFriendRequest(request, profile: profile, photoData: photoData)
-            if deliveredCount == 0 {
-                message = "Couldn't deliver this request. Your friend needs to accept your invite link before requests reach them."
+            let report = try await snapshotStore.publishFriendRequestDiagnostic(request, profile: profile, photoData: photoData)
+            if report.deliveredCount == 0 {
+                func shorten(_ ids: [String]) -> String {
+                    ids.isEmpty ? "none" : ids.map { String($0.prefix(6)) }.joined(separator: ",")
+                }
+                message = "Couldn't deliver. target=[\(shorten(report.targetFriendIDs))] ownedChannels=[\(shorten(report.ownedChannelFriendIDs))] acceptedShares(\(report.sharedZoneCount))=[\(shorten(report.acceptedShareOwnerIDs))]"
             }
         } catch {
             message = "Friend request saved locally. Cloud sync failed: \(error.localizedDescription)"

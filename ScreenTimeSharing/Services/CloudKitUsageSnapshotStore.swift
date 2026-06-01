@@ -470,12 +470,31 @@ final class CloudKitUsageSnapshotStore {
     /// Returns the number of friends it could actually deliver to — a friend who
     /// hasn't accepted an invite yet has no channel and is skipped, so the caller
     /// can warn the user instead of failing silently.
+    /// Diagnostic snapshot of what request delivery actually saw, surfaced in the
+    /// UI so we can pinpoint cross-device mismatches without a debugger.
+    struct FriendRequestDeliveryReport {
+        var deliveredCount = 0
+        var targetFriendIDs: [String] = []
+        var ownedChannelFriendIDs: [String] = []
+        var acceptedShareOwnerIDs: [String] = []
+        var sharedZoneCount = 0
+    }
+
     @discardableResult
     func publishFriendRequest(
         _ request: BlockFriendRequest,
         profile: UserProfile,
         photoData: Data?
     ) async throws -> Int {
+        try await publishFriendRequestDiagnostic(request, profile: profile, photoData: photoData).deliveredCount
+    }
+
+    @discardableResult
+    func publishFriendRequestDiagnostic(
+        _ request: BlockFriendRequest,
+        profile: UserProfile,
+        photoData: Data?
+    ) async throws -> FriendRequestDeliveryReport {
         guard let container else {
             throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
         }
@@ -483,12 +502,16 @@ final class CloudKitUsageSnapshotStore {
         try await ensurePrivateZone(in: container)
         let database = container.privateCloudDatabase
 
+        var report = FriendRequestDeliveryReport()
+        report.targetFriendIDs = request.selectedFriendIDs
+
         // Deliver the request only into the private channel(s) belonging to each
         // selected friend. A friend without an accepted channel yet is skipped.
         let channelRootIDsByFriendID = (try? await channelRootIDsByFriendID(
             database: database,
             profileID: profile.id
         )) ?? [:]
+        report.ownedChannelFriendIDs = Array(channelRootIDsByFriendID.keys)
 
         var deliveredFriendIDs = Set<String>()
 
@@ -530,16 +553,21 @@ final class CloudKitUsageSnapshotStore {
         // shared database (I'm a read-write participant). Write the request as a
         // child of their channel root so it lands in their private database.
         let remaining = Set(request.selectedFriendIDs).subtracting(deliveredFriendIDs)
+        let acceptedShares = sharedZoneStore.loadShares()
+        report.sharedZoneCount = acceptedShares.count
         if !remaining.isEmpty {
-            for share in sharedZoneStore.loadShares() {
+            for share in acceptedShares {
                 guard let rootRecordID = share.rootRecordID,
                       let rootRecord = try? await sharedProfileRecord(
                           rootRecordID: rootRecordID,
                           database: container.sharedCloudDatabase,
                           zoneID: share.zoneID
                       ),
-                      let friendID = rootRecord[Field.ownerProfileID] as? String,
-                      remaining.contains(friendID),
+                      let friendID = rootRecord[Field.ownerProfileID] as? String else {
+                    continue
+                }
+                report.acceptedShareOwnerIDs.append(friendID)
+                guard remaining.contains(friendID),
                       !deliveredFriendIDs.contains(friendID) else {
                     continue
                 }
@@ -574,7 +602,8 @@ final class CloudKitUsageSnapshotStore {
             }
         }
 
-        return deliveredFriendIDs.count
+        report.deliveredCount = deliveredFriendIDs.count
+        return report
     }
 
     func updateFriendRequest(_ request: BlockFriendRequest) async throws {
