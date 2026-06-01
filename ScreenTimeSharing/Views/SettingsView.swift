@@ -98,6 +98,25 @@ struct SettingsView: View {
                 }
                 #endif
 
+                #if DENY_INTERNAL_DEBUG
+                AppSection("Danger Zone") {
+                    AppCard {
+                        Button(role: .destructive) {
+                            AppHaptics.buttonTap()
+                            Task {
+                                await model.resetAccountForDebugging()
+                            }
+                        } label: {
+                            Label("Reset Account (Wipe All Data)", systemImage: "trash")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .disabled(model.isWorking)
+                    }
+                }
+                #endif
+
                 #if DEBUG && DENY_INTERNAL_DEBUG && targetEnvironment(simulator)
                 AppSection("Simulator Demo") {
                     AppCard {

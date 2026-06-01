@@ -460,6 +460,31 @@ final class AppModel: ObservableObject {
     }
     #endif
 
+    #if DENY_INTERNAL_DEBUG
+    /// Debug-only full reset: wipes this device's local identity + accepted
+    /// shares AND the user's CloudKit data, then drops back to onboarding. Use to
+    /// clear corrupted legacy state (drifted profile IDs, stale channels) so a
+    /// fresh re-invite starts from a clean slate. Both devices should run this.
+    func resetAccountForDebugging() async {
+        isWorking = true
+        defer { isWorking = false }
+
+        await snapshotStore.resetAllCloudData()
+
+        profileStore.clearAll()
+        friendSummaries = []
+        leaderboardEntries = []
+        blockingState.friendRequests = []
+        try? persistBlockingState()
+
+        UserDefaults.standard.set(false, forKey: onboardingKey)
+        isAuthenticated = false
+        hasCompletedOnboarding = false
+        profile = profileStore.load()
+        message = "Account reset. Re-onboard, then re-invite your friend on both devices."
+    }
+    #endif
+
     func setAppearanceMode(_ mode: AppAppearanceMode) {
         guard appearanceMode != mode else {
             return

@@ -49,8 +49,13 @@ final class LocalProfileStore {
             return stampingAppleUserID(appleUserID, on: &profile)
         }
 
+        // UserDefaults was wiped (e.g. app reinstall) but the Keychain mapping
+        // survives. Reuse the previously mapped profile ID instead of minting a
+        // new UUID — otherwise our identity drifts and friends' records (which
+        // reference the old ID) can no longer reach us.
+        let recoveredID = profileID(forAppleUserID: appleUserID) ?? UUID().uuidString
         var profile = UserProfile(
-            id: UUID().uuidString,
+            id: recoveredID,
             displayName: "Me",
             avatarColorHex: AppConfiguration.randomAvatarColorHex(),
             shareStatus: .notShared,
@@ -103,6 +108,23 @@ final class LocalProfileStore {
             return
         }
         defaults.set(data, forKey: key)
+    }
+
+    /// Debug-only: wipes all local identity state for a clean slate — the stored
+    /// profile, the random-color flag, and the Apple-ID -> profileID keychain
+    /// mapping. Also clears the Apple sign-in credential so onboarding restarts.
+    func clearAll() {
+        defaults.removeObject(forKey: key)
+        defaults.removeObject(forKey: randomFallbackColorKey)
+
+        let mappingQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.mappingKeychainService,
+            kSecAttrAccount as String: "mapping"
+        ]
+        SecItemDelete(mappingQuery as CFDictionary)
+
+        KeychainAppleID.delete()
     }
 
     private func linkAppleUserID(_ appleUserID: String, toProfileID profileID: String) {

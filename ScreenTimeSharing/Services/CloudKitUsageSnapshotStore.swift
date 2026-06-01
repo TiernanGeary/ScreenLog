@@ -672,6 +672,22 @@ final class CloudKitUsageSnapshotStore {
         return requestsByID.values.sorted { friendRequestSortDate($0) > friendRequestSortDate($1) }
     }
 
+    /// Debug-only: wipes the user's CloudKit data for a clean slate — deletes the
+    /// entire private record zone (cascading all profiles/channels/snapshots/
+    /// requests/shares) and forgets every accepted shared zone. The zone is
+    /// recreated lazily on next write.
+    func resetAllCloudData() async {
+        sharedZoneStore.clear()
+        guard let container else {
+            return
+        }
+
+        _ = try? await container.privateCloudDatabase.modifyRecordZones(
+            saving: [],
+            deleting: [privateZoneID]
+        )
+    }
+
     func acceptShare(metadata: CKShare.Metadata) async throws {
         guard container != nil else {
             throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
@@ -2089,6 +2105,10 @@ final class SharedZoneStore {
         )
 
         save(shares)
+    }
+
+    func clear() {
+        defaults.removeObject(forKey: key)
     }
 
     private func loadStoredShares() -> [StoredShare] {
