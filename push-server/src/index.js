@@ -78,11 +78,14 @@ async function handleNotify(request, env) {
     aps: {
       alert: { title, body: message },
       sound: "default",
+      category: "friend-time-request",
       "interruption-level": "time-sensitive",
     },
   };
   if (body.requestID) {
-    payload.requestID = String(body.requestID);
+    // Match the key the app reads in didReceive (FriendRequestNotificationService
+    // .requestIDUserInfoKey) so tapping the push routes to the request feed.
+    payload.friendRequestID = String(body.requestID);
   }
 
   const res = await fetch(`${host}/3/device/${record.token}`, {

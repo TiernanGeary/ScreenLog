@@ -490,12 +490,13 @@ final class CloudKitUsageSnapshotStore {
             profileID: profile.id
         )) ?? [:]
 
-        var deliveredCount = 0
+        var deliveredFriendIDs = Set<String>()
+
+        // Pass 1: friends who accepted MY invite — their participant mirror lives
+        // in my private zone, parented to the channel I own. Write into that.
         for friendID in request.selectedFriendIDs {
-            guard let channelRootID = channelRootIDsByFriendID[friendID] else {
-                continue
-            }
-            guard let channelUUID = channelUUID(fromRecordName: channelRootID.recordName, profileID: profile.id) else {
+            guard let channelRootID = channelRootIDsByFriendID[friendID],
+                  let channelUUID = channelUUID(fromRecordName: channelRootID.recordName, profileID: profile.id) else {
                 continue
             }
 
@@ -522,9 +523,58 @@ final class CloudKitUsageSnapshotStore {
             for saveResult in result.saveResults.values {
                 _ = try saveResult.get()
             }
-            deliveredCount += 1
+            deliveredFriendIDs.insert(friendID)
         }
-        return deliveredCount
+
+        // Pass 2: friends whose invite I accepted — their channel lives in MY
+        // shared database (I'm a read-write participant). Write the request as a
+        // child of their channel root so it lands in their private database.
+        let remaining = Set(request.selectedFriendIDs).subtracting(deliveredFriendIDs)
+        if !remaining.isEmpty {
+            for share in sharedZoneStore.loadShares() {
+                guard let rootRecordID = share.rootRecordID,
+                      let rootRecord = try? await sharedProfileRecord(
+                          rootRecordID: rootRecordID,
+                          database: container.sharedCloudDatabase,
+                          zoneID: share.zoneID
+                      ),
+                      let friendID = rootRecord[Field.ownerProfileID] as? String,
+                      remaining.contains(friendID),
+                      !deliveredFriendIDs.contains(friendID) else {
+                    continue
+                }
+
+                let requestRecordID = CKRecord.ID(
+                    recordName: "friend-request-shared-\(request.id)",
+                    zoneID: share.zoneID
+                )
+                let requestRecord = try makeFriendRequestRecord(
+                    request,
+                    recordID: requestRecordID,
+                    profileRecordID: rootRecordID,
+                    existingRecord: nil,
+                    photoData: photoData
+                )
+
+                do {
+                    let result = try await container.sharedCloudDatabase.modifyRecords(
+                        saving: [requestRecord.record],
+                        deleting: [],
+                        savePolicy: .changedKeys,
+                        atomically: true
+                    )
+                    try requestRecord.cleanup()
+                    for saveResult in result.saveResults.values {
+                        _ = try saveResult.get()
+                    }
+                    deliveredFriendIDs.insert(friendID)
+                } catch {
+                    try? requestRecord.cleanup()
+                }
+            }
+        }
+
+        return deliveredFriendIDs.count
     }
 
     func updateFriendRequest(_ request: BlockFriendRequest) async throws {
