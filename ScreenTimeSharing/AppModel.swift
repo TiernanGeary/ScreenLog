@@ -273,6 +273,7 @@ final class AppModel: ObservableObject {
     private static let denyStartedAtKey = "DenyStartedAt.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
     private var isSyncingFriendRequests = false
+    private var hasLoadedFriendsOnce = false
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
@@ -1149,6 +1150,7 @@ final class AppModel: ObservableObject {
     @discardableResult
     func acceptShare(metadata: CKShare.Metadata) async -> Bool {
         do {
+            let priorFriendIDs = Set(friendSummaries.map(\.id))
             try await snapshotStore.acceptShare(metadata: metadata)
             do {
                 try await snapshotStore.publishAcceptedShareMirrors(profile: profile, snapshot: localSnapshot)
@@ -1158,6 +1160,17 @@ final class AppModel: ObservableObject {
             message = "Friend share accepted."
             await reloadFriends()
             await syncFriendRequests()
+
+            // Push to the inviter(s) we just connected with, so they're alerted
+            // their invite was accepted even if their app is closed.
+            let newFriends = friendSummaries.filter { !priorFriendIDs.contains($0.id) }
+            let inviterName = profile.displayName == "Me" ? "A friend" : profile.displayName
+            sendPushNotification(
+                toProfileIDs: newFriends.map(\.id),
+                title: "New friend",
+                body: "\(inviterName) accepted your invite. You're now connected on deny.",
+                requestID: nil
+            )
             return true
         } catch {
             message = "Could not accept share: \(error.localizedDescription)"
@@ -1167,6 +1180,8 @@ final class AppModel: ObservableObject {
 
     func reloadFriends() async {
         do {
+            let previousFriendIDs = Set(friendSummaries.map(\.id))
+            let hadLoadedFriends = hasLoadedFriendsOnce
             let friends = try await snapshotStore.fetchFriendSummaries(for: profile)
             friendSummaries = friends
             leaderboardEntries = []
@@ -1176,6 +1191,18 @@ final class AppModel: ObservableObject {
                 leaderboardEntries: leaderboardEntries,
                 currentUserID: profile.id
             )
+
+            // Notify on genuinely new friends. Skip the very first load of a
+            // session so we don't re-announce the whole existing friend list.
+            if hadLoadedFriends {
+                for friend in friends where !previousFriendIDs.contains(friend.id) {
+                    friendRequestNotificationService.scheduleFriendAddedNotification(
+                        friendID: friend.id,
+                        friendName: friend.displayName
+                    )
+                }
+            }
+            hasLoadedFriendsOnce = true
         } catch {
             message = "Could not refresh friends: \(error.localizedDescription)"
         }
@@ -2305,6 +2332,7 @@ struct FriendRequestNotificationService {
     private let defaults: UserDefaults
     private let notifiedRequestIDsKey = "NotifiedFriendRequestIDs.v1"
     private let notifiedStatusKey = "NotifiedFriendRequestStatusIDs.v1"
+    private let notifiedFriendsKey = "NotifiedFriendIDs.v1"
 
     init(defaults: UserDefaults? = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)) {
         self.defaults = defaults ?? .standard
@@ -2404,6 +2432,49 @@ struct FriendRequestNotificationService {
 
         keys.insert(key)
         defaults.set(Array(keys), forKey: notifiedStatusKey)
+        return true
+    }
+
+    /// Posts a local notification the first time we observe a given friend, so
+    /// both sides learn the friendship connected. De-duplicated per friend ID.
+    func scheduleFriendAddedNotification(friendID: String, friendName: String) {
+        guard rememberFriendAdded(friendID) else {
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = "New friend"
+        let name = friendName.trimmingCharacters(in: .whitespacesAndNewlines)
+        content.body = name.isEmpty || name == "Friend"
+            ? "You're now connected with a new friend on deny."
+            : "\(name) is now your friend on deny."
+        content.sound = .default
+        content.categoryIdentifier = Self.categoryIdentifier
+
+        let notificationRequest = UNNotificationRequest(
+            identifier: "friend-added-\(friendID)",
+            content: content,
+            trigger: nil
+        )
+
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            guard granted else {
+                return
+            }
+
+            center.add(notificationRequest)
+        }
+    }
+
+    private func rememberFriendAdded(_ friendID: String) -> Bool {
+        var ids = Set(defaults.stringArray(forKey: notifiedFriendsKey) ?? [])
+        guard !ids.contains(friendID) else {
+            return false
+        }
+
+        ids.insert(friendID)
+        defaults.set(Array(ids), forKey: notifiedFriendsKey)
         return true
     }
 
