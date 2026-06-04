@@ -1,6 +1,6 @@
-# Screen Time Sharing
+# Screen Time Sharing - app name:Deny
 
-Native iOS-first SwiftUI beta for opt-in Screen Time sharing with friends and a configurable WidgetKit friend-card widget.
+Native iOS-first SwiftUI beta for app blocking on schedule/time limit for productivity. The hook is that for additional screen time, you need to send a photo of you begging and an xminutes screen time request to friends. The receiving-end friend has a feed where these photos pop up and can approve or deny requests. 
 
 Currently building. Goal is to experiment short-form video marketing of a network-based app
 
