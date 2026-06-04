@@ -2,6 +2,8 @@
 
 Native iOS-first SwiftUI beta for opt-in Screen Time sharing with friends and a configurable WidgetKit friend-card widget.
 
+Currently building. Goal is to experiment short-form video marketing of a network-based app
+
 ## Targets
 
 - `ScreenTimeSharing`: SwiftUI iPhone app.
