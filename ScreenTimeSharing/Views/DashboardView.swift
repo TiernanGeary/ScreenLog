@@ -979,21 +979,21 @@ private struct BlockingOverviewCard: View {
             AppHaptics.buttonTap()
             friendRequestGroup = group
         } label: {
-            Label("Request", systemImage: "hands.sparkles.fill")
+            Label("Ask Friends", systemImage: "hands.sparkles.fill")
                 .font(.caption.weight(.semibold))
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 12)
                 .frame(height: 32)
                 .background(
                     Capsule()
-                        .fill(isEnabled ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.12))
+                        .fill(isEnabled ? Color.accentColor : Color.secondary.opacity(0.12))
                 )
                 .appCapsuleButtonHitArea()
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isEnabled ? Color.accentColor : Color.secondary)
+        .foregroundStyle(isEnabled ? Color.white : Color.secondary)
         .disabled(!isEnabled)
         .accessibilityLabel(
             isEnabled
