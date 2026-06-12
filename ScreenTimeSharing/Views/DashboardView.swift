@@ -974,12 +974,20 @@ private struct BlockingOverviewCard: View {
 
     private func friendRequestButton(for group: BlockGroup) -> some View {
         let isEnabled = group.friendRequestConfig.isEnabled
+        let pendingCount = model.pendingOutgoingFriendRequestCount(for: group.id)
 
         return Button {
             AppHaptics.buttonTap()
-            friendRequestGroup = group
+            if isEnabled {
+                friendRequestGroup = group
+            } else {
+                viewedGroup = group
+            }
         } label: {
-            Label("Ask Friends", systemImage: "hands.sparkles.fill")
+            Label(
+                isEnabled ? "Ask Friends" : "Enable Requests",
+                systemImage: isEnabled ? "hands.sparkles.fill" : "gearshape.fill"
+            )
                 .font(.caption.weight(.semibold))
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
@@ -991,14 +999,27 @@ private struct BlockingOverviewCard: View {
                         .fill(isEnabled ? Color.accentColor : Color.secondary.opacity(0.12))
                 )
                 .appCapsuleButtonHitArea()
+                .overlay(alignment: .topTrailing) {
+                    if isEnabled && pendingCount > 0 {
+                        Text("\(pendingCount)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.red))
+                            .offset(x: 6, y: -6)
+                            .accessibilityHidden(true)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .foregroundStyle(isEnabled ? Color.white : Color.secondary)
-        .disabled(!isEnabled)
         .accessibilityLabel(
             isEnabled
-                ? "Request time from friends for \(group.name)"
-                : "Friend requests disabled for \(group.name)"
+                ? (pendingCount > 0
+                    ? "Request time from friends for \(group.name), \(pendingCount) pending"
+                    : "Request time from friends for \(group.name)")
+                : "Enable friend requests for \(group.name) in settings"
         )
     }
 
@@ -1494,6 +1515,7 @@ struct FriendApprovalRequestView: View {
     @State private var selectedPhotoData: Data?
     @State private var message = ""
     @FocusState private var isMessageFocused: Bool
+    @State private var didSendRequest = false
 
     private let minuteOptions = [5, 10, 15, 20, 30, 45, 60]
 
@@ -1516,6 +1538,12 @@ struct FriendApprovalRequestView: View {
         NavigationStack {
             requestStepContent
                 .navigationTitle(navigationTitle)
+                .onAppear {
+                    restoreDraftIfAvailable()
+                }
+                .onDisappear {
+                    persistDraftIfNeeded()
+                }
             .safeAreaInset(edge: .bottom) {
                 bottomBar
             }
@@ -1876,6 +1904,49 @@ struct FriendApprovalRequestView: View {
         .background(.regularMaterial)
     }
 
+    private func restoreDraftIfAvailable() {
+        guard selectedPhotoData == nil,
+              message.isEmpty,
+              selectedFriendIDs.isEmpty,
+              let draft = model.friendRequestDraft(for: group.id) else {
+            return
+        }
+
+        selectedPhotoData = draft.photoJPEGData
+        requestedMinutes = draft.requestedMinutes
+        message = draft.message
+        selectedFriendIDs = Set(draft.selectedFriendIDs)
+
+        if selectedPhotoData != nil {
+            requestStep = .review
+        }
+    }
+
+    private func persistDraftIfNeeded() {
+        if didSendRequest {
+            model.clearFriendRequestDraft(for: group.id)
+            return
+        }
+
+        let hasContent = selectedPhotoData != nil
+            || !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !selectedFriendIDs.isEmpty
+
+        if hasContent {
+            model.saveFriendRequestDraft(
+                AppModel.FriendRequestDraft(
+                    photoJPEGData: selectedPhotoData,
+                    requestedMinutes: requestedMinutes,
+                    message: message,
+                    selectedFriendIDs: Array(selectedFriendIDs)
+                ),
+                for: group.id
+            )
+        } else {
+            model.clearFriendRequestDraft(for: group.id)
+        }
+    }
+
     private func sendRequest() {
         guard canSendRequest else {
             return
@@ -1889,6 +1960,7 @@ struct FriendApprovalRequestView: View {
             photoJPEGData: selectedPhotoData
         ) {
             AppHaptics.buttonTap()
+            didSendRequest = true
             dismiss()
         }
     }

@@ -363,6 +363,14 @@ final class AppModel: ObservableObject {
             + BlockingStateResolver.pendingFriendRequests(in: blockingState).count
     }
 
+    func pendingOutgoingFriendRequestCount(for groupID: String) -> Int {
+        BlockingStateResolver.pendingSentFriendRequests(
+            forAny: currentFriendIdentityIDs,
+            inGroup: groupID,
+            in: blockingState
+        ).count
+    }
+
     var pendingShieldFriendRequestGroup: BlockGroup? {
         guard let pendingShieldFriendRequestGroupID else {
             return nil
@@ -884,6 +892,29 @@ final class AppModel: ObservableObject {
             await publishFriendRequestToCloud(request, photoData: photoJPEGData)
         }
         return true
+    }
+
+    // MARK: - Friend request draft (in-memory, current app session only)
+
+    struct FriendRequestDraft {
+        var photoJPEGData: Data?
+        var requestedMinutes: Int
+        var message: String
+        var selectedFriendIDs: [String]
+    }
+
+    private var friendRequestDrafts: [String: FriendRequestDraft] = [:]
+
+    func friendRequestDraft(for groupID: String) -> FriendRequestDraft? {
+        friendRequestDrafts[groupID]
+    }
+
+    func saveFriendRequestDraft(_ draft: FriendRequestDraft, for groupID: String) {
+        friendRequestDrafts[groupID] = draft
+    }
+
+    func clearFriendRequestDraft(for groupID: String) {
+        friendRequestDrafts.removeValue(forKey: groupID)
     }
 
     @discardableResult
