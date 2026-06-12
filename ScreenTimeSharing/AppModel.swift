@@ -238,6 +238,7 @@ final class AppModel: ObservableObject {
     @Published var friendSummaries: [FriendUsageSummary] = []
     @Published var friendsLastSyncedAt: Date?
     @Published var isSyncingFriends = false
+    @Published var pendingInvites: [PendingFriendInvite] = []
     @Published var leaderboardEntries: [LeaderboardEntry] = []
     @Published var leaderboardWindow: LeaderboardWindow = .week
     @Published var cloudAvailability: CloudAvailability = .checking
@@ -1245,6 +1246,24 @@ final class AppModel: ObservableObject {
             hasLoadedFriendsOnce = true
         } catch {
             message = "Could not refresh friends: \(error.localizedDescription)"
+        }
+    }
+
+    func reloadPendingInvites() async {
+        do {
+            pendingInvites = try await snapshotStore.fetchPendingInvites(profile: profile)
+        } catch {
+            // Keep the previous list; the pending section is advisory and
+            // reloadFriends already surfaces connectivity errors.
+        }
+    }
+
+    func cancelPendingInvite(_ invite: PendingFriendInvite) async {
+        do {
+            try await snapshotStore.cancelPendingInvite(channelUUID: invite.id, profile: profile)
+            pendingInvites.removeAll { $0.id == invite.id }
+        } catch {
+            message = "Could not cancel invite: \(error.localizedDescription)"
         }
     }
 
