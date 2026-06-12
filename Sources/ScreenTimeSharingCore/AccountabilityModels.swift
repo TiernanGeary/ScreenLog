@@ -142,6 +142,9 @@ public struct LeaderboardEntry: Codable, Equatable, Identifiable, Sendable {
     public var settingsResetCount: Int
     public var currentStreakDays: Int
     public var lastUpdated: Date?
+    /// Screen time for the usage leaderboard. Nil when usage is unknown or the
+    /// entry belongs to the request leaderboard.
+    public var usageSeconds: TimeInterval?
 
     public init(
         id: String,
@@ -156,7 +159,8 @@ public struct LeaderboardEntry: Codable, Equatable, Identifiable, Sendable {
         emergencyUnlockCount: Int,
         settingsResetCount: Int,
         currentStreakDays: Int,
-        lastUpdated: Date?
+        lastUpdated: Date?,
+        usageSeconds: TimeInterval? = nil
     ) {
         self.id = id
         self.userID = userID
@@ -171,6 +175,7 @@ public struct LeaderboardEntry: Codable, Equatable, Identifiable, Sendable {
         self.settingsResetCount = settingsResetCount
         self.currentStreakDays = currentStreakDays
         self.lastUpdated = lastUpdated
+        self.usageSeconds = usageSeconds
     }
 }
 

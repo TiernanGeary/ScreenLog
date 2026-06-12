@@ -169,7 +169,7 @@ final class AppModel: ObservableObject {
     @Published var hourlyUsageByDayID: [String: [TimeInterval]] = [:]
     @Published var friendSummaries: [FriendUsageSummary] = []
     @Published var leaderboardEntries: [LeaderboardEntry] = []
-    @Published var leaderboardWindow: LeaderboardWindow = .week
+    @Published var leaderboardWindow: LeaderboardWindow = .today
     @Published var cloudAvailability: BackendAvailability = .checking
     @Published var screenTimeAuthorization = "Not requested"
     @Published var screenTimeReportRefreshID = UUID()
@@ -183,6 +183,7 @@ final class AppModel: ObservableObject {
     @Published var focusedFriendRequestLogID: String?
     @Published var pendingIncomingInvite: IncomingInvite?
     @Published var isRedeemingInvite = false
+    @Published var isDeletingAccount = false
     @Published var isAuthenticated: Bool
 
     let snapshotStore: SupabaseSnapshotStore
@@ -318,6 +319,7 @@ final class AppModel: ObservableObject {
         await subscriptionService.loadProducts()
         cloudAvailability = await snapshotStore.cloudAvailability()
         await publishProfileUpdateToCloud()
+        await publishSnapshotIfNeeded()
         await reloadFriends()
         await syncFriendRequests()
         syncFriendRequestNotifications()
@@ -387,6 +389,39 @@ final class AppModel: ObservableObject {
         await snapshotStore.signOut()
         isAuthenticated = false
         message = "Signed out."
+    }
+
+    /// Permanently deletes the account server-side, then wipes local identity
+    /// and drops back to onboarding. Returns false (with a message) when the
+    /// server-side deletion fails, so the UI can keep the account intact.
+    @discardableResult
+    func deleteAccount() async -> Bool {
+        isWorking = true
+        isDeletingAccount = true
+        defer {
+            isWorking = false
+            isDeletingAccount = false
+        }
+
+        do {
+            try await snapshotStore.deleteAccount()
+        } catch {
+            message = "Could not delete your account: \(error.localizedDescription)"
+            return false
+        }
+
+        profileStore.clearAll()
+        friendSummaries = []
+        leaderboardEntries = []
+        blockingState.friendRequests = []
+        try? persistBlockingState()
+
+        UserDefaults.standard.set(false, forKey: onboardingKey)
+        isAuthenticated = false
+        hasCompletedOnboarding = false
+        profile = profileStore.load()
+        message = "Your account and data were deleted."
+        return true
     }
 
     #if DEBUG
@@ -1215,12 +1250,47 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Invoked when a CloudKit push wakes the app (foreground or background): pull
+    /// Invoked when a push wakes the app (foreground or background): pull
     /// the latest friends + requests so the existing notification logic posts the
     /// approve/deny/new-request alerts even when the app wasn't open.
     func handleRemoteChange() async {
         await reloadFriends()
         await syncFriendRequests()
+    }
+
+    private var lastSnapshotPublishAt: Date?
+
+    /// Publishes today's snapshot automatically (launch/foreground/poll),
+    /// throttled to every 10 minutes, so friends see fresh usage without the
+    /// user ever tapping a manual refresh. Visibility to friends is still
+    /// gated server-side by the sharing consent flag.
+    func publishSnapshotIfNeeded(now: Date = Date()) async {
+        guard isAuthenticated else {
+            return
+        }
+        if let lastSnapshotPublishAt, now.timeIntervalSince(lastSnapshotPublishAt) < 600 {
+            return
+        }
+
+        var snapshot = localSnapshot
+        #if DEBUG && targetEnvironment(simulator)
+        if snapshot?.capability.allowsUpload != true {
+            snapshot = UsageStatsBuilder.snapshot(for: now, in: usageHistory)
+        }
+        #endif
+        guard let snapshot, snapshot.capability.allowsUpload else {
+            return
+        }
+        guard await snapshotStore.cloudAvailability().allowsCloudWrites else {
+            return
+        }
+
+        do {
+            try await snapshotStore.publish(profile: profile, snapshot: snapshot)
+            lastSnapshotPublishAt = now
+        } catch {
+            // Non-fatal: retried on the next poll cycle.
+        }
     }
 
     /// Stores the APNs device token and registers it with the push server against
@@ -1683,21 +1753,80 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let participant = AccountabilityParticipant(
-            id: profile.id,
-            displayName: profile.displayName == "Me" ? "You" : profile.displayName,
-            avatarColorHex: profile.avatarColorHex
-        )
-        guard let entry = LeaderboardBuilder.entries(
-            participants: [participant],
-            events: events,
-            window: leaderboardWindow
-        ).first else {
-            leaderboardEntries = otherEntries
-            return
+        // Rank yourself AND your friends: requests you're a party to already
+        // carry events attributed to whoever sent them, so friends' stats are
+        // computable from data the server lets you see. Only people who
+        // actually requested time appear on the request leaderboard.
+        var participants = [
+            AccountabilityParticipant(
+                id: profile.id,
+                displayName: profile.displayName == "Me" ? "You" : profile.displayName,
+                avatarColorHex: profile.avatarColorHex,
+                avatarImageData: profile.avatarImageData
+            )
+        ]
+        participants += friendSummaries.map { friend in
+            AccountabilityParticipant(
+                id: friend.id,
+                displayName: friend.displayName,
+                avatarColorHex: friend.avatarColorHex,
+                avatarImageData: friend.avatarImageData
+            )
         }
 
-        leaderboardEntries = [entry] + otherEntries
+        let participantIDs = Set(participants.map(\.id))
+        let preservedEntries = otherEntries.filter { !participantIDs.contains($0.userID) }
+        leaderboardEntries = LeaderboardBuilder.entries(
+            participants: participants,
+            events: events,
+            window: leaderboardWindow
+        )
+        .filter { $0.requestCount > 0 || $0.requestedExtraSeconds > 0 }
+        + preservedEntries
+    }
+
+    /// Today's screen-time leaderboard: you and your friends ranked by usage
+    /// (least time wins), built from the same data the friend list shows.
+    var usageLeaderboardEntries: [LeaderboardEntry] {
+        var entries = [
+            LeaderboardEntry(
+                id: "usage-\(profile.id)",
+                userID: profile.id,
+                displayName: profile.displayName == "Me" ? "You" : profile.displayName,
+                avatarColorHex: profile.avatarColorHex,
+                avatarImageData: profile.avatarImageData,
+                requestedExtraSeconds: 0,
+                approvedExtraSeconds: 0,
+                requestCount: 0,
+                deniedCount: 0,
+                emergencyUnlockCount: 0,
+                settingsResetCount: 0,
+                currentStreakDays: 0,
+                lastUpdated: localSnapshot?.lastUpdated,
+                usageSeconds: localSnapshot?.totalDuration
+            )
+        ]
+        entries += friendSummaries.map { friend in
+            LeaderboardEntry(
+                id: "usage-\(friend.id)",
+                userID: friend.id,
+                displayName: friend.displayName,
+                avatarColorHex: friend.avatarColorHex,
+                avatarImageData: friend.avatarImageData,
+                requestedExtraSeconds: 0,
+                approvedExtraSeconds: 0,
+                requestCount: 0,
+                deniedCount: 0,
+                emergencyUnlockCount: 0,
+                settingsResetCount: 0,
+                currentStreakDays: 0,
+                lastUpdated: friend.lastUpdated,
+                usageSeconds: friend.totalDuration
+            )
+        }
+        return entries.sorted {
+            ($0.usageSeconds ?? .greatestFiniteMagnitude) < ($1.usageSeconds ?? .greatestFiniteMagnitude)
+        }
     }
 
     private func writeWidgetCacheSnapshot() {

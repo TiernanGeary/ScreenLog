@@ -15,6 +15,9 @@ struct SettingsView: View {
     @State private var selectedProfilePhotoItem: PhotosPickerItem?
     @State private var profilePhotoCropItem: ProfilePhotoCropItem?
     @State private var selectedCollectionPhoto: AcceptedRequestPhotoItem?
+    @State private var isConfirmingAccountDeletion = false
+    @State private var isTypingDeleteConfirmation = false
+    @State private var deleteConfirmationText = ""
     #if canImport(UIKit)
     @State private var pendingProfileCameraImage: UIImage?
     #endif
@@ -142,8 +145,81 @@ struct SettingsView: View {
                 #endif
 
                 photoCollectionSection
+
+                AppSection("Account") {
+                    AppCard {
+                        Button {
+                            AppHaptics.buttonTap()
+                            Task {
+                                await model.signOut()
+                            }
+                        } label: {
+                            Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+                        .disabled(model.isWorking)
+
+                        AppCardDivider()
+
+                        Button(role: .destructive) {
+                            AppHaptics.buttonTap()
+                            isConfirmingAccountDeletion = true
+                        } label: {
+                            Label("Delete Account", systemImage: "person.crop.circle.badge.xmark")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .disabled(model.isWorking)
+                    }
+                }
             }
             .navigationTitle("Profile")
+            .alert("Delete your account?", isPresented: $isConfirmingAccountDeletion) {
+                Button("Delete", role: .destructive) {
+                    deleteConfirmationText = ""
+                    isTypingDeleteConfirmation = true
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This permanently deletes your account, friends, requests, and shared screen time. This cannot be undone.")
+            }
+            .alert("Confirm deletion", isPresented: $isTypingDeleteConfirmation) {
+                TextField("Type \"delete\"", text: $deleteConfirmationText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Delete Forever", role: .destructive) {
+                    Task {
+                        await model.deleteAccount()
+                    }
+                }
+                .disabled(deleteConfirmationText.trimmingCharacters(in: .whitespaces).lowercased() != "delete")
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Type \"delete\" to permanently erase your account.")
+            }
+            .overlay {
+                if model.isDeletingAccount {
+                    ZStack {
+                        Color.black.opacity(0.45)
+                            .ignoresSafeArea()
+                        VStack(spacing: 14) {
+                            ProgressView()
+                                .controlSize(.large)
+                                .tint(.white)
+                            Text("Deleting your account…")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .padding(28)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: model.isDeletingAccount)
             .sheet(isPresented: $isShowingShareSheet) {
                 InviteFriendsSheet()
             }

@@ -379,4 +379,26 @@ final class SupabaseSnapshotStore {
         avatarCache = [:]
         lastUploadedAvatarPath = nil
     }
+
+    /// Permanently deletes the account: removes the user's stored files via the
+    /// Storage API (SQL can't touch storage), then a SECURITY DEFINER RPC
+    /// deletes the auth user, cascading through all of their data. Signs out
+    /// locally afterwards. Throws if the server-side deletion fails.
+    func deleteAccount() async throws {
+        let uid = try await currentUserID()
+        let folder = uid.uuidString.lowercased()
+
+        // Best-effort file cleanup; any stragglers are unreadable once the
+        // rows behind the storage read policies are deleted below.
+        for bucket in ["avatars", "request-photos"] {
+            if let objects = try? await client.storage.from(bucket).list(path: folder), !objects.isEmpty {
+                _ = try? await client.storage.from(bucket).remove(paths: objects.map { "\(folder)/\($0.name)" })
+            }
+        }
+
+        try await client.rpc("delete_my_account").execute()
+        await signOut()
+        avatarCache = [:]
+        lastUploadedAvatarPath = nil
+    }
 }

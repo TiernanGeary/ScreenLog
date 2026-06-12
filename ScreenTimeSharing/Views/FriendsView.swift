@@ -3,14 +3,32 @@ import SwiftUI
 import UIKit
 #endif
 
+enum FriendLeaderboardMode: String, CaseIterable {
+    case usage
+    case requests
+
+    var label: String {
+        switch self {
+        case .usage:
+            return "Screen Time"
+        case .requests:
+            return "Requests"
+        }
+    }
+}
+
 struct FriendsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var selectedLeaderboardWindow: LeaderboardWindow = .week
+    @State private var selectedLeaderboardMode: FriendLeaderboardMode = .usage
     @State private var isShowingShareSheet = false
 
     private var leaderboardEntries: [LeaderboardEntry] {
-        let friendEntries = model.leaderboardEntries.filter { $0.userID != model.profile.id }
-        return StatsBoardBuilder.mostExtraRequested(entries: friendEntries)
+        switch selectedLeaderboardMode {
+        case .usage:
+            return model.usageLeaderboardEntries
+        case .requests:
+            return StatsBoardBuilder.mostExtraRequested(entries: model.leaderboardEntries)
+        }
     }
 
     var body: some View {
@@ -18,9 +36,9 @@ struct FriendsView: View {
             AppScreenScroll {
                 AppSection("Leaderboard") {
                     VStack(alignment: .leading, spacing: 10) {
-                        FriendLeaderboardWindowSelector(selection: $selectedLeaderboardWindow)
+                        FriendLeaderboardModeSelector(selection: $selectedLeaderboardMode)
 
-                        FriendLeaderboardCard(entries: leaderboardEntries)
+                        FriendLeaderboardCard(entries: leaderboardEntries, mode: selectedLeaderboardMode)
                     }
                 }
 
@@ -65,12 +83,6 @@ struct FriendsView: View {
                     .accessibilityLabel("Invite Friends")
                 }
             }
-            .onAppear {
-                model.setLeaderboardWindow(selectedLeaderboardWindow)
-            }
-            .onChange(of: selectedLeaderboardWindow) { _, newWindow in
-                model.setLeaderboardWindow(newWindow)
-            }
             .sheet(isPresented: $isShowingShareSheet) {
                 InviteFriendsSheet()
             }
@@ -83,30 +95,28 @@ struct FriendsView: View {
     }
 }
 
-private struct FriendLeaderboardWindowSelector: View {
+private struct FriendLeaderboardModeSelector: View {
     @Environment(\.colorScheme) private var colorScheme
-    @Binding var selection: LeaderboardWindow
+    @Binding var selection: FriendLeaderboardMode
     @Namespace private var namespace
-
-    private let visibleWindows: [LeaderboardWindow] = [.week, .allTime]
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(visibleWindows, id: \.self) { window in
+            ForEach(FriendLeaderboardMode.allCases, id: \.self) { mode in
                 Button {
-                    if selection != window {
+                    if selection != mode {
                         AppHaptics.selectionChanged()
                     }
-                    selection = window
+                    selection = mode
                 } label: {
-                    Text(shortLabel(for: window))
+                    Text(mode.label)
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
                         .frame(height: 34)
-                        .foregroundStyle(selection == window ? .white : .primary)
+                        .foregroundStyle(selection == mode ? .white : .primary)
                         .background {
-                            if selection == window {
+                            if selection == mode {
                                 Capsule()
                                     .fill(Color.blue)
                                     .matchedGeometryEffect(id: "selected-leaderboard-window", in: namespace)
@@ -140,34 +150,40 @@ private struct FriendLeaderboardWindowSelector: View {
     private var borderColor: Color {
         colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.86)
     }
-
-    private func shortLabel(for window: LeaderboardWindow) -> String {
-        switch window {
-        case .today:
-            return "Today"
-        case .week:
-            return "This Week"
-        case .month:
-            return "Month"
-        case .allTime:
-            return "All"
-        }
-    }
 }
 
 private struct FriendLeaderboardCard: View {
     let entries: [LeaderboardEntry]
+    let mode: FriendLeaderboardMode
 
-    private var maxRequestedExtraSeconds: TimeInterval {
+    private var maxMetricSeconds: TimeInterval {
         entries
-            .map { max(0, $0.requestedExtraSeconds) }
+            .map { max(0, metricSeconds(for: $0)) }
             .max() ?? 0
+    }
+
+    private func metricSeconds(for entry: LeaderboardEntry) -> TimeInterval {
+        switch mode {
+        case .usage:
+            return entry.usageSeconds ?? 0
+        case .requests:
+            return entry.requestedExtraSeconds
+        }
+    }
+
+    private var emptyStateText: String {
+        switch mode {
+        case .usage:
+            return "No friend stats yet"
+        case .requests:
+            return "No time requests today"
+        }
     }
 
     var body: some View {
         AppCard {
             if entries.isEmpty {
-                Text("No friend stats yet")
+                Text(emptyStateText)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 .appCardRow()
@@ -176,7 +192,9 @@ private struct FriendLeaderboardCard: View {
                     FriendLeaderboardRow(
                         rank: index + 1,
                         entry: entry,
-                        maxRequestedExtraSeconds: maxRequestedExtraSeconds
+                        metricSeconds: metricSeconds(for: entry),
+                        maxMetricSeconds: maxMetricSeconds,
+                        mode: mode
                     )
                     .appCardRow(verticalPadding: 10)
 
@@ -192,7 +210,9 @@ private struct FriendLeaderboardCard: View {
 private struct FriendLeaderboardRow: View {
     let rank: Int
     let entry: LeaderboardEntry
-    let maxRequestedExtraSeconds: TimeInterval
+    let metricSeconds: TimeInterval
+    let maxMetricSeconds: TimeInterval
+    let mode: FriendLeaderboardMode
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -216,28 +236,38 @@ private struct FriendLeaderboardRow: View {
 
                     Spacer(minLength: 8)
 
-                    Text(UsageFormatting.duration(entry.requestedExtraSeconds))
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.76)
+                    Text(
+                        mode == .usage && entry.usageSeconds == nil
+                            ? "--"
+                            : UsageFormatting.duration(metricSeconds)
+                    )
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
                 }
 
                 FriendLeaderboardBar(
-                    value: entry.requestedExtraSeconds,
-                    maxValue: maxRequestedExtraSeconds,
+                    value: metricSeconds,
+                    maxValue: maxMetricSeconds,
                     colorHex: entry.avatarColorHex
                 )
 
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                }
             }
         }
     }
 
-    private var subtitle: String {
+    private var subtitle: String? {
+        guard mode == .requests else {
+            return nil
+        }
+
         var parts = [entry.requestCount == 1 ? "1 request" : "\(entry.requestCount) requests"]
 
         if entry.approvedExtraSeconds > 0 {
@@ -311,16 +341,10 @@ struct FriendSummaryRow: View {
                 Text(friend.displayName)
                     .font(.headline)
 
-                HStack(spacing: 12) {
-                    if friend.totalDuration == nil {
-                        Label("--", systemImage: "clock")
-                    } else {
-                        Label(UsageFormatting.duration(friend.totalDuration), systemImage: "clock")
-                        if friend.selectedAppDuration != nil {
-                            Label(UsageFormatting.duration(friend.selectedAppDuration), systemImage: "app")
-                        }
-                    }
-                }
+                Label(
+                    friend.totalDuration == nil ? "--" : UsageFormatting.duration(friend.totalDuration),
+                    systemImage: "clock"
+                )
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             }

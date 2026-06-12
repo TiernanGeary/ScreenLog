@@ -48,6 +48,7 @@ struct ScreenTimeSharingApp: App {
                     }
 
                     while !Task.isCancelled {
+                        await model.publishSnapshotIfNeeded()
                         await model.reloadFriends()
                         await model.syncFriendRequests()
                         try? await Task.sleep(for: .seconds(15))
