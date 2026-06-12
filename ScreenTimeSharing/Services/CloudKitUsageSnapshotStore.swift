@@ -42,6 +42,13 @@ private enum CloudKitUsageSnapshotStoreError: LocalizedError {
     }
 }
 
+/// A sent invite channel that no friend has accepted yet.
+struct PendingFriendInvite: Identifiable, Equatable {
+    let id: String          // channel UUID
+    let url: URL?
+    let createdAt: Date?
+}
+
 @MainActor
 final class CloudKitUsageSnapshotStore {
     private enum RecordType {
@@ -742,6 +749,85 @@ final class CloudKitUsageSnapshotStore {
         }
 
         return try metadataResult.get()
+    }
+
+    /// Lists invite channels this user created that no friend has accepted yet.
+    /// A channel counts as accepted when an accepter's participant mirror points
+    /// at it, or its share already has a non-owner accepted participant.
+    func fetchPendingInvites(profile: UserProfile) async throws -> [PendingFriendInvite] {
+        guard let container else {
+            return []
+        }
+
+        let database = container.privateCloudDatabase
+        let channelRoots = try await ownChannelRecords(database: database, profileID: profile.id)
+        guard !channelRoots.isEmpty else {
+            return []
+        }
+
+        let acceptedByFriend = try await channelRootIDsByFriendID(database: database, profileID: profile.id)
+        let acceptedRootIDs = Set(acceptedByFriend.values)
+
+        var invites: [PendingFriendInvite] = []
+        for root in channelRoots {
+            guard !acceptedRootIDs.contains(root.recordID),
+                  let channelUUID = channelUUID(from: root, profileID: profile.id) else {
+                continue
+            }
+
+            let shareID = CKRecord.ID(
+                recordName: "channel-share-\(profile.id)-\(channelUUID)",
+                zoneID: privateZoneID
+            )
+            guard let share = try await existingProfileShare(shareID: shareID, database: database) else {
+                continue
+            }
+
+            let hasAcceptedParticipant = share.participants.contains { participant in
+                participant.role != .owner && participant.acceptanceStatus == .accepted
+            }
+            if hasAcceptedParticipant {
+                continue
+            }
+
+            invites.append(
+                PendingFriendInvite(
+                    id: channelUUID,
+                    url: share.url,
+                    createdAt: root.creationDate
+                )
+            )
+        }
+
+        return invites.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+    }
+
+    /// Cancels a pending invite by deleting its channel root, which also tears
+    /// down the associated share so the old link stops working.
+    func cancelPendingInvite(channelUUID: String, profile: UserProfile) async throws {
+        guard let container else {
+            throw CloudKitUsageSnapshotStoreError.unavailableInSimulator
+        }
+
+        let database = container.privateCloudDatabase
+        let rootID = CKRecord.ID(
+            recordName: channelRootRecordName(profileID: profile.id, channelUUID: channelUUID),
+            zoneID: privateZoneID
+        )
+
+        do {
+            _ = try await database.modifyRecords(
+                saving: [],
+                deleting: [rootID],
+                savePolicy: .changedKeys,
+                atomically: false
+            )
+        } catch {
+            throw CloudKitUsageSnapshotStoreError.cloudKitSaveFailed(
+                context: "Cancelling the invite",
+                reason: cloudKitFailureMessage(for: error)
+            )
+        }
     }
 
     func fetchFriendSummaries(now: Date = Date()) async throws -> [FriendUsageSummary] {
