@@ -38,13 +38,22 @@ struct ScreenTimeReportBridgeView: View {
     }
 
     private func pollForReportSnapshot() async {
+        var quietTicks = 0
         for _ in 0..<60 {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else {
                 return
             }
 
-            _ = model.reloadUsageHistoryFromSharedStorage()
+            let didChange = model.reloadUsageHistoryFromSharedStorage()
+            if didChange {
+                quietTicks = 0
+            } else if model.localSnapshot != nil {
+                quietTicks += 1
+            }
+            if quietTicks >= 3 {
+                break
+            }
         }
 
         model.refreshScreenTimeReportStatus()
@@ -98,15 +107,24 @@ struct ScreenTimeLiveTodayReport: View {
         let startedAt = Date()
         isShowingLoading = !hasCachedTodayReport
 
+        var quietTicks = 0
         for _ in 0..<60 {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else {
                 return
             }
 
-            _ = model.reloadUsageHistoryFromSharedStorage()
+            let didChange = model.reloadUsageHistoryFromSharedStorage()
             if hasCachedTodayReport || Date().timeIntervalSince(startedAt) >= maxLoadingDuration {
                 isShowingLoading = false
+            }
+            if didChange {
+                quietTicks = 0
+            } else if hasCachedTodayReport {
+                quietTicks += 1
+            }
+            if quietTicks >= 3 {
+                break
             }
         }
 
@@ -246,15 +264,24 @@ struct ScreenTimeLiveStatsReport: View {
         let startedAt = Date()
         isShowingLoading = !hasCachedReportData
 
+        var quietTicks = 0
         for _ in 0..<60 {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else {
                 return
             }
 
-            _ = model.reloadUsageHistoryFromSharedStorage()
+            let didChange = model.reloadUsageHistoryFromSharedStorage()
             if hasCachedReportData || Date().timeIntervalSince(startedAt) >= maxLoadingDuration {
                 isShowingLoading = false
+            }
+            if didChange {
+                quietTicks = 0
+            } else if hasCachedReportData {
+                quietTicks += 1
+            }
+            if quietTicks >= 3 {
+                break
             }
         }
 
