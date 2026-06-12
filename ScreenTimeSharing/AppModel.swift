@@ -1571,9 +1571,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var lastLoadedUsageData: Data?
+
     private func loadUsageHistory() {
-        guard let data = usageHistoryDefaults?.data(forKey: UsageHistoryCodec.storageKey),
-              let payload = try? UsageHistoryCodec.decode(data) else {
+        let data = usageHistoryDefaults?.data(forKey: UsageHistoryCodec.storageKey)
+
+        if data == lastLoadedUsageData {
+            return
+        }
+        lastLoadedUsageData = data
+
+        guard let data, let payload = try? UsageHistoryCodec.decode(data) else {
             usageHistory = []
             hourlyUsageByDayID = [:]
             return
