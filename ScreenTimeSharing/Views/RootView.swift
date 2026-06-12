@@ -42,20 +42,20 @@ struct RootView: View {
         ) { group in
             FriendApprovalRequestView(group: group)
         }
-        .sheet(item: $model.pendingFriendShareInvite) { invite in
+        .sheet(item: $model.pendingIncomingInvite) { invite in
             FriendShareInviteView(
                 invite: invite,
-                isAccepting: model.isAcceptingFriendShareInvite,
+                isAccepting: model.isRedeemingInvite,
                 onAccept: {
                     Task {
-                        await model.acceptFriendShareInvite(invite)
+                        await model.redeemPendingInvite()
                     }
                 },
                 onCancel: {
-                    model.dismissFriendShareInvite()
+                    model.dismissIncomingInvite()
                 }
             )
-            .interactiveDismissDisabled(model.isAcceptingFriendShareInvite)
+            .interactiveDismissDisabled(model.isRedeemingInvite)
         }
     }
 
@@ -134,6 +134,22 @@ private struct SignInGateView: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
             }
+
+            #if DEBUG && targetEnvironment(simulator)
+            Button("Debug: Simulator Sign-In") {
+                isSigningIn = true
+                signInError = nil
+                Task {
+                    let success = await model.signInWithDebugAccount()
+                    if !success {
+                        signInError = model.message
+                    }
+                    isSigningIn = false
+                }
+            }
+            .font(.footnote)
+            .disabled(isSigningIn)
+            #endif
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -161,7 +177,7 @@ private struct SignInGateView: View {
 }
 
 private struct FriendShareInviteView: View {
-    let invite: IncomingFriendShareInvite
+    let invite: IncomingInvite
     let isAccepting: Bool
     let onAccept: () -> Void
     let onCancel: () -> Void
@@ -172,14 +188,14 @@ private struct FriendShareInviteView: View {
                 Spacer(minLength: 18)
 
                 ProfileAvatar(
-                    imageData: invite.avatarImageData,
-                    colorHex: AppConfiguration.defaultAvatarColor,
-                    initials: invite.displayName.initials,
+                    imageData: nil,
+                    colorHex: invite.inviterAvatarColorHex ?? AppConfiguration.defaultAvatarColor,
+                    initials: invite.inviterDisplayName.initials,
                     size: 116
                 )
 
                 VStack(spacing: 8) {
-                    Text(invite.displayName)
+                    Text(invite.inviterDisplayName)
                         .font(.title2.weight(.bold))
                         .multilineTextAlignment(.center)
 

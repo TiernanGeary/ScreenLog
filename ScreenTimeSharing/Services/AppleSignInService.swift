@@ -1,4 +1,5 @@
 import AuthenticationServices
+import CryptoKit
 import Foundation
 import Security
 
@@ -6,22 +7,89 @@ struct AppleCredential {
     let userID: String
     let fullName: PersonNameComponents?
     let email: String?
+    /// Apple-issued identity token (JWT) exchanged with Supabase Auth.
+    let identityToken: String
+    /// The raw nonce whose SHA-256 was embedded in the token request; Supabase
+    /// verifies it against the token's nonce claim.
+    let rawNonce: String
 }
 
 @MainActor
 final class AppleSignInService: NSObject {
     private var continuation: CheckedContinuation<AppleCredential, any Error>?
+    private var pendingRawNonce: String?
 
     func signIn() async throws -> AppleCredential {
         try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             let request = ASAuthorizationAppleIDProvider().createRequest()
             request.requestedScopes = [.fullName, .email]
+            request.nonce = Self.sha256Hex(configureNonce())
 
             let controller = ASAuthorizationController(authorizationRequests: [request])
             controller.delegate = self
             controller.performRequests()
         }
+    }
+
+    /// Prepares a SwiftUI `SignInWithAppleButton` request so its credential can
+    /// be exchanged with Supabase. Returns nothing; the raw nonce is kept
+    /// internally and consumed by `credential(from:)`.
+    func configure(request: ASAuthorizationAppleIDRequest) {
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = Self.sha256Hex(configureNonce())
+    }
+
+    /// Builds an `AppleCredential` from a SwiftUI `SignInWithAppleButton`
+    /// completion, pairing it with the nonce minted in `configure(request:)`.
+    func credential(from authorization: ASAuthorization) throws -> AppleCredential {
+        guard let rawNonce = pendingRawNonce else {
+            throw AppleSignInError.invalidCredential
+        }
+        pendingRawNonce = nil
+        return try Self.makeCredential(from: authorization, rawNonce: rawNonce)
+    }
+
+    private func configureNonce() -> String {
+        let nonce = Self.randomNonce()
+        pendingRawNonce = nonce
+        return nonce
+    }
+
+    private static func makeCredential(
+        from authorization: ASAuthorization,
+        rawNonce: String
+    ) throws -> AppleCredential {
+        guard
+            let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+            let tokenData = credential.identityToken,
+            let token = String(data: tokenData, encoding: .utf8)
+        else {
+            throw AppleSignInError.invalidCredential
+        }
+
+        KeychainAppleID.save(credential.user)
+
+        return AppleCredential(
+            userID: credential.user,
+            fullName: credential.fullName,
+            email: credential.email,
+            identityToken: token,
+            rawNonce: rawNonce
+        )
+    }
+
+    private static func randomNonce(length: Int = 32) -> String {
+        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._")
+        var bytes = [UInt8](repeating: 0, count: length)
+        _ = SecRandomCopyBytes(kSecRandomDefault, length, &bytes)
+        return String(bytes.map { charset[Int($0) % charset.count] })
+    }
+
+    private static func sha256Hex(_ input: String) -> String {
+        SHA256.hash(data: Data(input.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     func checkExistingCredential() async -> String? {
@@ -51,24 +119,19 @@ extension AppleSignInService: ASAuthorizationControllerDelegate {
         controller: ASAuthorizationController,
         didCompleteWithAuthorization authorization: ASAuthorization
     ) {
-        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-            MainActor.assumeIsolated {
+        MainActor.assumeIsolated {
+            guard let rawNonce = pendingRawNonce else {
                 continuation?.resume(throwing: AppleSignInError.invalidCredential)
                 continuation = nil
+                return
             }
-            return
-        }
-
-        KeychainAppleID.save(credential.user)
-
-        let result = AppleCredential(
-            userID: credential.user,
-            fullName: credential.fullName,
-            email: credential.email
-        )
-
-        MainActor.assumeIsolated {
-            continuation?.resume(returning: result)
+            pendingRawNonce = nil
+            do {
+                let result = try Self.makeCredential(from: authorization, rawNonce: rawNonce)
+                continuation?.resume(returning: result)
+            } catch {
+                continuation?.resume(throwing: error)
+            }
             continuation = nil
         }
     }

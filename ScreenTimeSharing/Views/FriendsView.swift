@@ -72,7 +72,7 @@ struct FriendsView: View {
                 model.setLeaderboardWindow(newWindow)
             }
             .sheet(isPresented: $isShowingShareSheet) {
-                CloudShareSheet(store: model.snapshotStore, profile: model.profile)
+                InviteFriendsSheet()
             }
         }
     }

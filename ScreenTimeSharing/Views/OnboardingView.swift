@@ -707,6 +707,7 @@ private struct ProfileSetupPage: View {
 // MARK: - Apple Sign In + Profile
 
 private struct AppleSignInProfilePage: View {
+    @EnvironmentObject private var model: AppModel
     @Binding var displayName: String
     let avatarImageData: Data?
     let avatarColorHex: String
@@ -719,6 +720,9 @@ private struct AppleSignInProfilePage: View {
 
     @FocusState private var isNameFocused: Bool
     @State private var entered = false
+    #if DEBUG && targetEnvironment(simulator)
+    @State private var debugSignInError: String?
+    #endif
 
     private var trimmedDisplayName: String {
         displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -800,6 +804,27 @@ private struct AppleSignInProfilePage: View {
                     .foregroundStyle(.orange)
                     .multilineTextAlignment(.center)
             }
+
+            #if DEBUG && targetEnvironment(simulator)
+            Button("Debug: Simulator Sign-In") {
+                debugSignInError = nil
+                Task {
+                    let success = await model.signInWithDebugAccount()
+                    if !success {
+                        debugSignInError = model.message
+                    }
+                }
+            }
+            .font(.footnote)
+            .disabled(isSigningIn)
+
+            if let debugSignInError {
+                Text(debugSignInError)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
+            #endif
         }
         .opacity(entered ? 1 : 0)
         .offset(y: entered ? 0 : 14)

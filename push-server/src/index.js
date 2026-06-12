@@ -80,6 +80,9 @@ async function handleNotify(request, env) {
       sound: "default",
       category: "friend-time-request",
       "interruption-level": "time-sensitive",
+      // Wake the app so it refetches friends/requests immediately instead of
+      // waiting for the next foreground poll.
+      "content-available": 1,
     },
   };
   if (body.requestID) {

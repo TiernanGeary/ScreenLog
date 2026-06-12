@@ -1,4 +1,3 @@
-import CloudKit
 import FamilyControls
 import Foundation
 import SwiftUI
@@ -160,73 +159,6 @@ private struct UsageHistorySignature: Equatable {
 }
 
 @MainActor
-final class IncomingFriendShareInvite: Identifiable {
-    let id: String
-    let metadata: CKShare.Metadata
-    let displayName: String
-    let avatarImageData: Data?
-
-    init(metadata: CKShare.Metadata) {
-        self.metadata = metadata
-        self.id = [
-            metadata.share.recordID.zoneID.ownerName,
-            metadata.share.recordID.zoneID.zoneName,
-            metadata.share.recordID.recordName
-        ].joined(separator: ":")
-        self.displayName = Self.resolvedDisplayName(from: metadata)
-        self.avatarImageData = Self.thumbnailImageData(from: metadata)
-    }
-
-    private static func resolvedDisplayName(from metadata: CKShare.Metadata) -> String {
-        if let title = metadata.share[CKShare.SystemFieldKey.title] as? String,
-           let name = nameFromShareTitle(title) {
-            return name
-        }
-
-        if let nameComponents = metadata.ownerIdentity.nameComponents {
-            let formattedName = PersonNameComponentsFormatter.localizedString(
-                from: nameComponents,
-                style: .medium,
-                options: []
-            )
-            let trimmedName = formattedName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedName.isEmpty {
-                return trimmedName
-            }
-        }
-
-        return "Friend"
-    }
-
-    private static func nameFromShareTitle(_ title: String) -> String? {
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let suffixes = ["'s Screen Time", "’s Screen Time"]
-
-        for suffix in suffixes where trimmedTitle.hasSuffix(suffix) {
-            let name = String(trimmedTitle.dropLast(suffix.count))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty, name.localizedCaseInsensitiveCompare("Me") != .orderedSame {
-                return name
-            }
-        }
-
-        return nil
-    }
-
-    private static func thumbnailImageData(from metadata: CKShare.Metadata) -> Data? {
-        if let data = metadata.share[CKShare.SystemFieldKey.thumbnailImageData] as? Data {
-            return data
-        }
-
-        if let data = metadata.share[CKShare.SystemFieldKey.thumbnailImageData] as? NSData {
-            return data as Data
-        }
-
-        return nil
-    }
-}
-
-@MainActor
 final class AppModel: ObservableObject {
     @Published var profile: UserProfile
     @Published var appearanceMode: AppAppearanceMode
@@ -238,7 +170,7 @@ final class AppModel: ObservableObject {
     @Published var friendSummaries: [FriendUsageSummary] = []
     @Published var leaderboardEntries: [LeaderboardEntry] = []
     @Published var leaderboardWindow: LeaderboardWindow = .week
-    @Published var cloudAvailability: CloudAvailability = .checking
+    @Published var cloudAvailability: BackendAvailability = .checking
     @Published var screenTimeAuthorization = "Not requested"
     @Published var screenTimeReportRefreshID = UUID()
     @Published var screenTimeReportStatus = "Waiting for Screen Time setup."
@@ -249,11 +181,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var groupUnlockExpirations: [String: Date] = [:]
     @Published var pendingShieldFriendRequestGroupID: String?
     @Published var focusedFriendRequestLogID: String?
-    @Published var pendingFriendShareInvite: IncomingFriendShareInvite?
-    @Published var isAcceptingFriendShareInvite = false
+    @Published var pendingIncomingInvite: IncomingInvite?
+    @Published var isRedeemingInvite = false
     @Published var isAuthenticated: Bool
 
-    let snapshotStore: CloudKitUsageSnapshotStore
+    let snapshotStore: SupabaseSnapshotStore
     let subscriptionService: SubscriptionService
     let denyStartedAt: Date
 
@@ -273,7 +205,6 @@ final class AppModel: ObservableObject {
     private static let denyStartedAtKey = "DenyStartedAt.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
     private var isSyncingFriendRequests = false
-    private var hasLoadedFriendsOnce = false
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
@@ -282,7 +213,7 @@ final class AppModel: ObservableObject {
         profileStore: LocalProfileStore = LocalProfileStore(),
         selectionStore: FamilyActivitySelectionStore = FamilyActivitySelectionStore(),
         screenTimeProvider: ScreenTimeProvider = DeviceActivityScreenTimeProvider(),
-        snapshotStore: CloudKitUsageSnapshotStore = CloudKitUsageSnapshotStore(),
+        snapshotStore: SupabaseSnapshotStore = SupabaseSnapshotStore(),
         widgetCacheWriter: AppGroupWidgetCacheWriter = AppGroupWidgetCacheWriter(),
         blockingStore: BlockingStateStore = BlockingStateStore(),
         blockingEnforcementService: BlockingEnforcementService = BlockingEnforcementService(),
@@ -386,8 +317,6 @@ final class AppModel: ObservableObject {
         await subscriptionService.checkEntitlements()
         await subscriptionService.loadProducts()
         cloudAvailability = await snapshotStore.cloudAvailability()
-        await snapshotStore.ensureSubscriptions()
-        await migrateLegacyFriendRequestRecords()
         await publishProfileUpdateToCloud()
         await reloadFriends()
         await syncFriendRequests()
@@ -403,12 +332,16 @@ final class AppModel: ObservableObject {
 
     func signInWithApple() async throws -> AppleCredential {
         let credential = try await appleSignInService.signIn()
+        // The Supabase auth user UUID (stable for this Apple ID) becomes the
+        // canonical profile ID, so reinstalls and new devices land on the same
+        // identity without any local mapping.
+        let userID = try await snapshotStore.signIn(with: credential)
 
-        if let existingProfile = try? await snapshotStore.fetchExistingProfile(id: credential.userID) {
-            profileStore.restoreProfile(existingProfile, appleUserID: credential.userID)
-            profile = existingProfile
+        if let serverProfile = try? await snapshotStore.fetchOwnProfile(),
+           !serverProfile.displayName.isEmpty {
+            profile = serverProfile
         } else {
-            profile = profileStore.load(appleUserID: credential.userID)
+            profile.id = userID
             if let fullName = credential.fullName {
                 let name = PersonNameComponentsFormatter.localizedString(
                     from: fullName,
@@ -417,40 +350,106 @@ final class AppModel: ObservableObject {
                 ).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !name.isEmpty, name != "Me" {
                     profile.displayName = name
-                    profile.updatedAt = Date()
-                    profileStore.save(profile)
                 }
             }
+            profile.updatedAt = Date()
         }
 
+        profile.appleUserID = credential.userID
+        profileStore.save(profile)
+        adoptProfileID()
         isAuthenticated = true
-        // Persist the Apple identifier to CloudKit so this profile can be
-        // recovered by `fetchExistingProfile(id:)` on reinstall or a new device.
         await publishProfileUpdateToCloud()
         return credential
     }
 
     func checkExistingSession() async {
-        guard let appleUserID = await appleSignInService.checkExistingCredential() else {
+        guard let userID = await snapshotStore.restoreSession() else {
             isAuthenticated = false
             return
         }
 
-        if let existingProfile = try? await snapshotStore.fetchExistingProfile(id: appleUserID) {
-            profileStore.restoreProfile(existingProfile, appleUserID: appleUserID)
-            profile = existingProfile
-        } else {
-            profile = profileStore.load(appleUserID: appleUserID)
+        if let serverProfile = try? await snapshotStore.fetchOwnProfile(),
+           !serverProfile.displayName.isEmpty {
+            profile = serverProfile
+        } else if profile.id != userID {
+            profile.id = userID
+            profile.updatedAt = Date()
         }
 
+        profileStore.save(profile)
+        adoptProfileID()
         isAuthenticated = true
-        // Backfill the Apple identifier on the cloud profile for sessions created
-        // before recovery existed, so the field is queryable on next reinstall.
-        if profile.appleUserID == nil {
-            profile.appleUserID = appleUserID
-            profileStore.save(profile)
-        }
         await publishProfileUpdateToCloud()
+    }
+
+    func signOut() async {
+        await snapshotStore.signOut()
+        isAuthenticated = false
+        message = "Signed out."
+    }
+
+    #if DEBUG
+    private static let debugAuthIndexKey = "DebugAuthIndex.v1"
+
+    /// Simulator/testing backdoor: signs in to a pre-provisioned Supabase
+    /// account so two simulators can connect as friends. The account index is
+    /// derived from the simulator's device name (stable, and distinct across
+    /// different simulator models) and persisted for relaunches.
+    @discardableResult
+    func signInWithDebugAccount() async -> Bool {
+        let index: Int
+        if let stored = UserDefaults.standard.object(forKey: Self.debugAuthIndexKey) as? Int {
+            index = stored
+        } else {
+            index = Self.stableHash(UIDevice.current.name) % 10
+            UserDefaults.standard.set(index, forKey: Self.debugAuthIndexKey)
+        }
+
+        do {
+            let userID = try await snapshotStore.signInWithDebugAccount(index: index)
+            if let serverProfile = try? await snapshotStore.fetchOwnProfile(),
+               !serverProfile.displayName.isEmpty {
+                profile = serverProfile
+            } else {
+                profile.id = userID
+                if profile.displayName == "Me" {
+                    profile.displayName = "Sim \(index)"
+                }
+                profile.updatedAt = Date()
+            }
+            profileStore.save(profile)
+            adoptProfileID()
+            isAuthenticated = true
+            await publishProfileUpdateToCloud()
+            return true
+        } catch {
+            message = "Debug sign-in failed: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private static func stableHash(_ value: String) -> Int {
+        var hash = 5381
+        for byte in value.utf8 {
+            hash = ((hash << 5) &+ hash) &+ Int(byte)
+        }
+        return abs(hash)
+    }
+    #endif
+
+    /// Re-stamps the (possibly new) profile ID everywhere it lives outside this
+    /// model: the app-group storage the Screen Time extensions read, and the
+    /// push server registration (the APNs token usually arrives before sign-in,
+    /// registered under the pre-auth placeholder ID).
+    private func adoptProfileID() {
+        ScreenTimeReportStorage.saveProfileID(profile.id, defaults: usageHistoryDefaults)
+        if let apnsDeviceToken {
+            let profileID = profile.id
+            Task { [pushServerClient] in
+                await pushServerClient.register(profileID: profileID, deviceToken: apnsDeviceToken)
+            }
+        }
     }
 
     #if DEBUG
@@ -874,14 +873,20 @@ final class AppModel: ObservableObject {
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
         let senderName = profile.displayName == "Me" ? "A friend" : profile.displayName
-        sendPushNotification(
-            toProfileIDs: selectedFriendIDs,
-            title: "New time request",
-            body: "\(senderName) is asking you to approve extra time.",
-            requestID: request.id
-        )
+        let durationLabel = BlockingDisplayFormatter.durationLabel(request.requestedSeconds)
+        let pushBody = "\(senderName) is asking for \(durationLabel) in \(group.name). Tap to review."
         Task {
-            await publishFriendRequestToCloud(request, photoData: photoJPEGData)
+            // Only alert recipients once the request actually reached the
+            // backend — otherwise they get a push for a request they can't see.
+            let published = await publishFriendRequestToCloud(request, photoData: photoJPEGData)
+            if published {
+                sendPushNotification(
+                    toProfileIDs: selectedFriendIDs,
+                    title: "New time request",
+                    body: pushBody,
+                    requestID: request.id
+                )
+            }
         }
         return true
     }
@@ -1094,94 +1099,75 @@ final class AppModel: ObservableObject {
             await reloadFriends()
             await syncFriendRequests()
         } catch {
-            message = "CloudKit upload failed: \(error.localizedDescription)"
+            message = "Upload failed: \(error.localizedDescription)"
         }
     }
 
-    #if DEBUG
-    func bootstrapCloudKitDevelopmentSchema() async {
-        isWorking = true
-        defer { isWorking = false }
+    /// Mints a shareable invite code for the current user.
+    func createInvite() async throws -> CreatedInvite {
+        try await snapshotStore.createInvite()
+    }
 
-        cloudAvailability = await snapshotStore.cloudAvailability()
-        guard cloudAvailability.allowsCloudWrites else {
-            message = "\(cloudAvailability.label). Could not bootstrap schema."
+    /// Shows the accept sheet for an invite code arriving via deep link,
+    /// resolving the inviter's name when the code is valid.
+    func presentIncomingInvite(code: String) async {
+        if let invite = try? await snapshotStore.peekInvite(code: code) {
+            pendingIncomingInvite = invite
+        } else {
+            pendingIncomingInvite = IncomingInvite(
+                code: code,
+                inviterDisplayName: "Friend",
+                inviterAvatarColorHex: nil
+            )
+        }
+    }
+
+    func dismissIncomingInvite() {
+        pendingIncomingInvite = nil
+    }
+
+    func redeemPendingInvite() async {
+        guard let invite = pendingIncomingInvite else {
             return
         }
 
-        do {
-            try await snapshotStore.bootstrapDevelopmentSchema(profile: profile)
-            message = "CloudKit Development schema bootstrapped."
-        } catch {
-            message = "CloudKit schema bootstrap failed: \(error.localizedDescription)"
-        }
-    }
-    #endif
-
-    func presentFriendShareInvite(metadata: CKShare.Metadata) {
-        pendingFriendShareInvite = IncomingFriendShareInvite(metadata: metadata)
-    }
-
-    func presentFriendShareInvite(url: URL) async {
-        do {
-            let metadata = try await snapshotStore.shareMetadata(for: url)
-            presentFriendShareInvite(metadata: metadata)
-        } catch {
-            message = "Could not open friend invite: \(error.localizedDescription)"
-        }
-    }
-
-    func dismissFriendShareInvite() {
-        pendingFriendShareInvite = nil
-    }
-
-    func acceptFriendShareInvite(_ invite: IncomingFriendShareInvite) async {
-        isAcceptingFriendShareInvite = true
+        isRedeemingInvite = true
         defer {
-            isAcceptingFriendShareInvite = false
+            isRedeemingInvite = false
         }
 
-        let accepted = await acceptShare(metadata: invite.metadata)
-        if accepted, pendingFriendShareInvite?.id == invite.id {
-            pendingFriendShareInvite = nil
+        let redeemed = await redeemInvite(code: invite.code)
+        if redeemed, pendingIncomingInvite?.code == invite.code {
+            pendingIncomingInvite = nil
         }
     }
 
     @discardableResult
-    func acceptShare(metadata: CKShare.Metadata) async -> Bool {
+    func redeemInvite(code: String) async -> Bool {
         do {
-            let priorFriendIDs = Set(friendSummaries.map(\.id))
-            try await snapshotStore.acceptShare(metadata: metadata)
-            do {
-                try await snapshotStore.publishAcceptedShareMirrors(profile: profile, snapshot: localSnapshot)
-            } catch {
-                message = "Friend accepted. Your profile will sync back after iCloud is ready."
-            }
-            message = "Friend share accepted."
+            let redeemed = try await snapshotStore.redeemInvite(code: code)
+            message = "You're now connected with \(redeemed.inviterDisplayName)."
             await reloadFriends()
             await syncFriendRequests()
 
-            // Push to the inviter(s) we just connected with, so they're alerted
-            // their invite was accepted even if their app is closed.
-            let newFriends = friendSummaries.filter { !priorFriendIDs.contains($0.id) }
+            // Push to the inviter we just connected with, so they're alerted
+            // even if their app is closed.
             let inviterName = profile.displayName == "Me" ? "A friend" : profile.displayName
             sendPushNotification(
-                toProfileIDs: newFriends.map(\.id),
+                toProfileIDs: [redeemed.inviterProfileID],
                 title: "New friend",
-                body: "\(inviterName) accepted your invite. You're now connected on deny.",
+                body: "\(inviterName) added you as a friend on deny.",
                 requestID: nil
             )
             return true
         } catch {
-            message = "Could not accept share: \(error.localizedDescription)"
+            message = "Could not add friend: \(error.localizedDescription)"
             return false
         }
     }
 
     func reloadFriends() async {
         do {
-            let previousFriendIDs = Set(friendSummaries.map(\.id))
-            let hadLoadedFriends = hasLoadedFriendsOnce
             let friends = try await snapshotStore.fetchFriendSummaries(for: profile)
             friendSummaries = friends
             leaderboardEntries = []
@@ -1191,18 +1177,6 @@ final class AppModel: ObservableObject {
                 leaderboardEntries: leaderboardEntries,
                 currentUserID: profile.id
             )
-
-            // Notify on genuinely new friends. Skip the very first load of a
-            // session so we don't re-announce the whole existing friend list.
-            if hadLoadedFriends {
-                for friend in friends where !previousFriendIDs.contains(friend.id) {
-                    friendRequestNotificationService.scheduleFriendAddedNotification(
-                        friendID: friend.id,
-                        friendName: friend.displayName
-                    )
-                }
-            }
-            hasLoadedFriendsOnce = true
         } catch {
             message = "Could not refresh friends: \(error.localizedDescription)"
         }
@@ -1258,10 +1232,6 @@ final class AppModel: ObservableObject {
 
         do {
             let knownRequestIDs = Set(blockingState.friendRequests.map(\.id))
-            let previousStatusByID = Dictionary(
-                blockingState.friendRequests.map { ($0.id, $0.status) },
-                uniquingKeysWith: { current, _ in current }
-            )
             let cloudRequests = try await snapshotStore.fetchFriendRequests(
                 knownRequestIDs: knownRequestIDs
             ) { [friendRequestPhotoStore] id, data in
@@ -1273,36 +1243,19 @@ final class AppModel: ObservableObject {
             try persistBlockingState()
             refreshLocalAccountabilityStats()
             syncFriendRequestNotifications()
-            notifySentRequestStatusChanges(previousStatusByID: previousStatusByID)
             writeWidgetCacheSnapshot()
         } catch {
             message = "Could not sync friend requests: \(error.localizedDescription)"
         }
     }
 
-    /// Fires a local notification on the requester's device when one of their
-    /// sent requests transitions into approved/denied after a cloud sync.
-    private func notifySentRequestStatusChanges(previousStatusByID: [String: BlockRequestStatus]) {
-        for request in blockingState.friendRequests {
-            guard request.isSent(byAny: currentFriendIdentityIDs),
-                  request.status == .approved || request.status == .denied,
-                  previousStatusByID[request.id] != request.status else {
-                continue
-            }
-
-            friendRequestNotificationService.scheduleStatusUpdateNotification(
-                for: request,
-                groupName: groupName(forNotification: request.groupID)
-            )
-        }
-    }
-
-    private func publishFriendRequestToCloud(_ request: BlockFriendRequest, photoData: Data?) async {
+    @discardableResult
+    private func publishFriendRequestToCloud(_ request: BlockFriendRequest, photoData: Data?) async -> Bool {
         let availability = await snapshotStore.cloudAvailability()
         cloudAvailability = availability
         guard availability.allowsCloudWrites else {
             message = "\(availability.label). Friend request saved only on this device."
-            return
+            return false
         }
 
         do {
@@ -1311,10 +1264,13 @@ final class AppModel: ObservableObject {
                 func shorten(_ ids: [String]) -> String {
                     ids.isEmpty ? "none" : ids.map { String($0.prefix(6)) }.joined(separator: ",")
                 }
-                message = "Couldn't deliver. target=[\(shorten(report.targetFriendIDs))] ownedChannels=[\(shorten(report.ownedChannelFriendIDs))] acceptedShares(\(report.sharedZoneCount))=[\(shorten(report.acceptedShareOwnerIDs))]"
+                message = "Couldn't deliver to [\(shorten(report.targetFriendIDs))]. Make sure you're still connected as friends."
+                return false
             }
+            return true
         } catch {
             message = "Friend request saved locally. Cloud sync failed: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -1343,22 +1299,6 @@ final class AppModel: ObservableObject {
             try await snapshotStore.publishProfile(profile)
         } catch {
             message = "Profile saved locally. Cloud sync failed: \(error.localizedDescription)"
-        }
-    }
-
-    private static let legacyMigrationKey = "DidMigrateLegacyFriendRequests.v1"
-
-    private func migrateLegacyFriendRequestRecords() async {
-        guard !UserDefaults.standard.bool(forKey: Self.legacyMigrationKey),
-              cloudAvailability.allowsCloudWrites else {
-            return
-        }
-
-        do {
-            try await snapshotStore.migrateLegacyFriendRequests(profile: profile)
-            UserDefaults.standard.set(true, forKey: Self.legacyMigrationKey)
-        } catch {
-            // Non-fatal — will retry next launch
         }
     }
 
@@ -1739,20 +1679,17 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Clears delivered request notifications once a request resolves. New
+    /// requests and status changes are announced by the push server alone —
+    /// local duplicates were removed when alert pushes became guaranteed.
     private func syncFriendRequestNotifications() {
         for request in blockingState.friendRequests {
-            guard request.isReceived(byAny: currentFriendIdentityIDs) else {
+            guard request.isReceived(byAny: currentFriendIdentityIDs),
+                  request.status != .pending else {
                 continue
             }
 
-            if request.status == .pending {
-                friendRequestNotificationService.scheduleNotification(
-                    for: request,
-                    groupName: groupName(forNotification: request.groupID)
-                )
-            } else {
-                friendRequestNotificationService.clearNotification(for: request.id)
-            }
+            friendRequestNotificationService.clearNotification(for: request.id)
         }
     }
 
@@ -1769,6 +1706,20 @@ final class AppModel: ObservableObject {
     func seedDemoScreenTime() {
         seedDemoUsageHistory()
         message = "Demo Screen Time added for debug testing."
+    }
+
+    /// Simulator-only: creates an enabled block group with friend requests on,
+    /// since FamilyActivityPicker has no apps to select in the simulator.
+    func seedDemoBlockGroup() {
+        guard let groupID = ensureDemoRequestGroup(now: Date()) else {
+            message = "Could not create the demo block group."
+            return
+        }
+
+        try? persistBlockingState()
+        syncBlockingEnforcement()
+        let name = blockingState.groups.first { $0.id == groupID }?.name ?? "Social"
+        message = "Demo block group \"\(name)\" ready — friend time requests enabled."
     }
 
     private func seedDemoUsageHistory(now: Date = Date()) {

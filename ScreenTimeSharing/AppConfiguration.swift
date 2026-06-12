@@ -2,7 +2,16 @@ import Foundation
 
 enum AppConfiguration {
     static let appGroupIdentifier = ScreenTimeReportStorage.appGroupSuiteName
-    static let cloudKitContainerIdentifier = "iCloud.com.jdco.ScreenTimeSharing"
+
+    /// Supabase backend (Postgres + Auth + Storage). The anon key is a
+    /// publishable client key; row-level security enforces all access.
+    static let supabaseURL = "https://zuamlaehyzzyqapvunkd.supabase.co"
+    static let supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1YW1sYWVoeXp6eXFhcHZ1bmtkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExOTY0NzIsImV4cCI6MjA5Njc3MjQ3Mn0.sYqTVF-5ikXd4J5j42nWhNO2a0lyNU68V8KtIruOvno"
+
+    static var isSupabaseConfigured: Bool {
+        !supabaseURL.contains("REPLACE_WITH") && !supabaseAnonKey.contains("REPLACE_WITH")
+    }
+
     static let defaultAvatarColor = "#1B998B"
     static let avatarFallbackColors = ["#1B998B", "#2E86AB", "#E84855", "#6A4C93", "#F18F01", "#2F4858"]
 

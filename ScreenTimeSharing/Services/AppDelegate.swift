@@ -1,4 +1,3 @@
-import CloudKit
 import UIKit
 import UserNotifications
 
@@ -28,34 +27,6 @@ final class RemoteChangeCenter {
     }
 }
 
-@MainActor
-final class CloudKitShareAcceptanceCenter {
-    static let shared = CloudKitShareAcceptanceCenter()
-
-    var handler: ((CKShare.Metadata) -> Void)? {
-        didSet {
-            flush()
-        }
-    }
-
-    private var pendingMetadata: [CKShare.Metadata] = []
-
-    func receive(_ metadata: CKShare.Metadata) {
-        pendingMetadata.append(metadata)
-        flush()
-    }
-
-    private func flush() {
-        guard let handler else {
-            return
-        }
-
-        let pending = pendingMetadata
-        pendingMetadata.removeAll()
-        pending.forEach(handler)
-    }
-}
-
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
@@ -77,8 +48,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
-        // CloudKit manages its own token; we also forward it to the push server
-        // so it can send alert pushes that arrive even when the app is force-quit.
+        // Forward the token to the push server so it can send alert pushes that
+        // arrive even when the app is force-quit.
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
         Task { @MainActor in
             RemoteChangeCenter.shared.receiveDeviceToken(token)
@@ -97,25 +68,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        guard CKNotification(fromRemoteNotificationDictionary: userInfo) != nil else {
-            completionHandler(.noData)
-            return
-        }
-
         Task { @MainActor in
             await RemoteChangeCenter.shared.handleRemoteChange()
             completionHandler(.newData)
         }
-    }
-
-    func application(
-        _ application: UIApplication,
-        configurationForConnecting connectingSceneSession: UISceneSession,
-        options: UIScene.ConnectionOptions
-    ) -> UISceneConfiguration {
-        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
-        configuration.delegateClass = ShareAcceptingSceneDelegate.self
-        return configuration
     }
 }
 
@@ -217,22 +173,3 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     }
 }
 
-@MainActor
-final class ShareAcceptingSceneDelegate: NSObject, UIWindowSceneDelegate {
-    func scene(
-        _ scene: UIScene,
-        willConnectTo session: UISceneSession,
-        options connectionOptions: UIScene.ConnectionOptions
-    ) {
-        if let metadata = connectionOptions.cloudKitShareMetadata {
-            CloudKitShareAcceptanceCenter.shared.receive(metadata)
-        }
-    }
-
-    func windowScene(
-        _ windowScene: UIWindowScene,
-        userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
-    ) {
-        CloudKitShareAcceptanceCenter.shared.receive(cloudKitShareMetadata)
-    }
-}

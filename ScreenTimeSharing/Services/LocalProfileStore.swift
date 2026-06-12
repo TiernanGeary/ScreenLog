@@ -1,11 +1,14 @@
 import Foundation
 import Security
 
+/// Local cache of the user's profile. The canonical identity is the Supabase
+/// auth user UUID (derived from Sign in with Apple), so this store no longer
+/// manages identity recovery — it only persists the last known profile for
+/// instant launch and offline display.
 final class LocalProfileStore {
     private let defaults: UserDefaults
     private let key = "LocalUserProfile.v1"
     private let randomFallbackColorKey = "LocalUserProfile.RandomFallbackColor.v1"
-    private static let mappingKeychainService = "com.jdco.deny.apple-profile-mapping"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -35,74 +38,6 @@ final class LocalProfileStore {
         return profile
     }
 
-    func load(appleUserID: String) -> UserProfile {
-        if let existingProfileID = profileID(forAppleUserID: appleUserID),
-           let data = defaults.data(forKey: key),
-           var profile = try? JSONDecoder().decode(UserProfile.self, from: data),
-           profile.id == existingProfileID {
-            return stampingAppleUserID(appleUserID, on: &profile)
-        }
-
-        if let data = defaults.data(forKey: key),
-           var profile = try? JSONDecoder().decode(UserProfile.self, from: data) {
-            linkAppleUserID(appleUserID, toProfileID: profile.id)
-            return stampingAppleUserID(appleUserID, on: &profile)
-        }
-
-        // UserDefaults was wiped (e.g. app reinstall) but the Keychain mapping
-        // survives. Reuse the previously mapped profile ID instead of minting a
-        // new UUID — otherwise our identity drifts and friends' records (which
-        // reference the old ID) can no longer reach us.
-        let recoveredID = profileID(forAppleUserID: appleUserID) ?? UUID().uuidString
-        var profile = UserProfile(
-            id: recoveredID,
-            displayName: "Me",
-            avatarColorHex: AppConfiguration.randomAvatarColorHex(),
-            shareStatus: .notShared,
-            updatedAt: Date(),
-            appleUserID: appleUserID
-        )
-        save(profile)
-        linkAppleUserID(appleUserID, toProfileID: profile.id)
-        defaults.set(true, forKey: randomFallbackColorKey)
-        return profile
-    }
-
-    func restoreProfile(_ profile: UserProfile, appleUserID: String) {
-        var restored = profile
-        restored.appleUserID = appleUserID
-        save(restored)
-        linkAppleUserID(appleUserID, toProfileID: restored.id)
-        defaults.set(true, forKey: randomFallbackColorKey)
-    }
-
-    /// Ensures the locally stored profile carries the Apple identifier so it is
-    /// published to CloudKit and can be recovered on reinstall. Persists only
-    /// when the value was missing or changed.
-    private func stampingAppleUserID(_ appleUserID: String, on profile: inout UserProfile) -> UserProfile {
-        guard profile.appleUserID != appleUserID else {
-            return profile
-        }
-
-        profile.appleUserID = appleUserID
-        profile.updatedAt = Date()
-        save(profile)
-        return profile
-    }
-
-    func profileID(forAppleUserID appleUserID: String) -> String? {
-        loadMapping()[appleUserID]
-    }
-
-    func linkedAppleUserID() -> String? {
-        guard let data = defaults.data(forKey: key),
-              let profile = try? JSONDecoder().decode(UserProfile.self, from: data) else {
-            return nil
-        }
-
-        return loadMapping().first { $0.value == profile.id }?.key
-    }
-
     func save(_ profile: UserProfile) {
         guard let data = try? JSONEncoder().encode(profile) else {
             return
@@ -111,70 +46,10 @@ final class LocalProfileStore {
     }
 
     /// Debug-only: wipes all local identity state for a clean slate — the stored
-    /// profile, the random-color flag, and the Apple-ID -> profileID keychain
-    /// mapping. Also clears the Apple sign-in credential so onboarding restarts.
+    /// profile and the Apple sign-in credential, so onboarding restarts.
     func clearAll() {
         defaults.removeObject(forKey: key)
         defaults.removeObject(forKey: randomFallbackColorKey)
-
-        let mappingQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.mappingKeychainService,
-            kSecAttrAccount as String: "mapping"
-        ]
-        SecItemDelete(mappingQuery as CFDictionary)
-
         KeychainAppleID.delete()
-    }
-
-    private func linkAppleUserID(_ appleUserID: String, toProfileID profileID: String) {
-        var mapping = loadMapping()
-        mapping[appleUserID] = profileID
-        saveMapping(mapping)
-    }
-
-    private func loadMapping() -> [String: String] {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.mappingKeychainService,
-            kSecAttrAccount as String: "mapping",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let mapping = try? JSONDecoder().decode([String: String].self, from: data) else {
-            return [:]
-        }
-
-        return mapping
-    }
-
-    private func saveMapping(_ mapping: [String: String]) {
-        guard let data = try? JSONEncoder().encode(mapping) else {
-            return
-        }
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.mappingKeychainService,
-            kSecAttrAccount as String: "mapping"
-        ]
-
-        let updateAttributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-
-        let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
-        if updateStatus == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-            SecItemAdd(addQuery as CFDictionary, nil)
-        }
     }
 }

@@ -80,19 +80,7 @@ struct SettingsView: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.tint)
                         AppCardDivider()
-                        Button {
-                            AppHaptics.buttonTap()
-                            Task {
-                                await model.bootstrapCloudKitDevelopmentSchema()
-                            }
-                        } label: {
-                            Label("Bootstrap CloudKit Schema", systemImage: "icloud.and.arrow.up")
-                                .appCardRow()
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-                        AppCardDivider()
-                        LabeledContent("iCloud", value: model.cloudAvailability.label)
+                        LabeledContent("Sync", value: model.cloudAvailability.label)
                             .appCardRow()
                     }
                 }
@@ -132,6 +120,16 @@ struct SettingsView: View {
 
                         Button {
                             AppHaptics.buttonTap()
+                            model.seedDemoBlockGroup()
+                        } label: {
+                            Label("Add Demo Block Group", systemImage: "lock.app.dashed")
+                                .appCardRow()
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+
+                        Button {
+                            AppHaptics.buttonTap()
                             model.resetOnboarding()
                         } label: {
                             Label("Replay Onboarding", systemImage: "arrow.counterclockwise")
@@ -147,7 +145,7 @@ struct SettingsView: View {
             }
             .navigationTitle("Profile")
             .sheet(isPresented: $isShowingShareSheet) {
-                CloudShareSheet(store: model.snapshotStore, profile: model.profile)
+                InviteFriendsSheet()
             }
             .sheet(isPresented: $isEditingDisplayName) {
                 EditDisplayNameSheet(displayName: $draftDisplayName) { newDisplayName in

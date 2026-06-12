@@ -1,4 +1,3 @@
-import CloudKit
 import SwiftUI
 import UIKit
 
@@ -14,9 +13,6 @@ struct ScreenTimeSharingApp: App {
                 .environmentObject(model)
                 .preferredColorScheme(model.appearanceMode.colorScheme)
                 .onAppear {
-                    CloudKitShareAcceptanceCenter.shared.handler = { metadata in
-                        model.presentFriendShareInvite(metadata: metadata)
-                    }
                     FriendRequestNotificationCenter.shared.handler = { requestID in
                         model.openFriendRequestLog(requestID: requestID)
                     }
@@ -31,12 +27,12 @@ struct ScreenTimeSharingApp: App {
                     }
                 }
                 .onOpenURL { url in
-                    guard url.host()?.localizedCaseInsensitiveContains("icloud.com") == true else {
+                    guard let code = InviteDeepLink.code(from: url) else {
                         return
                     }
 
                     Task {
-                        await model.presentFriendShareInvite(url: url)
+                        await model.presentIncomingInvite(code: code)
                     }
                 }
                 .task {
@@ -52,6 +48,7 @@ struct ScreenTimeSharingApp: App {
                     }
 
                     while !Task.isCancelled {
+                        await model.reloadFriends()
                         await model.syncFriendRequests()
                         try? await Task.sleep(for: .seconds(15))
                     }
@@ -65,6 +62,7 @@ struct ScreenTimeSharingApp: App {
                     model.requestScreenTimeReportRefresh()
                     model.refreshPendingShieldFriendRequest()
                     Task {
+                        await model.reloadFriends()
                         await model.syncFriendRequests()
                     }
                 }

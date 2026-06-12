@@ -2088,6 +2088,9 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
     private let unavailableView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let unavailableTitleLabel = UILabel()
     private let unavailableDetailLabel = UILabel()
+    #if targetEnvironment(simulator)
+    private let demoPhotoButton = UIButton(type: .system)
+    #endif
     private let focusRingView = UIView()
 
     init(
@@ -2207,6 +2210,17 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         unavailableDetailLabel.numberOfLines = 3
         unavailableView.contentView.addSubview(unavailableDetailLabel)
 
+        #if targetEnvironment(simulator)
+        demoPhotoButton.translatesAutoresizingMaskIntoConstraints = false
+        demoPhotoButton.setTitle("Use Demo Photo", for: .normal)
+        demoPhotoButton.titleLabel?.font = .preferredFont(forTextStyle: .subheadline)
+        demoPhotoButton.setTitleColor(.white, for: .normal)
+        demoPhotoButton.backgroundColor = UIColor.white.withAlphaComponent(0.18)
+        demoPhotoButton.layer.cornerRadius = 12
+        demoPhotoButton.addTarget(self, action: #selector(captureDemoPhoto), for: .touchUpInside)
+        unavailableView.contentView.addSubview(demoPhotoButton)
+        #endif
+
         focusRingView.frame = CGRect(x: 0, y: 0, width: 78, height: 78)
         focusRingView.layer.borderColor = UIColor.white.cgColor
         focusRingView.layer.borderWidth = 1.5
@@ -2271,10 +2285,39 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
 
             unavailableDetailLabel.topAnchor.constraint(equalTo: unavailableTitleLabel.bottomAnchor, constant: 8),
             unavailableDetailLabel.leadingAnchor.constraint(equalTo: unavailableView.contentView.leadingAnchor, constant: 20),
-            unavailableDetailLabel.trailingAnchor.constraint(equalTo: unavailableView.contentView.trailingAnchor, constant: -20),
+            unavailableDetailLabel.trailingAnchor.constraint(equalTo: unavailableView.contentView.trailingAnchor, constant: -20)
+        ])
+
+        #if targetEnvironment(simulator)
+        NSLayoutConstraint.activate([
+            demoPhotoButton.topAnchor.constraint(equalTo: unavailableDetailLabel.bottomAnchor, constant: 16),
+            demoPhotoButton.leadingAnchor.constraint(equalTo: unavailableView.contentView.leadingAnchor, constant: 20),
+            demoPhotoButton.trailingAnchor.constraint(equalTo: unavailableView.contentView.trailingAnchor, constant: -20),
+            demoPhotoButton.heightAnchor.constraint(equalToConstant: 44),
+            demoPhotoButton.bottomAnchor.constraint(equalTo: unavailableView.contentView.bottomAnchor, constant: -22)
+        ])
+        #else
+        NSLayoutConstraint.activate([
             unavailableDetailLabel.bottomAnchor.constraint(equalTo: unavailableView.contentView.bottomAnchor, constant: -22)
         ])
+        #endif
     }
+
+    #if targetEnvironment(simulator)
+    /// Simulator bypass: there is no camera device, so supply a generated
+    /// placeholder photo and complete the capture flow as if it was taken.
+    @objc private func captureDemoPhoto() {
+        guard let data = FriendRequestDemoPhotoFactory.jpegData(
+            name: "Sim",
+            background: (UIColor.systemIndigo, UIColor.systemTeal),
+            shirt: UIColor.systemPink,
+            expressionOffset: 0.2
+        ), let image = UIImage(data: data) else {
+            return
+        }
+        onCapture(image)
+    }
+    #endif
 
     private func applyInterfaceColors() {
         let topBackgroundColor: UIColor = colorScheme == .dark ? .black : .systemBackground
