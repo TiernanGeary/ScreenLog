@@ -1529,7 +1529,7 @@ struct FriendApprovalRequestView: View {
                 }
 
                 ToolbarItemGroup(placement: .keyboard) {
-                    if requestStep == .details && isMessageFocused {
+                    if requestStep == .review && isMessageFocused {
                         Spacer()
 
                         Button("Done") {
@@ -1625,7 +1625,21 @@ struct FriendApprovalRequestView: View {
                     .appCardRow(verticalPadding: 24)
                 }
             }
+
+            AppSection("Message") {
+                AppCard {
+                    TextField("Optional message", text: $message, axis: .vertical)
+                        .lineLimit(2...4)
+                        .focused($isMessageFocused)
+                        .submitLabel(.done)
+                        .onSubmit {
+                            isMessageFocused = false
+                        }
+                        .appCardRow()
+                }
+            }
         }
+        .scrollDismissesKeyboard(.interactively)
     }
 
     private var detailsStep: some View {
@@ -1667,18 +1681,13 @@ struct FriendApprovalRequestView: View {
                         .appCardRow()
                     }
                     .buttonStyle(.plain)
-
-                    AppCardDivider()
-
-                    TextField("Optional message", text: $message, axis: .vertical)
-                        .lineLimit(2...4)
-                        .focused($isMessageFocused)
-                        .submitLabel(.done)
-                        .onSubmit {
-                            isMessageFocused = false
-                        }
-                        .appCardRow()
                 }
+
+                Text("Shorter requests (5–15 min) tend to get approved faster.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
             }
 
             AppSection("Friends") {
@@ -1724,6 +1733,13 @@ struct FriendApprovalRequestView: View {
                                 .appCardRow()
                             }
                             .buttonStyle(.plain)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(friend.name)
+                            .accessibilityValue(selectedFriendIDs.contains(friend.id) ? "Selected" : "Not selected")
+                            .accessibilityHint("Double tap to toggle selection.")
+                            .accessibilityAddTraits(
+                                selectedFriendIDs.contains(friend.id) ? [.isButton, .isSelected] : .isButton
+                            )
                         }
                     }
                 }
@@ -1847,6 +1863,12 @@ struct FriendApprovalRequestView: View {
             .buttonStyle(.plain)
             .foregroundStyle(canSendRequest ? Color.white : Color.secondary)
             .disabled(!canSendRequest)
+            .accessibilityLabel("Send time request")
+            .accessibilityHint(
+                canSendRequest
+                    ? "Sends your photo request to the selected friends."
+                    : "Take a photo and choose at least one friend to enable sending."
+            )
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
