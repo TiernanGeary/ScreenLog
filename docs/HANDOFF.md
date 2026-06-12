@@ -37,7 +37,8 @@
 product/accountability-locks
   └ feature/phase0-request-button-ux      … Phase 0（完了）
       └ feature/phase1-time-request-and-shield   … Phase 1（完了・origin へ push 済み）
-          └ feature/phase2-perf-and-onboarding   … Phase 2（進行中・★現在のブランチ）
+          └ feature/phase2-perf-and-onboarding   … Phase 2（完了・push 済み）
+              └ feature/phase3-friends-and-invites   … Phase 3（完了・push 済み・★現在のブランチ）
 ```
 
 各 PR のベースは未確定（ユーザーが保留）。**PR を作る前にユーザーにベースを確認**すること（phase0/phase1 を順に積むか、accountability-locks へ直接か）。
@@ -78,24 +79,40 @@ Home の申請ボタンを `Ask Friends` 主役化、Feed を受信専用化。`
 
 **見送り（計画に理由付き記録済み）**: C-4-3 アプリ選択統合（L・実機検証必須）/ C-4-4 完了後ガイド / C-4-7 Quick Start カード。
 
-### ⬜ Phase 3（未着手・★次はここ）
-#4 フレンド一覧統合、#1 招待リンク状態表示/再送（spec §E, §F、§5.1 確定方針あり）。
+### ✅ Phase 3 — 完了（origin へ push 済み）
+ブランチ `feature/phase3-friends-and-invites`（Phase 2 の上に積んだスタック）。
+
+#### ✅ Phase 3a = #4 統合フレンドリスト＋鮮度（完了）
+計画: **`docs/plans/2026-06-13-phase3a-friends-board.md`**。確定方針どおりランキングは「申請時間順」維持（`StatsBoardBuilder` 不変更）。
+
+- ✅ T1（Core, TDD）: `FriendFreshness`（緑<5分/黄5-60分/橙>1時間/missing）＋ `FriendBoardBuilder.activityRows`（使用時間降順・データ無しは末尾・名前で安定）＋テスト2件（`a62198a`）。**`swift test` 68件 PASS**。
+- ✅ T2: `AppModel` に `friendsLastSyncedAt`/`isSyncingFriends`、`reloadFriends()` で更新（`e4c3cc5`）。
+- ✅ T3: `FriendsView` を単一「Friends」セクション＋ Activity/Leaderboard モード切替（`@AppStorage` 永続）＋全行に色分き「Updated Xm ago」＋同期ヘッダ（Sync Now）に再構成（`4690c33`）。
+- 見送り（計画に理由付き）: フレンド詳細View（L）/ unfriend・mute・block（ゾーン削除は実機検証必須）/ CloudKit サーバ側フィルタ。
+
+#### ✅ Phase 3b = #1 招待リンク状態・再送・取消（完了）
+計画: **`docs/plans/2026-06-13-phase3b-invite-status.md`**。確定方針どおりサーバ側ディレクトリ新設なし（既存チャネル構造の読取＋削除のみ）。
+
+- ✅ T1: `CloudKitUsageSnapshotStore` に `PendingFriendInvite` ＋ `fetchPendingInvites`（承認者ミラー無し＆非オーナー承認参加者無しのチャネル＝保留）＋ `cancelPendingInvite`（チャネルルート削除でリンク失効）（`2edcd69`）。
+- ✅ T2: `AppModel.pendingInvites` ＋ reload/cancel ラッパ（`a439ddc`）。
+- ✅ T3: Friends に「Pending Invites」セクション（ShareLink 再送/コピー/確認付き取消）。シート閉鎖・pull-to-refresh・初回表示でリロード（`4c8c7ec`）。
+- 見送り（計画に理由付き）: 受信済み招待一覧（CloudKit は未承認 share の受信箱をクエリ不可）/ QR 表示。
 
 ---
 
 ## 4. 次にやること（順番）
 
-1. **ユーザーに確認**: Phase 2 の Xcode ビルド＋シミュレータ確認のタイミング、PR 作成の要否とベースブランチ（phase0→phase1→phase2 を順に積むか、`product/accountability-locks` へ直接か）。
-2. **Phase 3（#4 / #1）**: spec §E・§F を読み、`FriendsView.swift` 等を実地調査してから `superpowers:writing-plans` 方針で計画作成 → Codex 小分け委譲 → Claude 検証/コミット。
+1. **ユーザーに確認**: Phase 2/3 の Xcode ビルド＋検証のタイミング、PR 作成の要否とベースブランチ（phase0→1→2→3 を順に積むか、`product/accountability-locks` へ直接か）。
+2. spec の主要7領域（#1〜#7）はこれで全フェーズ着手済み。残りは各計画の「見送り」項目（フレンド詳細View、unfriend、オンボーディングのアプリ選択統合、完了後ガイド等）と横断基盤（spec §3: 通知インボックス統合・準リアルタイム同期）。次のスコープはユーザーと相談して決める。
 
-**ユーザー側に残る検証（AI 環境では不可）**: 全 phase ブランチの Xcode ビルド、シミュレータ手動確認（特に Phase 2b の onboarding 7ページ遷移と権限フロー）、Phase 1 B1 の実機 Shield フロー確認。
+**ユーザー側に残る検証(AI 環境では不可)**: 全 phase ブランチの Xcode ビルド、シミュレータ手動確認（Phase 2b の onboarding 7ページ遷移と権限フロー、Phase 3a の Friends 統合表示）、**Phase 3b の実機 iCloud E2E（招待作成→保留表示→別端末で承認→保留から消滅→取消→リンク失効）**、Phase 1 B1 の実機 Shield フロー確認。
 
 ---
 
 ## 5. 参照ファイル
 
 - 要件分解（全領域）: `docs/specs/2026-06-05-improvement-breakdown.md`
-- 計画: `docs/plans/2026-06-05-phase0-request-button-ux.md` / `2026-06-11-phase1-time-request-and-shield.md` / `2026-06-12-phase2a-load-performance.md` / `2026-06-12-phase2b-onboarding.md`
+- 計画: `docs/plans/2026-06-05-phase0-request-button-ux.md` / `2026-06-11-phase1-time-request-and-shield.md` / `2026-06-12-phase2a-load-performance.md` / `2026-06-12-phase2b-onboarding.md` / `2026-06-13-phase3a-friends-board.md` / `2026-06-13-phase3b-invite-status.md`
 - 行動規範: `CLAUDE.md`（Claude 計画・Codex 実装、日本語でユーザー対応・コードは英語）
 - メモリ（プロジェクト記憶。セッション開始時に MEMORY.md が読み込まれる）: `codex-commits-blocked` / `phase1-verification-gap`
 
