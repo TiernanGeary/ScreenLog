@@ -36,6 +36,26 @@ struct FriendsView: View {
                         }
                     }
                 }
+
+                if !model.pendingInvites.isEmpty {
+                    AppSection("Pending Invites") {
+                        AppCard {
+                            ForEach(Array(model.pendingInvites.enumerated()), id: \.element.id) { index, invite in
+                                PendingInviteRow(invite: invite) {
+                                    Task { await model.cancelPendingInvite(invite) }
+                                }
+                                .appCardRow(verticalPadding: 8)
+
+                                if index < model.pendingInvites.count - 1 {
+                                    AppCardDivider()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .task {
+                await model.reloadPendingInvites()
             }
             .refreshable {
                 AppHaptics.selectionChanged()
@@ -59,7 +79,9 @@ struct FriendsView: View {
             .onChange(of: selectedLeaderboardWindow) { _, newWindow in
                 model.setLeaderboardWindow(newWindow)
             }
-            .sheet(isPresented: $isShowingShareSheet) {
+            .sheet(isPresented: $isShowingShareSheet, onDismiss: {
+                Task { await model.reloadPendingInvites() }
+            }) {
                 CloudShareSheet(store: model.snapshotStore, profile: model.profile)
             }
         }
@@ -117,6 +139,81 @@ struct FriendsView: View {
     private func refreshFriends() async {
         await model.reloadFriends()
         await model.syncFriendRequests()
+        await model.reloadPendingInvites()
+    }
+}
+
+private struct PendingInviteRow: View {
+    let invite: PendingFriendInvite
+    let onCancel: () -> Void
+
+    @State private var didCopyLink = false
+    @State private var isConfirmingCancel = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "link")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.blue)
+                .frame(width: 34, height: 34)
+                .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Invite link")
+                    .font(.subheadline.weight(.semibold))
+
+                Text(createdLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            if let url = invite.url {
+                ShareLink(item: url) {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Resend invite link")
+
+                Button {
+                    AppHaptics.buttonTap()
+                    UIPasteboard.general.url = url
+                    didCopyLink = true
+                } label: {
+                    Image(systemName: didCopyLink ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Copy invite link")
+            }
+
+            Button(role: .destructive) {
+                AppHaptics.buttonTap()
+                isConfirmingCancel = true
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Cancel invite")
+        }
+        .confirmationDialog(
+            "Cancel this invite? The link will stop working.",
+            isPresented: $isConfirmingCancel,
+            titleVisibility: .visible
+        ) {
+            Button("Cancel Invite", role: .destructive, action: onCancel)
+            Button("Keep", role: .cancel) {}
+        }
+    }
+
+    private var createdLabel: String {
+        guard let createdAt = invite.createdAt else {
+            return "Waiting for a friend to accept"
+        }
+        return "Created " + createdAt.formatted(.relative(presentation: .named))
     }
 }
 
