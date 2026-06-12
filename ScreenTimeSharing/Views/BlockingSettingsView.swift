@@ -803,9 +803,25 @@ private struct FriendRequestPhotoBookCard: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {
-                        AppUsageIcon(name: groupName)
-                            .scaleEffect(0.78)
-                            .frame(width: 34, height: 34)
+                        if let appNames = request.groupAppNames, !appNames.isEmpty {
+                            // The requester's top apps inside the group — a much
+                            // clearer picture of what's being unlocked than a
+                            // generated group thumbnail.
+                            HStack(spacing: -10) {
+                                ForEach(Array(appNames.prefix(3).enumerated()), id: \.offset) { index, appName in
+                                    AppUsageIcon(name: appName, size: 30)
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 30 * 0.24, style: .continuous)
+                                                .strokeBorder(.black.opacity(0.45), lineWidth: 1.5)
+                                        }
+                                        .zIndex(Double(3 - index))
+                                }
+                            }
+                        } else {
+                            AppUsageIcon(name: groupName)
+                                .scaleEffect(0.78)
+                                .frame(width: 34, height: 34)
+                        }
 
                         Text(groupName)
                             .font(.headline.weight(.semibold))

@@ -864,7 +864,8 @@ final class AppModel: ObservableObject {
             requesterID: profile.id,
             requesterDisplayName: profile.displayName == "Me" ? "You" : profile.displayName,
             createdAt: now,
-            photoReference: photoReference
+            photoReference: photoReference,
+            groupAppNames: topAppNames(in: group)
         )
 
         blockingState.friendRequests.insert(request, at: 0)
@@ -1727,6 +1728,99 @@ final class AppModel: ObservableObject {
 
     private func groupName(forNotification groupID: String) -> String {
         blockingState.groups.first { $0.id == groupID }?.name ?? "restricted app"
+    }
+
+    /// Resolves the requester's most-used apps inside a block group by matching
+    /// the group's app tokens against locally stored usage rows. Returns
+    /// display names only — tokens never leave this device.
+    private func topAppNames(in group: BlockGroup, limit: Int = 3) -> [String]? {
+        guard let selection = try? BlockingSelectionCodec.decode(group.selectionData) else {
+            return nil
+        }
+
+        let encoder = JSONEncoder()
+        let groupTokenData = Set(selection.applicationTokens.compactMap { try? encoder.encode($0) })
+
+        #if DEBUG && targetEnvironment(simulator)
+        // Simulator groups have no real app tokens; fall back to overall top
+        // apps from the (demo) usage history so the feature is testable.
+        let matchesGroup: (SharedAppUsage) -> Bool = { row in
+            groupTokenData.isEmpty
+                || row.applicationTokenData.map(groupTokenData.contains) == true
+        }
+        #else
+        guard !groupTokenData.isEmpty else {
+            return nil
+        }
+        let matchesGroup: (SharedAppUsage) -> Bool = { row in
+            row.applicationTokenData.map(groupTokenData.contains) == true
+        }
+        #endif
+
+        struct AppTotal {
+            var displayName: String
+            var bundleIdentifier: String?
+            var duration: TimeInterval = 0
+        }
+
+        var totalsByKey: [String: AppTotal] = [:]
+        for snapshot in usageHistory {
+            for row in snapshot.appRows where matchesGroup(row) {
+                let key = row.bundleIdentifier ?? row.displayName
+                var total = totalsByKey[key] ?? AppTotal(
+                    displayName: row.displayName,
+                    bundleIdentifier: row.bundleIdentifier
+                )
+                total.duration += max(0, row.duration)
+                totalsByKey[key] = total
+            }
+        }
+
+        guard !totalsByKey.isEmpty else {
+            return nil
+        }
+
+        // Reported screen time can be noisy, so well-known attention sinks
+        // outrank raw duration; within each tier, sort by measured usage.
+        return totalsByKey.values
+            .sorted { lhs, rhs in
+                let lhsKnown = Self.isKnownDistractor(name: lhs.displayName, bundleID: lhs.bundleIdentifier)
+                let rhsKnown = Self.isKnownDistractor(name: rhs.displayName, bundleID: rhs.bundleIdentifier)
+                if lhsKnown != rhsKnown {
+                    return lhsKnown
+                }
+                return lhs.duration > rhs.duration
+            }
+            .prefix(limit)
+            .map(\.displayName)
+    }
+
+    private static let distractorBundleIDs: Set<String> = [
+        "com.zhiliaoapp.musically",      // TikTok
+        "com.burbn.instagram",           // Instagram
+        "com.google.ios.youtube",        // YouTube
+        "com.toyopagroup.picaboo",       // Snapchat
+        "com.atebits.tweetie2",          // X / Twitter
+        "com.facebook.facebook",         // Facebook
+        "com.reddit.reddit",             // Reddit
+        "tv.twitch",                     // Twitch
+        "com.hammerandchisel.discord",   // Discord
+        "com.netflix.netflix"            // Netflix
+    ]
+
+    private static let distractorNames: Set<String> = [
+        "tiktok", "instagram", "youtube", "snapchat", "x", "twitter",
+        "facebook", "reddit", "twitch", "discord", "netflix", "threads",
+        "tumblr", "pinterest"
+    ]
+
+    private static func isKnownDistractor(name: String, bundleID: String?) -> Bool {
+        if let bundleID, distractorBundleIDs.contains(bundleID.lowercased()) {
+            return true
+        }
+        return distractorNames.contains(
+            name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        )
     }
 
     func setLeaderboardWindow(_ window: LeaderboardWindow) {

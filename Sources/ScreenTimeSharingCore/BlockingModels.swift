@@ -592,6 +592,10 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
     public var expiresAt: Date?
     public var approvedExpiresAt: Date?
     public var photoReference: BlockFriendRequestPhotoReference?
+    /// Display names of the requester's most-used apps in the blocked group,
+    /// so approvers see what they're unlocking. Names only — app tokens never
+    /// leave the requester's device.
+    public var groupAppNames: [String]?
 
     public init(
         id: String,
@@ -608,7 +612,8 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
         collectedAt: Date? = nil,
         expiresAt: Date? = nil,
         approvedExpiresAt: Date? = nil,
-        photoReference: BlockFriendRequestPhotoReference? = nil
+        photoReference: BlockFriendRequestPhotoReference? = nil,
+        groupAppNames: [String]? = nil
     ) {
         self.id = id
         self.groupID = groupID
@@ -625,6 +630,7 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
         self.expiresAt = expiresAt
         self.approvedExpiresAt = approvedExpiresAt
         self.photoReference = photoReference
+        self.groupAppNames = groupAppNames
     }
 
     public var pendingExpiresAt: Date {

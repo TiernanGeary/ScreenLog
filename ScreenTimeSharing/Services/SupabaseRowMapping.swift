@@ -152,6 +152,7 @@ struct TimeRequestRow: Codable {
     var resolvedAt: Date?
     var approvedExpiresAt: Date?
     var collectedAt: Date?
+    var groupAppNames: [String]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -169,6 +170,7 @@ struct TimeRequestRow: Codable {
         case resolvedAt = "resolved_at"
         case approvedExpiresAt = "approved_expires_at"
         case collectedAt = "collected_at"
+        case groupAppNames = "group_app_names"
     }
 
     /// Insert payload from a freshly created local request. Returns nil when the
@@ -199,6 +201,7 @@ struct TimeRequestRow: Codable {
         self.resolvedAt = nil
         self.approvedExpiresAt = nil
         self.collectedAt = nil
+        self.groupAppNames = request.groupAppNames.map { Array($0.prefix(5)) }
     }
 
     func toDomain(photoReference: BlockFriendRequestPhotoReference?) -> BlockFriendRequest {
@@ -217,7 +220,8 @@ struct TimeRequestRow: Codable {
             collectedAt: collectedAt,
             expiresAt: expiresAt,
             approvedExpiresAt: approvedExpiresAt,
-            photoReference: photoReference
+            photoReference: photoReference,
+            groupAppNames: groupAppNames
         )
     }
 }
