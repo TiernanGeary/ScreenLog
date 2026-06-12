@@ -1,6 +1,8 @@
 import AuthenticationServices
+import AVFoundation
 import PhotosUI
 import SwiftUI
+import UserNotifications
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -12,6 +14,7 @@ struct OnboardingView: View {
     @State private var age: Double = 25
     @State private var avgScreenTime: Double = 4
     @State private var isAuthorizing = false
+    @State private var screenTimeAuthorizationFailed = false
     @State private var isSigningIn = false
     @State private var signInError: String?
     @State private var draftDisplayName = ""
@@ -43,7 +46,7 @@ struct OnboardingView: View {
 
     private var primaryTitle: String {
         switch currentPage {
-        case lastPage: return "Let's Get Started!"
+        case lastPage: return screenTimeAuthorizationFailed ? "Try Again" : "Let's Get Started!"
         case profilePage: return model.isAuthenticated ? "Save and Continue" : "Sign in to Continue"
         case 2: return "Get Started"
         default: return "Continue"
@@ -77,7 +80,11 @@ struct OnboardingView: View {
                             }
                         )
                         .tag(profilePage)
-                        FinalPage(isActive: currentPage == lastPage).tag(lastPage)
+                        FinalPage(
+                            isActive: currentPage == lastPage,
+                            showsAuthorizationError: screenTimeAuthorizationFailed
+                        )
+                        .tag(lastPage)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .animation(.easeInOut, value: currentPage)
@@ -198,6 +205,17 @@ struct OnboardingView: View {
                 Task {
                     isAuthorizing = true
                     await model.requestScreenTimeAuthorization()
+
+                    guard model.hasScreenTimeAuthorization else {
+                        isAuthorizing = false
+                        screenTimeAuthorizationFailed = true
+                        return
+                    }
+
+                    screenTimeAuthorizationFailed = false
+                    _ = try? await UNUserNotificationCenter.current()
+                        .requestAuthorization(options: [.alert, .sound, .badge])
+                    _ = await AVCaptureDevice.requestAccess(for: .video)
                     isAuthorizing = false
                     model.completeOnboarding()
                     model.requestScreenTimeReportRefresh()
@@ -1018,6 +1036,7 @@ private struct SignInBenefitRow: View {
 
 private struct FinalPage: View {
     let isActive: Bool
+    let showsAuthorizationError: Bool
 
     @State private var entered = false
 
@@ -1057,7 +1076,7 @@ private struct FinalPage: View {
                         .offset(y: entered ? 0 : 14)
                         .animation(.easeOut(duration: 0.5).delay(0.15), value: entered)
 
-                    Text("Tap below and grant Screen Time access to start sharing with friends.")
+                    Text("Grant access below to finish setting up.")
                         .font(.title3)
                         .foregroundStyle(.white.opacity(0.9))
                         .multilineTextAlignment(.center)
@@ -1065,6 +1084,36 @@ private struct FinalPage: View {
                         .opacity(entered ? 1 : 0)
                         .offset(y: entered ? 0 : 14)
                         .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
+
+                    VStack(spacing: 10) {
+                        FinalPermissionRow(
+                            icon: "hourglass",
+                            title: "Screen Time — Required",
+                            detail: "Powers your usage stats and app blocking."
+                        )
+                        FinalPermissionRow(
+                            icon: "bell.badge.fill",
+                            title: "Notifications — Optional",
+                            detail: "Know right away when friends request or approve time."
+                        )
+                        FinalPermissionRow(
+                            icon: "camera.fill",
+                            title: "Camera — Optional",
+                            detail: "Time requests include a selfie so friends know it's really you."
+                        )
+                    }
+                    .padding(.horizontal, 24)
+                    .opacity(entered ? 1 : 0)
+                    .offset(y: entered ? 0 : 14)
+                    .animation(.easeOut(duration: 0.5).delay(0.45), value: entered)
+
+                    if showsAuthorizationError {
+                        Text("Screen Time access is required to continue. Tap Try Again to re-request it.")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 28)
+                    }
 
                     Spacer(minLength: 20)
                 }
@@ -1078,5 +1127,35 @@ private struct FinalPage: View {
                 entered = true
             }
         }
+    }
+}
+
+private struct FinalPermissionRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 11))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
     }
 }
