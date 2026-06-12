@@ -236,6 +236,8 @@ final class AppModel: ObservableObject {
     @Published var usageHistory: [DailyUsageSnapshot] = []
     @Published var hourlyUsageByDayID: [String: [TimeInterval]] = [:]
     @Published var friendSummaries: [FriendUsageSummary] = []
+    @Published var friendsLastSyncedAt: Date?
+    @Published var isSyncingFriends = false
     @Published var leaderboardEntries: [LeaderboardEntry] = []
     @Published var leaderboardWindow: LeaderboardWindow = .week
     @Published var cloudAvailability: CloudAvailability = .checking
@@ -1213,11 +1215,15 @@ final class AppModel: ObservableObject {
     }
 
     func reloadFriends() async {
+        isSyncingFriends = true
+        defer { isSyncingFriends = false }
+
         do {
             let previousFriendIDs = Set(friendSummaries.map(\.id))
             let hadLoadedFriends = hasLoadedFriendsOnce
             let friends = try await snapshotStore.fetchFriendSummaries(for: profile)
             friendSummaries = friends
+            friendsLastSyncedAt = Date()
             leaderboardEntries = []
             refreshLocalAccountabilityStats()
             try widgetCacheWriter.write(
