@@ -243,6 +243,9 @@ final class AppModel: ObservableObject {
     @Published var screenTimeReportRefreshID = UUID()
     @Published var screenTimeReportStatus = "Waiting for Screen Time setup."
     @Published var screenTimeReportLastGeneratedAt: Date?
+
+    let usageStatsCache = UsageStatsCache()
+
     @Published var message: String?
     @Published var isWorking = false
     @Published var hasCompletedOnboarding: Bool
