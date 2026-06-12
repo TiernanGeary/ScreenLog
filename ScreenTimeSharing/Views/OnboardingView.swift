@@ -26,7 +26,7 @@ struct OnboardingView: View {
     @State private var pendingProfileCameraImage: UIImage?
     #endif
 
-    private let totalPages = 6
+    private let totalPages = 7
     private var lastPage: Int { totalPages - 1 }
     private var profilePage: Int { lastPage - 1 }
 
@@ -61,6 +61,7 @@ struct OnboardingView: View {
                         ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
                         WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
                         FriendMonitorPage(isActive: currentPage == 3).tag(3)
+                        HowItWorksPage(isActive: currentPage == 4).tag(4)
                         AppleSignInProfilePage(
                             displayName: $draftDisplayName,
                             avatarImageData: draftAvatarImageData,
@@ -561,6 +562,76 @@ private struct FriendMonitorPage: View {
     }
 }
 
+// MARK: - How it works (core request loop)
+
+private struct HowItWorksPage: View {
+    let isActive: Bool
+
+    @State private var entered = false
+
+    private let steps: [(symbol: String, title: String, detail: String)] = [
+        ("lock.fill", "Your apps get blocked", "Pick the apps that waste your time and Deny locks you out."),
+        ("camera.fill", "Ask with a selfie", "Want extra time? Snap a photo and choose how many minutes."),
+        ("person.2.fill", "A friend decides", "They see your photo and approve or deny your request."),
+        ("lock.open.fill", "Unlock on approval", "Approved minutes unlock the apps — then they lock again.")
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                Spacer(minLength: 48)
+
+                Text("How Deny works")
+                    .font(.largeTitle.bold())
+                    .multilineTextAlignment(.center)
+                    .opacity(entered ? 1 : 0)
+                    .offset(y: entered ? 0 : 14)
+                    .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
+
+                VStack(spacing: 14) {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                        HStack(alignment: .top, spacing: 14) {
+                            Image(systemName: step.symbol)
+                                .font(.title3)
+                                .foregroundStyle(.tint)
+                                .frame(width: 44, height: 44)
+                                .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(step.title)
+                                    .font(.headline)
+                                Text(step.detail)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(14)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                        .opacity(entered ? 1 : 0)
+                        .offset(y: entered ? 0 : 14)
+                        .animation(.easeOut(duration: 0.5).delay(0.2 + Double(index) * 0.12), value: entered)
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                Spacer(minLength: 20)
+            }
+            .padding(.horizontal, 20)
+        }
+        .onChange(of: isActive, initial: true) { _, nowActive in
+            entered = false
+            guard nowActive else { return }
+            Task {
+                try? await Task.sleep(for: .milliseconds(50))
+                entered = true
+            }
+        }
+    }
+}
+
 // MARK: - Profile setup
 
 private struct ProfileSetupPage: View {
@@ -769,11 +840,27 @@ private struct AppleSignInProfilePage: View {
                 .font(.largeTitle.bold())
                 .multilineTextAlignment(.center)
 
-            Text("Your Apple ID keeps your account safe and lets you recover it on a new device.")
+            Text("Deny is built around your friends, so it needs an account.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 18)
+
+            VStack(spacing: 10) {
+                SignInBenefitRow(
+                    icon: "person.2.fill",
+                    text: "Friend requests and approvals are tied to your account"
+                )
+                SignInBenefitRow(
+                    icon: "icloud.fill",
+                    text: "Your data stays in sync through iCloud"
+                )
+                SignInBenefitRow(
+                    icon: "arrow.counterclockwise",
+                    text: "Recover everything when you switch devices"
+                )
+            }
+            .padding(.horizontal, 8)
 
             SignInWithAppleButton(.signIn, onRequest: { request in
                 request.requestedScopes = [.fullName, .email]
@@ -899,6 +986,31 @@ private struct AppleSignInProfilePage: View {
             .offset(y: entered ? 0 : 14)
             .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
         }
+    }
+}
+
+private struct SignInBenefitRow: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.tint)
+                .frame(width: 32, height: 32)
+                .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
     }
 }
 
