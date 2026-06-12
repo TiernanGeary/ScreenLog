@@ -5,7 +5,8 @@ import UIKit
 
 struct FriendsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var selectedLeaderboardWindow: LeaderboardWindow = .week
+    @AppStorage("friends.boardMode") private var boardMode: FriendBoardMode = .activity
+    @AppStorage("friends.leaderboardWindow") private var selectedLeaderboardWindow: LeaderboardWindow = .week
     @State private var isShowingShareSheet = false
 
     private var leaderboardEntries: [LeaderboardEntry] {
@@ -13,41 +14,28 @@ struct FriendsView: View {
         return StatsBoardBuilder.mostExtraRequested(entries: friendEntries)
     }
 
+    private var activityRows: [FriendUsageSummary] {
+        FriendBoardBuilder.activityRows(model.friendSummaries)
+    }
+
     var body: some View {
         NavigationStack {
             AppScreenScroll {
-                AppSection("Leaderboard") {
+                AppSection("Friends") {
                     VStack(alignment: .leading, spacing: 10) {
-                        FriendLeaderboardWindowSelector(selection: $selectedLeaderboardWindow)
+                        syncStatusRow
 
-                        FriendLeaderboardCard(entries: leaderboardEntries)
-                    }
-                }
+                        FriendBoardModePicker(selection: $boardMode)
 
-                AppSection("Friend Usage") {
-                    if model.friendSummaries.isEmpty {
-                        AppCard {
-                            ContentUnavailableView(
-                                "No Friends Yet",
-                                systemImage: "person.2.slash",
-                                description: Text("Invite a friend or accept their invite to start sharing requests.")
-                            )
-                            .appCardRow(verticalPadding: 16)
-                        }
-                    } else {
-                        AppCard {
-                            ForEach(Array(model.friendSummaries.enumerated()), id: \.element.id) { index, friend in
-                                FriendSummaryRow(friend: friend)
-                                    .appCardRow(verticalPadding: 8)
+                        if boardMode == .leaderboard {
+                            FriendLeaderboardWindowSelector(selection: $selectedLeaderboardWindow)
 
-                                if index < model.friendSummaries.count - 1 {
-                                    AppCardDivider()
-                                }
-                            }
+                            FriendLeaderboardCard(entries: leaderboardEntries)
+                        } else {
+                            activityCard
                         }
                     }
                 }
-
             }
             .refreshable {
                 AppHaptics.selectionChanged()
@@ -77,9 +65,144 @@ struct FriendsView: View {
         }
     }
 
+    private var syncStatusRow: some View {
+        HStack(spacing: 8) {
+            Text(UsageFormatting.lastUpdated(model.friendsLastSyncedAt))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button {
+                AppHaptics.buttonTap()
+                Task { await refreshFriends() }
+            } label: {
+                if model.isSyncingFriends {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Label("Sync Now", systemImage: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(model.isSyncingFriends)
+            .accessibilityLabel("Sync friends now")
+        }
+    }
+
+    private var activityCard: some View {
+        AppCard {
+            if activityRows.isEmpty {
+                ContentUnavailableView(
+                    "No Friends Yet",
+                    systemImage: "person.2.slash",
+                    description: Text("Invite a friend or accept their invite to start sharing requests.")
+                )
+                .appCardRow(verticalPadding: 16)
+            } else {
+                ForEach(Array(activityRows.enumerated()), id: \.element.id) { index, friend in
+                    FriendSummaryRow(friend: friend)
+                        .appCardRow(verticalPadding: 8)
+
+                    if index < activityRows.count - 1 {
+                        AppCardDivider()
+                    }
+                }
+            }
+        }
+    }
+
     private func refreshFriends() async {
         await model.reloadFriends()
         await model.syncFriendRequests()
+    }
+}
+
+private enum FriendBoardMode: String, CaseIterable {
+    case activity
+    case leaderboard
+
+    var label: String {
+        switch self {
+        case .activity:
+            return "Activity"
+        case .leaderboard:
+            return "Leaderboard"
+        }
+    }
+}
+
+private struct FriendBoardModePicker: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Binding var selection: FriendBoardMode
+    @Namespace private var namespace
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(FriendBoardMode.allCases, id: \.self) { mode in
+                Button {
+                    if selection != mode {
+                        AppHaptics.selectionChanged()
+                    }
+                    selection = mode
+                } label: {
+                    Text(mode.label)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                        .foregroundStyle(selection == mode ? .white : .primary)
+                        .background {
+                            if selection == mode {
+                                Capsule()
+                                    .fill(Color.blue)
+                                    .matchedGeometryEffect(id: "selected-friend-board-mode", in: namespace)
+                                    .shadow(color: Color.blue.opacity(0.18), radius: 7, x: 0, y: 3)
+                            }
+                        }
+                        .appCapsuleButtonHitArea()
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background {
+            Capsule()
+                .fill(backgroundColor)
+                .overlay {
+                    Capsule()
+                        .strokeBorder(borderColor, lineWidth: 0.8)
+                }
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.05), radius: 14, x: 0, y: 7)
+        }
+        .animation(.snappy(duration: 0.22), value: selection)
+    }
+
+    private var backgroundColor: Color {
+        colorScheme == .dark
+            ? Color(red: 0.075, green: 0.085, blue: 0.10)
+            : Color.white.opacity(0.72)
+    }
+
+    private var borderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.86)
+    }
+}
+
+private extension FriendFreshness {
+    var indicatorColor: Color {
+        switch self {
+        case .fresh:
+            return .green
+        case .aging:
+            return .yellow
+        case .stale:
+            return .orange
+        case .missing:
+            return Color.secondary
+        }
     }
 }
 
@@ -233,6 +356,12 @@ private struct FriendLeaderboardRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
+
+                if let lastUpdated = entry.lastUpdated {
+                    Text(UsageFormatting.lastUpdated(lastUpdated))
+                        .font(.caption2)
+                        .foregroundStyle(FriendFreshness.tier(lastUpdated: lastUpdated).indicatorColor)
+                }
             }
         }
     }
@@ -312,11 +441,11 @@ struct FriendSummaryRow: View {
                     Text(friend.displayName)
                         .font(.headline)
 
-                    if friend.isStale {
-                        Text("Stale")
-                            .font(.caption2.bold())
-                            .foregroundStyle(.orange)
-                    }
+                    Spacer(minLength: 8)
+
+                    Text(UsageFormatting.lastUpdated(friend.lastUpdated))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(FriendFreshness.tier(lastUpdated: friend.lastUpdated).indicatorColor)
                 }
 
                 HStack(spacing: 12) {
