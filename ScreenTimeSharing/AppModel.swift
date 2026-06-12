@@ -1076,7 +1076,16 @@ final class AppModel: ObservableObject {
         try? await Task.sleep(for: .seconds(2))
         reloadUsageHistoryFromSharedStorage()
 
-        let snapshot = await screenTimeProvider.loadTodayUsage(selection: selection, profile: profile)
+        var snapshot = await screenTimeProvider.loadTodayUsage(selection: selection, profile: profile)
+        #if DEBUG && targetEnvironment(simulator)
+        // The simulator produces no real Screen Time, so fall back to the
+        // seeded demo snapshot — lets two sims exercise friend usage sharing.
+        if !snapshot.capability.allowsUpload,
+           let demoSnapshot = UsageStatsBuilder.snapshot(for: Date(), in: usageHistory),
+           demoSnapshot.capability.allowsUpload {
+            snapshot = demoSnapshot
+        }
+        #endif
         localSnapshot = snapshot
         if snapshot.capability.allowsUpload {
             persistUsageSnapshot(snapshot)
@@ -1094,6 +1103,11 @@ final class AppModel: ObservableObject {
         }
 
         do {
+            if profile.shareStatus != .sharing {
+                profile.shareStatus = .sharing
+                profile.updatedAt = Date()
+                profileStore.save(profile)
+            }
             try await snapshotStore.publish(profile: profile, snapshot: snapshot)
             message = "Usage snapshot uploaded."
             await reloadFriends()
@@ -1103,9 +1117,26 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Mints a shareable invite code for the current user.
+    /// Mints a shareable invite code for the current user. Inviting a friend
+    /// is consent to share usage with them, so it also enables sharing.
     func createInvite() async throws -> CreatedInvite {
-        try await snapshotStore.createInvite()
+        let invite = try await snapshotStore.createInvite()
+        await enableSharingIfNeeded()
+        return invite
+    }
+
+    /// Friends can only read this user's snapshots while the profile is marked
+    /// sharing (enforced server-side). Connecting with a friend or uploading
+    /// usage is the consent that turns it on.
+    private func enableSharingIfNeeded() async {
+        guard profile.shareStatus != .sharing else {
+            return
+        }
+
+        profile.shareStatus = .sharing
+        profile.updatedAt = Date()
+        profileStore.save(profile)
+        await publishProfileUpdateToCloud()
     }
 
     /// Shows the accept sheet for an invite code arriving via deep link,
@@ -1147,6 +1178,7 @@ final class AppModel: ObservableObject {
         do {
             let redeemed = try await snapshotStore.redeemInvite(code: code)
             message = "You're now connected with \(redeemed.inviterDisplayName)."
+            await enableSharingIfNeeded()
             await reloadFriends()
             await syncFriendRequests()
 

@@ -56,21 +56,31 @@ struct InviteFriendsSheet: View {
                         .multilineTextAlignment(.center)
                         .textSelection(.enabled)
 
-                    HStack {
+                    VStack(spacing: 10) {
                         ShareLink(item: shareMessage(for: invite)) {
-                            Label("Share Invite", systemImage: "square.and.arrow.up")
+                            HStack(spacing: 7) {
+                                Image(systemName: "square.and.arrow.up")
+                                Text("Share Invite")
+                            }
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
 
                         Button {
                             UIPasteboard.general.string = invite.formattedCode
                             didCopyCode = true
                         } label: {
-                            Label(didCopyCode ? "Copied" : "Copy Code", systemImage: didCopyCode ? "checkmark" : "doc.on.doc")
+                            HStack(spacing: 7) {
+                                Image(systemName: didCopyCode ? "checkmark" : "doc.on.doc")
+                                Text(didCopyCode ? "Copied" : "Copy Code")
+                            }
+                            .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
+                        .controlSize(.large)
                     }
-                    .frame(maxWidth: .infinity)
 
                     Text("Expires \(invite.expiresAt.formatted(date: .abbreviated, time: .omitted)). One friend per code.")
                         .font(.footnote)
@@ -98,31 +108,51 @@ struct InviteFriendsSheet: View {
 
     private var redeemSection: some View {
         Section {
-            TextField("ABCD-EFGH", text: $redeemCode)
-                .font(.system(.body, design: .monospaced))
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
+            VStack(spacing: 12) {
+                TextField("Enter code", text: $redeemCode)
+                    .font(.system(.title3, design: .monospaced).weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color(.tertiarySystemFill))
+                    )
 
-            if let redeemError {
-                Text(redeemError)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
+                if let redeemError {
+                    Text(redeemError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
 
-            Button {
-                Task {
-                    await redeem()
+                Button {
+                    Task {
+                        await redeem()
+                    }
+                } label: {
+                    HStack(spacing: 7) {
+                        if isRedeeming {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "person.badge.plus")
+                            Text("Add Friend")
+                        }
+                    }
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
                 }
-            } label: {
-                if isRedeeming {
-                    ProgressView()
-                } else {
-                    Text("Add Friend")
-                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isRedeeming || normalizedRedeemCode.isEmpty)
             }
-            .disabled(isRedeeming || normalizedRedeemCode.isEmpty)
+            .padding(.vertical, 4)
         } header: {
             Text("Have a code?")
+        } footer: {
+            Text("Paste or type the code a friend shared with you.")
         }
     }
 

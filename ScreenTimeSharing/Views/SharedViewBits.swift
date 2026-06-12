@@ -249,6 +249,7 @@ enum AppHaptics {
     #if canImport(UIKit)
     @MainActor private static let buttonTapGenerator = UIImpactFeedbackGenerator(style: .light)
     @MainActor private static let selectionGenerator = UISelectionFeedbackGenerator()
+    @MainActor private static let notificationGenerator = UINotificationFeedbackGenerator()
     #endif
 
     static func buttonTap() {
@@ -256,6 +257,24 @@ enum AppHaptics {
         Task { @MainActor in
             buttonTapGenerator.impactOccurred(intensity: 0.68)
             buttonTapGenerator.prepare()
+        }
+        #endif
+    }
+
+    static func success() {
+        #if canImport(UIKit)
+        Task { @MainActor in
+            notificationGenerator.notificationOccurred(.success)
+            notificationGenerator.prepare()
+        }
+        #endif
+    }
+
+    static func warning() {
+        #if canImport(UIKit)
+        Task { @MainActor in
+            notificationGenerator.notificationOccurred(.warning)
+            notificationGenerator.prepare()
         }
         #endif
     }

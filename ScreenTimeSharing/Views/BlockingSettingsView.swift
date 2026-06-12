@@ -82,6 +82,11 @@ struct RequestFeedView: View {
                 }
             }
         }
+        .refreshable {
+            AppHaptics.selectionChanged()
+            await model.reloadFriends()
+            await model.syncFriendRequests()
+        }
         .navigationTitle("Request Feed")
         .onAppear {
             model.expireStaleFriendRequests()
@@ -289,23 +294,9 @@ struct RequestFeedView: View {
         switch direction {
         case .sent:
             if request.status == .approved {
-                Button {
-                    if model.collectFriendRequest(id: request.id) {
-                        AppHaptics.buttonTap()
-                    }
-                } label: {
-                    Label("Collect", systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color.green.opacity(0.12))
-                        )
-                        .appRoundedButtonHitArea(cornerRadius: 12)
+                CollectTimeButton {
+                    model.collectFriendRequest(id: request.id)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
                 .frame(maxWidth: .infinity)
             }
         case .received:
@@ -407,7 +398,6 @@ struct RequestFeedView: View {
             return
         }
 
-        AppHaptics.buttonTap()
         let remainingIDs = currentIDs.filter { $0 != request.id }
         if remainingIDs.isEmpty {
             selectedPhotoRequestID = ""
@@ -438,6 +428,7 @@ private struct FriendRequestPhotoStackView: View {
     @State private var isHorizontalDragActive = false
     @State private var advancingRequestID: String?
     @State private var isAdvancing = false
+    @State private var resolutionIsApprove: Bool?
 
     var body: some View {
         GeometryReader { proxy in
@@ -501,13 +492,61 @@ private struct FriendRequestPhotoStackView: View {
             avatarImageData: avatarImageData(request),
             groupName: groupName(request),
             expiresIn: expiresIn(request),
+            verdictIsApprove: advancingRequestID == request.id ? resolutionIsApprove : nil,
             onDeny: {
-                onDeny(request)
+                resolveWithAnimation(request, approve: false)
             },
             onApprove: {
-                onApprove(request)
+                resolveWithAnimation(request, approve: true)
             }
         )
+    }
+
+    /// Flies the card off (right for approve, left for deny) with a haptic,
+    /// then performs the actual resolution once the card has left the screen.
+    private func resolveWithAnimation(_ request: BlockFriendRequest, approve: Bool) {
+        guard !isAdvancing else {
+            return
+        }
+
+        if approve {
+            AppHaptics.success()
+        } else {
+            AppHaptics.warning()
+        }
+
+        isAdvancing = true
+        advancingRequestID = request.id
+        stackDirection = 1
+
+        // Flood the card with its verdict color first, then fling it.
+        withAnimation(.spring(response: 0.26, dampingFraction: 0.7)) {
+            resolutionIsApprove = approve
+        }
+        withAnimation(.easeOut(duration: 0.34).delay(0.16)) {
+            flyAwayOffset = CGSize(width: approve ? 620 : -620, height: -46)
+            dragOffset = .zero
+        }
+        withAnimation(.spring(response: 0.44, dampingFraction: 0.86).delay(0.16)) {
+            promotionProgress = 1
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.52) {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                flyAwayOffset = .zero
+                promotionProgress = 0
+                advancingRequestID = nil
+                isAdvancing = false
+                resolutionIsApprove = nil
+            }
+            if approve {
+                onApprove(request)
+            } else {
+                onDeny(request)
+            }
+        }
     }
 
     private func dragGesture(cardWidth: CGFloat) -> some Gesture {
@@ -710,6 +749,7 @@ private struct FriendRequestPhotoBookCard: View {
     let avatarImageData: Data?
     let groupName: String
     let expiresIn: String
+    var verdictIsApprove: Bool? = nil
     let onDeny: () -> Void
     let onApprove: () -> Void
 
@@ -794,7 +834,7 @@ private struct FriendRequestPhotoBookCard: View {
                                 .font(.subheadline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 13)
-                                .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .background(Color.red.opacity(0.82), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.white)
@@ -815,6 +855,18 @@ private struct FriendRequestPhotoBookCard: View {
                 }
             }
             .padding(18)
+
+            if let verdictIsApprove {
+                (verdictIsApprove ? Color.green : Color.red)
+                    .opacity(0.92)
+                    .overlay {
+                        Image(systemName: verdictIsApprove ? "checkmark" : "xmark")
+                            .font(.system(size: 76, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
         .overlay {
@@ -1019,22 +1071,13 @@ private struct FriendRequestDetailView: View {
         switch direction {
         case .sent:
             if request.status == .approved {
-                Button {
-                    if model.collectFriendRequest(id: request.id) {
-                        AppHaptics.buttonTap()
-                    }
-                } label: {
-                    Label("Collect Time", systemImage: "checkmark.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color.green.opacity(0.12))
-                        )
+                CollectTimeButton(
+                    title: "Collect Time",
+                    font: .subheadline.weight(.semibold),
+                    verticalPadding: 11
+                ) {
+                    model.collectFriendRequest(id: request.id)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
             }
         case .received:
             EmptyView()
@@ -1526,22 +1569,9 @@ struct BlockingSettingsView: View {
         switch direction {
         case .sent:
             if request.status == .approved {
-                Button {
-                    if model.collectFriendRequest(id: request.id) {
-                        AppHaptics.buttonTap()
-                    }
-                } label: {
-                    Label("Collect", systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color.green.opacity(0.12))
-                        )
+                CollectTimeButton {
+                    model.collectFriendRequest(id: request.id)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
             }
         case .received:
             EmptyView()
@@ -3307,5 +3337,50 @@ private struct DurationWheelPicker: View {
         }
         .accessibilityLabel("Time you can use these apps per day")
         .accessibilityValue("\(minutes) minutes")
+    }
+}
+
+/// Collect button with a celebratory resolve: success haptic, bouncing
+/// checkmark, and a green pulse before the collection (and the button's exit)
+/// animate through.
+private struct CollectTimeButton: View {
+    var title = "Collect"
+    var font: Font = .caption.weight(.semibold)
+    var verticalPadding: CGFloat = 9
+    let collect: () -> Bool
+
+    @State private var isCelebrating = false
+
+    var body: some View {
+        Button {
+            guard !isCelebrating else {
+                return
+            }
+
+            AppHaptics.success()
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.5)) {
+                isCelebrating = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                    _ = collect()
+                }
+                isCelebrating = false
+            }
+        } label: {
+            Label(title, systemImage: "checkmark.circle.fill")
+                .font(font)
+                .symbolEffect(.bounce, value: isCelebrating)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, verticalPadding)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.green.opacity(isCelebrating ? 0.32 : 0.12))
+                )
+                .appRoundedButtonHitArea(cornerRadius: 12)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
+        .scaleEffect(isCelebrating ? 1.05 : 1)
     }
 }

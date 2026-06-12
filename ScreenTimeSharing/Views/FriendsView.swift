@@ -308,20 +308,18 @@ struct FriendSummaryRow: View {
             )
 
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(friend.displayName)
-                        .font(.headline)
-
-                    if friend.isStale {
-                        Text("Stale")
-                            .font(.caption2.bold())
-                            .foregroundStyle(.orange)
-                    }
-                }
+                Text(friend.displayName)
+                    .font(.headline)
 
                 HStack(spacing: 12) {
-                    Label(UsageFormatting.duration(friend.totalDuration), systemImage: "clock")
-                    Label(UsageFormatting.duration(friend.selectedAppDuration), systemImage: "app")
+                    if friend.totalDuration == nil {
+                        Label("--", systemImage: "clock")
+                    } else {
+                        Label(UsageFormatting.duration(friend.totalDuration), systemImage: "clock")
+                        if friend.selectedAppDuration != nil {
+                            Label(UsageFormatting.duration(friend.selectedAppDuration), systemImage: "app")
+                        }
+                    }
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
