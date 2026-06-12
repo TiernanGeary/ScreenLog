@@ -1,6 +1,6 @@
 # 引き継ぎ（次の AI セッション向け） — ScreenLog / Deny 改善
 
-最終更新: 2026-06-12 / 作成者: Claude（前セッション）
+最終更新: 2026-06-13 / 作成者: Claude（前セッション）
 
 このファイルは、次の AI が**ゼロコンテキストから作業を継続**できるよう、現状・制約・次の手順をまとめたもの。まず `CLAUDE.md` と下記「運用上の必須制約」を読むこと。
 
@@ -56,42 +56,46 @@ Home の申請ボタンを `Ask Friends` 主役化、Feed を受信専用化。`
 - **未完（ユーザー側）**: Xcode ビルド、シミュレータ手動確認、**B1 = Shield→申請フローの実機動作確認**（計画 Task B1 のチェックリスト）。
 - 見送り（記録済み）: S4 URLスキーム deep-link。
 
-### 🔄 Phase 2 — 進行中（★現在ここ。ユーザー指示「#3→#5 を連続実装、レビュー点は最小化」）
-ブランチ `feature/phase2-perf-and-onboarding`（**未 push**。最後に push が必要）。
+### ✅ Phase 2 — 完了（origin へ push 済み）
+ブランチ `feature/phase2-perf-and-onboarding`（HEAD `48a2c72` = origin と一致）。
 
-#### Phase 2a = #3 home/stats ロード性能
-計画: **`docs/plans/2026-06-12-phase2a-load-performance.md`**（コミット済み）。スコープは spec §D の8項目から「メモ化／ポーリング早期終了／デコードスキップ」の3本に限定（残りは計画内に理由付きで見送り明記）。
+#### ✅ Phase 2a = #3 home/stats ロード性能（完了）
+計画: **`docs/plans/2026-06-12-phase2a-load-performance.md`**。スコープは spec §D の8項目から「メモ化／ポーリング早期終了／デコードスキップ」の3本に限定（残りは計画内に理由付きで見送り明記）。
 
-- ✅ **T1 + T2（Core, TDD）完了・検証済み・コミット済み**（`606fed7`）。`Sources/ScreenTimeSharingCore/UsageStatsCache.swift`（`UsageHistorySignature` + `UsageStatsCache`）＋テスト。**`swift test` 66件 PASS（Claude が実行確認済み）**。
-- ⬜ **T3 未実装**: `AppModel` に `let usageStatsCache = UsageStatsCache()` を追加し、`StatsView` の `summary`/`chartBuckets`/`appUsageRows` を `UsageStatsBuilder.*` → `model.usageStatsCache.*` に置換（計画 Task 3 に exact before/after あり）。
-- ⬜ **T4 未実装**: `ScreenTimeReportBridgeView.swift` の**3本の `pollForReportSnapshot`** にデータ安定後の早期終了（`didChange`＋`quietTicks>=3`）。データ未到着時は従来どおり60秒（退行回避）。
-- ⬜ **T5 未実装**: `AppModel.loadUsageHistory()` に `lastLoadedUsageData` を持たせ、バイト同一なら decode と @Published 再代入をスキップ。
-- 注意: T4 の `hasCachedReportData`/`hasCachedTodayReport` 述語名は実体に合わせて確認（計画に注記あり）。
+- ✅ T1+T2（Core, TDD）: `UsageHistorySignature` + `UsageStatsCache` ＋テスト（`606fed7`）。
+- ✅ T3: `AppModel.usageStatsCache` 保持＋ `StatsView` の3 computed をキャッシュ経由に（`2f60c1a`）。
+- ✅ T4: `ScreenTimeReportBridgeView` の3本のポーリングに `didChange`＋`quietTicks>=3` の早期終了。データ未到着時は従来どおり60秒（`22f31b5`）。隠し橋渡しポーラーは述語が無いため `model.localSnapshot != nil` を使用。
+- ✅ T5: `loadUsageHistory()` に `lastLoadedUsageData` を追加しバイト同一なら decode＋再 publish をスキップ（`4352d50`）。
+- ✅ Task C: 差分は計画どおりのファイルのみ・`StatsView` に直接ビルダー呼び出し残存なし・**`swift test` 66件 PASS**。
 
-#### Phase 2b = #5 オンボーディング
-⬜ **未着手（計画も未作成）**。要件は spec §C（最大ギャップ＝「コア機構を一度も説明していない」）。確定方針: **ゲスト開始不可・サインイン必須維持**（spec §5.1）。`OnboardingView`（既存6ページ）＋ 別枝 `origin/feature/multi-page-onboarding` の `AppPickerPage` 参照。
+#### ✅ Phase 2b = #5 オンボーディング（完了）
+計画: **`docs/plans/2026-06-12-phase2b-onboarding.md`**（`7e856f3`。見送り項目と spec からの逸脱1点を明記）。確定方針どおり**ゲスト開始不可・サインイン必須維持**（spec §5.1-2）。
 
-### ⬜ Phase 3（未着手）
+- ✅ T1: `HowItWorksPage`（コア機構4ステップ図解）をタグ4に挿入、`totalPages` 6→7（`d7b997d`）。
+- ✅ T2: サインインページ内に価値訴求3行（`SignInBenefitRow`×3: フレンド/同期/復元）。spec の「直前に1画面」をページ内追加に変更（理由は計画に明記）（同 `d7b997d`）。
+- ✅ T3: 最終ページの完了ボタンを「スクリーンタイム必須（失敗時 inline エラー＋Try Again）→通知→カメラ（共に任意）→完了」の直列フローに。`FinalPermissionRow`×3 で権限を事前説明（`48a2c72`）。
+- ✅ Task C: 差分は `OnboardingView.swift`＋計画 docs のみ・`swift test` 66件 PASS（Core 変更なし）。
+
+**見送り（計画に理由付き記録済み）**: C-4-3 アプリ選択統合（L・実機検証必須）/ C-4-4 完了後ガイド / C-4-7 Quick Start カード。
+
+### ⬜ Phase 3（未着手・★次はここ）
 #4 フレンド一覧統合、#1 招待リンク状態表示/再送（spec §E, §F、§5.1 確定方針あり）。
 
 ---
 
 ## 4. 次にやること（順番）
 
-1. **Phase 2a の残り（T3 → T4 → T5）を Codex に委譲**（小分け、編集のみ・コミット禁止）。各回後に: `git diff` 精査 → `swift test`（66件のまま PASS のはず。アプリ層変更は SPM テストに影響しない）→ 計画と突合 → **Claude がコミット**（計画記載のコミットメッセージ使用）。
-2. **Phase 2a Task C（最終確認）** → ユーザーへ簡潔報告。
-3. `feature/phase2-perf-and-onboarding` を **push**（`git push -u origin feature/phase2-perf-and-onboarding`）。
-4. **Phase 2b（#5）**: `superpowers:writing-plans` 方針で「並列探索（Workflow）→ exact 計画 → Codex 実装 → Claude 検証/コミット」。`OnboardingView.swift` 等を実地調査してから計画を書く。
-5. 区切りで PR 要否をユーザーに確認（ベースブランチも）。
+1. **ユーザーに確認**: Phase 2 の Xcode ビルド＋シミュレータ確認のタイミング、PR 作成の要否とベースブランチ（phase0→phase1→phase2 を順に積むか、`product/accountability-locks` へ直接か）。
+2. **Phase 3（#4 / #1）**: spec §E・§F を読み、`FriendsView.swift` 等を実地調査してから `superpowers:writing-plans` 方針で計画作成 → Codex 小分け委譲 → Claude 検証/コミット。
 
-**ユーザー側に残る検証（AI 環境では不可）**: 全 phase ブランチの Xcode ビルド、シミュレータ手動確認、Phase 1 B1 の実機 Shield フロー確認。
+**ユーザー側に残る検証（AI 環境では不可）**: 全 phase ブランチの Xcode ビルド、シミュレータ手動確認（特に Phase 2b の onboarding 7ページ遷移と権限フロー）、Phase 1 B1 の実機 Shield フロー確認。
 
 ---
 
 ## 5. 参照ファイル
 
 - 要件分解（全領域）: `docs/specs/2026-06-05-improvement-breakdown.md`
-- 計画: `docs/plans/2026-06-05-phase0-request-button-ux.md` / `2026-06-11-phase1-time-request-and-shield.md` / `2026-06-12-phase2a-load-performance.md`
+- 計画: `docs/plans/2026-06-05-phase0-request-button-ux.md` / `2026-06-11-phase1-time-request-and-shield.md` / `2026-06-12-phase2a-load-performance.md` / `2026-06-12-phase2b-onboarding.md`
 - 行動規範: `CLAUDE.md`（Claude 計画・Codex 実装、日本語でユーザー対応・コードは英語）
 - メモリ（プロジェクト記憶。セッション開始時に MEMORY.md が読み込まれる）: `codex-commits-blocked` / `phase1-verification-gap`
 
