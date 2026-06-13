@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "onboarding-friend-monitor.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

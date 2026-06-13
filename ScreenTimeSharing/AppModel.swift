@@ -248,7 +248,7 @@ final class AppModel: ObservableObject {
         ScreenTimeReportStorage.saveProfileID(loadedProfile.id, defaults: sharedDefaults)
         self.appearanceMode = AppAppearanceMode(
             rawValue: UserDefaults.standard.string(forKey: Self.appearanceKey) ?? ""
-        ) ?? .dark
+        ) ?? .light
         self.selection = selectionStore.load()
         self.blockingState = blockingStore.load()
         self.hasCompletedOnboarding = UserDefaults.standard.bool(forKey: onboardingKey)

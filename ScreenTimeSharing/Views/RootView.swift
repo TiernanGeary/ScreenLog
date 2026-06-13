@@ -84,6 +84,7 @@ struct RootView: View {
 
 private struct SignInGateView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isSigningIn = false
     @State private var signInError: String?
 
@@ -112,7 +113,7 @@ private struct SignInGateView: View {
             SignInWithAppleButton(.signIn, onRequest: { request in
                 request.requestedScopes = [.fullName, .email]
             }, onCompletion: { _ in })
-            .signInWithAppleButtonStyle(.white)
+            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
             .frame(height: 54)
             .cornerRadius(14)
             .disabled(isSigningIn)

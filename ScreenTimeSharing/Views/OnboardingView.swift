@@ -11,7 +11,7 @@ struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
 
     @State private var currentPage: Int = 0
-    @State private var age: Double = 25
+    @State private var howItWorksStep: Int = 0
     @State private var avgScreenTime: Double = 4
     @State private var isAuthorizing = false
     @State private var screenTimeAuthorizationFailed = false
@@ -29,7 +29,7 @@ struct OnboardingView: View {
     @State private var pendingProfileCameraImage: UIImage?
     #endif
 
-    private let totalPages = 7
+    private let totalPages = 6
     private var lastPage: Int { totalPages - 1 }
     private var profilePage: Int { lastPage - 1 }
 
@@ -48,7 +48,7 @@ struct OnboardingView: View {
         switch currentPage {
         case lastPage: return screenTimeAuthorizationFailed ? "Try Again" : "Let's Get Started!"
         case profilePage: return model.isAuthenticated ? "Save and Continue" : "Sign in to Continue"
-        case 2: return "Get Started"
+        case 1: return "Get Started"
         default: return "Continue"
         }
     }
@@ -56,15 +56,19 @@ struct OnboardingView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color.black.ignoresSafeArea()
+                Color(.systemBackground).ignoresSafeArea()
 
                 VStack(spacing: 0) {
+                    progressBar
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
+                        .padding(.bottom, 4)
+
                     TabView(selection: $currentPage) {
-                        AgeSliderPage(age: $age, isActive: currentPage == 0).tag(0)
-                        ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
-                        WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
-                        FriendMonitorPage(isActive: currentPage == 3).tag(3)
-                        HowItWorksPage(isActive: currentPage == 4).tag(4)
+                        ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 0).tag(0)
+                        WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 1).tag(1)
+                        FriendMonitorPage(isActive: currentPage == 2).tag(2)
+                        HowItWorksPage(isActive: currentPage == 3, stepIndex: $howItWorksStep).tag(3)
                         AppleSignInProfilePage(
                             displayName: $draftDisplayName,
                             avatarImageData: draftAvatarImageData,
@@ -89,6 +93,12 @@ struct OnboardingView: View {
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .animation(.easeInOut, value: currentPage)
                     .onChange(of: currentPage) { oldPage, newPage in
+                        // Reset the inner step carousel whenever we leave or
+                        // re-enter the How Deny works page.
+                        if oldPage == howItWorksPage || newPage == howItWorksPage {
+                            howItWorksStep = 0
+                        }
+
                         guard oldPage == profilePage, newPage != profilePage else {
                             return
                         }
@@ -100,26 +110,13 @@ struct OnboardingView: View {
                         }
                     }
 
-                    pageIndicator
-                        .padding(.top, 8)
-
                     primaryButton
                         .padding(.horizontal, 20)
                         .padding(.top, 16)
                         .padding(.bottom, 12)
                 }
             }
-            .toolbar {
-                if currentPage < lastPage && currentPage != profilePage {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Skip") {
-                            Haptics.tap()
-                            withAnimation { currentPage = profilePage }
-                        }
-                    }
-                }
-            }
-            .toolbarBackground(.black, for: .navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
             .disabled(isAuthorizing)
             .overlay {
                 if isAuthorizing {
@@ -182,18 +179,35 @@ struct OnboardingView: View {
                 loadSelectedProfilePhoto(item)
             }
         }
-        .preferredColorScheme(.dark)
     }
 
-    private var pageIndicator: some View {
-        HStack(spacing: 5) {
-            ForEach(0...lastPage, id: \.self) { index in
+    private var progressBar: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(index == currentPage ? Color.accentColor : Color.secondary.opacity(0.25))
-                    .frame(width: index == currentPage ? 18 : 6, height: 6)
-                    .animation(.easeInOut, value: currentPage)
+                    .fill(Color.secondary.opacity(0.18))
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: proxy.size.width * progressFraction)
             }
         }
+        .frame(height: 5)
+        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: currentPage)
+        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: howItWorksStep)
+        .accessibilityElement()
+        .accessibilityLabel("Onboarding progress")
+        .accessibilityValue("Step \(currentPage + 1) of \(totalPages)")
+    }
+
+    // Pages count as whole units; the How Deny works page additionally fills in
+    // quarters as the user steps through its inner carousel.
+    private var progressFraction: CGFloat {
+        var completed = CGFloat(currentPage + 1)
+        if currentPage == howItWorksPage {
+            completed += CGFloat(howItWorksStep) / CGFloat(HowItWorksPage.stepCount)
+            completed = min(completed, CGFloat(currentPage + 1) + 0.99)
+        }
+        return min(1, completed / CGFloat(totalPages))
     }
 
     private var primaryButton: some View {
@@ -231,7 +245,17 @@ struct OnboardingView: View {
         .opacity(isPrimaryDisabled ? 0.52 : 1)
     }
 
+    private let howItWorksPage = 3
+
     private func advanceFromCurrentPage() {
+        // On the How Deny works page, Continue walks the inner step carousel
+        // first; only the last step advances the whole flow.
+        if currentPage == howItWorksPage, howItWorksStep < HowItWorksPage.stepCount - 1 {
+            Haptics.tap()
+            withAnimation { howItWorksStep += 1 }
+            return
+        }
+
         if currentPage == profilePage {
             saveProfileDraft()
         }
@@ -311,56 +335,6 @@ struct OnboardingView: View {
     }
 }
 
-// MARK: - Age slider
-
-private struct AgeSliderPage: View {
-    @Binding var age: Double
-    let isActive: Bool
-
-    @State private var entered = false
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 36) {
-                Spacer(minLength: 60)
-
-                Text("How old are you?")
-                    .font(.largeTitle.bold())
-                    .multilineTextAlignment(.center)
-                    .opacity(entered ? 1 : 0)
-                    .offset(y: entered ? 0 : 14)
-                    .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
-
-                Text("\(Int(age))")
-                    .font(.system(size: 96, weight: .bold, design: .rounded))
-                    .foregroundStyle(.tint)
-                    .contentTransition(.numericText())
-                    .animation(.snappy, value: age)
-                    .opacity(entered ? 1 : 0)
-                    .scaleEffect(entered ? 1 : 0.8)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.25), value: entered)
-
-                Slider(value: $age, in: 0...100, step: 1)
-                    .tint(.accentColor)
-                    .padding(.horizontal, 32)
-                    .opacity(entered ? 1 : 0)
-                    .animation(.easeOut(duration: 0.5).delay(0.4), value: entered)
-
-                Spacer(minLength: 20)
-            }
-            .padding(.horizontal, 20)
-        }
-        .onChange(of: isActive, initial: true) { _, nowActive in
-            entered = false
-            guard nowActive else { return }
-            Task {
-                try? await Task.sleep(for: .milliseconds(50))
-                entered = true
-            }
-        }
-    }
-}
-
 // MARK: - Screen-time slider
 
 private struct ScreenTimeSliderPage: View {
@@ -372,7 +346,22 @@ private struct ScreenTimeSliderPage: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 36) {
-                Spacer(minLength: 60)
+                Spacer(minLength: 16)
+
+                Image("OnboardingScreenTime")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 190)
+                    // Feathered edges: a blurred mask fades the artwork's white
+                    // backdrop into the page so it doesn't read as a card.
+                    .mask {
+                        RoundedRectangle(cornerRadius: 48, style: .continuous)
+                            .padding(18)
+                            .blur(radius: 22)
+                    }
+                    .opacity(entered ? 1 : 0)
+                    .scaleEffect(entered ? 1 : 0.92)
+                    .animation(.spring(response: 0.55, dampingFraction: 0.8).delay(0.05), value: entered)
 
                 Text("Your daily screen time?")
                     .font(.largeTitle.bold())
@@ -423,6 +412,7 @@ private struct WastedTimePage: View {
     let isActive: Bool
 
     @State private var isCalculating = true
+    @State private var showsArt = false
     @State private var displayedWeek = 0
     @State private var displayedMonth = 0
     @State private var displayedYear = 0
@@ -434,7 +424,22 @@ private struct WastedTimePage: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
-                Spacer(minLength: 60)
+                Spacer(minLength: 16)
+
+                // Mounted (invisibly) during the calculating beat so the asset
+                // is already decoded; the pop then fires in the same instant as
+                // the reveal instead of after a decode hiccup.
+                Image("OnboardingWastedTime")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: showsArt ? 190 : 0)
+                    .mask {
+                        RoundedRectangle(cornerRadius: 48, style: .continuous)
+                            .padding(18)
+                            .blur(radius: 22)
+                    }
+                    .opacity(showsArt ? 1 : 0.01)
+                    .scaleEffect(showsArt ? 1 : 0.92)
 
                 Text(isCalculating ? "Calculating your time…" : "Time you'll never get back")
                     .font(.title.bold())
@@ -463,6 +468,7 @@ private struct WastedTimePage: View {
         }
         .onChange(of: isActive, initial: true) { _, nowActive in
             isCalculating = true
+            showsArt = false
             displayedWeek = 0
             displayedMonth = 0
             displayedYear = 0
@@ -471,6 +477,9 @@ private struct WastedTimePage: View {
                 try? await Task.sleep(for: .seconds(1.8))
                 withAnimation(.easeInOut(duration: 0.45)) {
                     isCalculating = false
+                }
+                withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) {
+                    showsArt = true
                 }
                 Haptics.tap()
                 try? await Task.sleep(for: .milliseconds(150))
@@ -510,65 +519,47 @@ private struct FriendMonitorPage: View {
 
     @State private var entered = false
 
-    private let bgIcons: [(symbol: String, x: CGFloat, y: CGFloat, size: CGFloat, rotation: Double, opacity: Double)] = [
-        ("person.crop.circle.fill", 0.12, 0.14, 90, -18, 0.18),
-        ("camera.fill", 0.82, 0.10, 64, 14, 0.16),
-        ("heart.fill", 0.18, 0.78, 70, -8, 0.18),
-        ("sparkles", 0.85, 0.72, 78, 22, 0.20),
-        ("hand.thumbsup.fill", 0.72, 0.40, 56, -10, 0.14),
-        ("person.2.fill", 0.10, 0.46, 70, 8, 0.15)
-    ]
-
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                LinearGradient(
-                    colors: [Color.accentColor.opacity(0.18), Color.pink.opacity(0.10), Color.clear],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+        ZStack {
+            // The hero artwork ships on a white backdrop, so this page is
+            // solid white (and pinned light) for a seamless blend.
+            Color.white.ignoresSafeArea()
 
-                ForEach(Array(bgIcons.enumerated()), id: \.offset) { _, item in
-                    Image(systemName: item.symbol)
-                        .font(.system(size: item.size, weight: .regular))
-                        .foregroundStyle(.tint)
-                        .opacity(item.opacity)
-                        .rotationEffect(.degrees(item.rotation))
-                        .position(x: item.x * proxy.size.width, y: item.y * proxy.size.height)
+            ScrollView {
+                VStack(spacing: 20) {
+                    Spacer(minLength: 80)
+
+                    Image("OnboardingFriendMonitor")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 250)
+                        .opacity(entered ? 1 : 0)
+                        .scaleEffect(entered ? 1 : 0.9)
+                        .animation(.spring(response: 0.55, dampingFraction: 0.75).delay(0.05), value: entered)
+
+                    Text("Let a friend monitor you")
+                        .font(.largeTitle.bold())
+                        .multilineTextAlignment(.center)
+                        .opacity(entered ? 1 : 0)
+                        .offset(y: entered ? 0 : 14)
+                        .animation(.easeOut(duration: 0.5).delay(0.15), value: entered)
+
+                    Text("Willpower alone rarely works. Hand the keys to someone who'll keep you honest.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                        .opacity(entered ? 1 : 0)
+                        .offset(y: entered ? 0 : 14)
+                        .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
+
+                    Spacer(minLength: 20)
                 }
-
-                ScrollView {
-                    VStack(spacing: 20) {
-                        Spacer(minLength: 80)
-
-                        Image(systemName: "person.line.dotted.person.fill")
-                            .font(.system(size: 96, weight: .light))
-                            .foregroundStyle(.tint)
-                            .symbolEffect(.bounce, options: .nonRepeating, value: entered)
-
-                        Text("Let a friend monitor you")
-                            .font(.largeTitle.bold())
-                            .multilineTextAlignment(.center)
-                            .opacity(entered ? 1 : 0)
-                            .offset(y: entered ? 0 : 14)
-                            .animation(.easeOut(duration: 0.5).delay(0.15), value: entered)
-
-                        Text("Willpower alone rarely works. Hand the keys to someone who'll keep you honest.")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-                            .opacity(entered ? 1 : 0)
-                            .offset(y: entered ? 0 : 14)
-                            .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
-
-                        Spacer(minLength: 20)
-                    }
-                    .padding(.horizontal, 20)
-                }
+                .padding(.horizontal, 20)
             }
         }
+        // White-backdrop page reads as light regardless of system scheme.
+        .environment(\.colorScheme, .light)
         .onChange(of: isActive, initial: true) { _, nowActive in
             entered = false
             guard nowActive else { return }
@@ -584,61 +575,66 @@ private struct FriendMonitorPage: View {
 
 private struct HowItWorksPage: View {
     let isActive: Bool
+    @Binding var stepIndex: Int
 
     @State private var entered = false
 
-    private let steps: [(symbol: String, title: String, detail: String)] = [
-        ("lock.fill", "Your apps get blocked", "Pick the apps that waste your time and Deny locks you out."),
-        ("camera.fill", "Ask with a selfie", "Want extra time? Snap a photo and choose how many minutes."),
-        ("person.2.fill", "A friend decides", "They see your photo and approve or deny your request."),
-        ("lock.open.fill", "Unlock on approval", "Approved minutes unlock the apps — then they lock again.")
+    static let stepCount = 4
+
+    private let steps: [(image: String, title: String, detail: String)] = [
+        ("OnboardingStepBlocked", "Your apps get blocked", "Pick the apps that waste your time and Deny locks you out."),
+        ("OnboardingStepSelfie", "Ask with a selfie", "Want extra time? Snap a photo and choose how many minutes."),
+        ("OnboardingStepFriend", "A friend decides", "They see your photo and approve or deny your request."),
+        ("OnboardingStepUnlock", "Unlock on approval", "Approved minutes unlock the apps \u{2014} then they lock again.")
     ]
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                Spacer(minLength: 48)
+        VStack(spacing: 18) {
+            Spacer(minLength: 32)
 
-                Text("How Deny works")
-                    .font(.largeTitle.bold())
-                    .multilineTextAlignment(.center)
-                    .opacity(entered ? 1 : 0)
-                    .offset(y: entered ? 0 : 14)
-                    .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
+            Text("How Deny works")
+                .font(.largeTitle.bold())
+                .multilineTextAlignment(.center)
+                .opacity(entered ? 1 : 0)
+                .offset(y: entered ? 0 : 14)
+                .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
 
-                VStack(spacing: 14) {
-                    ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                        HStack(alignment: .top, spacing: 14) {
-                            Image(systemName: step.symbol)
-                                .font(.title3)
-                                .foregroundStyle(.tint)
-                                .frame(width: 44, height: 44)
-                                .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+            // One step per screen, swiped horizontally. No separate indicator:
+            // the steps read as one beat of the outer flow.
+            TabView(selection: $stepIndex) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    VStack(spacing: 18) {
+                        Image(step.image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 240)
 
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(step.title)
-                                    .font(.headline)
-                                Text(step.detail)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                        Text(step.title)
+                            .font(.title2.bold())
+                            .multilineTextAlignment(.center)
 
-                            Spacer(minLength: 0)
-                        }
-                        .padding(14)
-                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
-                        .opacity(entered ? 1 : 0)
-                        .offset(y: entered ? 0 : 14)
-                        .animation(.easeOut(duration: 0.5).delay(0.2 + Double(index) * 0.12), value: entered)
+                        Text(step.detail)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 12)
+
+                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, 28)
+                    .tag(index)
                 }
-                .padding(.horizontal, 20)
-
-                Spacer(minLength: 20)
             }
-            .padding(.horizontal, 20)
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .animation(.easeInOut, value: stepIndex)
+            .opacity(entered ? 1 : 0)
+            .animation(.easeOut(duration: 0.5).delay(0.2), value: entered)
         }
+        // White-backdrop art: keep the page light like the friend-monitor page
+        // so a dark-mode replay can't invert the text.
+        .background(Color.white.ignoresSafeArea())
+        .environment(\.colorScheme, .light)
         .onChange(of: isActive, initial: true) { _, nowActive in
             entered = false
             guard nowActive else { return }
@@ -691,7 +687,7 @@ private struct ProfileSetupPage: View {
                                 .background(Color.accentColor, in: Circle())
                                 .overlay {
                                     Circle()
-                                        .strokeBorder(.black, lineWidth: 2)
+                                        .strokeBorder(Color(.systemBackground), lineWidth: 2)
                                 }
                                 .offset(x: 4, y: 4)
                         }
@@ -746,14 +742,14 @@ private struct ProfileSetupPage: View {
                     .frame(height: 58)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.white.opacity(0.10))
+                            .fill(Color(.secondarySystemBackground))
                     )
                     .overlay {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .strokeBorder(
                                 trimmedDisplayName.isEmpty
                                     ? Color.orange.opacity(0.50)
-                                    : Color.white.opacity(isNameFocused ? 0.28 : 0.12),
+                                    : Color.primary.opacity(isNameFocused ? 0.28 : 0.12),
                                 lineWidth: 1
                             )
                     }
@@ -797,6 +793,7 @@ private struct ProfileSetupPage: View {
 
 private struct AppleSignInProfilePage: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var displayName: String
     let avatarImageData: Data?
     let avatarColorHex: String
@@ -887,7 +884,7 @@ private struct AppleSignInProfilePage: View {
             SignInWithAppleButton(.signIn, onRequest: { request in
                 request.requestedScopes = [.fullName, .email]
             }, onCompletion: { _ in })
-            .signInWithAppleButtonStyle(.white)
+            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
             .frame(height: 54)
             .cornerRadius(14)
             .disabled(isSigningIn)
@@ -900,7 +897,7 @@ private struct AppleSignInProfilePage: View {
 
             if isSigningIn {
                 ProgressView()
-                    .tint(.white)
+                    .tint(.primary)
             }
 
             if let signInError {
@@ -954,7 +951,7 @@ private struct AppleSignInProfilePage: View {
                             .background(Color.accentColor, in: Circle())
                             .overlay {
                                 Circle()
-                                    .strokeBorder(.black, lineWidth: 2)
+                                    .strokeBorder(Color(.systemBackground), lineWidth: 2)
                             }
                             .offset(x: 4, y: 4)
                     }
@@ -1006,14 +1003,14 @@ private struct AppleSignInProfilePage: View {
                 .frame(height: 58)
                 .background(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.10))
+                        .fill(Color(.secondarySystemBackground))
                 )
                 .overlay {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .strokeBorder(
                             trimmedDisplayName.isEmpty
                                 ? Color.orange.opacity(0.50)
-                                : Color.white.opacity(isNameFocused ? 0.28 : 0.12),
+                                : Color.primary.opacity(isNameFocused ? 0.28 : 0.12),
                             lineWidth: 1
                         )
                 }
@@ -1067,43 +1064,30 @@ private struct FinalPage: View {
 
     var body: some View {
         ZStack {
-            TimelineView(.animation) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                let x = (sin(t * 0.45) + 1) / 2
-                let y = (cos(t * 0.6) + 1) / 2
-
-                LinearGradient(
-                    colors: [Color.accentColor.opacity(0.5), Color.purple.opacity(0.45), Color.pink.opacity(0.4)],
-                    startPoint: UnitPoint(x: x, y: y),
-                    endPoint: UnitPoint(x: 1 - x, y: 1 - y)
-                )
-                .ignoresSafeArea()
-            }
+            Color.white.ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: 26) {
-                    Spacer(minLength: 80)
+                VStack(spacing: 22) {
+                    Spacer(minLength: 40)
 
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 120, weight: .light))
-                        .foregroundStyle(.white)
-                        .symbolEffect(.bounce, options: .nonRepeating, value: entered)
-                        .phaseAnimator([1.0, 1.06]) { view, phase in
-                            view.scaleEffect(phase)
-                        } animation: { _ in
-                            .easeInOut(duration: 1.6)
-                        }
+                    Image("OnboardingAllSet")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 210)
+                        .opacity(entered ? 1 : 0)
+                        .scaleEffect(entered ? 1 : 0.9)
+                        .animation(.spring(response: 0.55, dampingFraction: 0.75).delay(0.05), value: entered)
 
                     Text("You're all set")
                         .font(.largeTitle.bold())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .opacity(entered ? 1 : 0)
                         .offset(y: entered ? 0 : 14)
                         .animation(.easeOut(duration: 0.5).delay(0.15), value: entered)
 
                     Text("Grant access below to finish setting up.")
                         .font(.title3)
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 28)
                         .opacity(entered ? 1 : 0)
@@ -1144,6 +1128,7 @@ private struct FinalPage: View {
                 }
             }
         }
+        .environment(\.colorScheme, .light)
         .onChange(of: isActive, initial: true) { _, nowActive in
             entered = false
             guard nowActive else { return }
@@ -1164,23 +1149,23 @@ private struct FinalPermissionRow: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(.white)
+                .foregroundStyle(.tint)
                 .frame(width: 38, height: 38)
-                .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 11))
+                .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 11))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text(detail)
                     .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.78))
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 }
