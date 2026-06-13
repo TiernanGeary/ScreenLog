@@ -166,7 +166,14 @@ struct BlockingEnforcementService {
             repeats: false
         )
 
-        try center.startMonitoring(activityName, during: schedule)
+        do {
+            try center.startMonitoring(activityName, during: schedule)
+            let f = DateFormatter(); f.dateFormat = "HH:mm"
+            BlockingDiagnosticsLog.record("scheduled re-block monitor, fires ~\(f.string(from: reblockStart))")
+        } catch {
+            BlockingDiagnosticsLog.record("FAILED to schedule re-block: \(error)")
+            throw error
+        }
     }
 
     private func applyShields(

@@ -146,6 +146,8 @@ struct SettingsView: View {
 
                 photoCollectionSection
 
+                BlockingDiagnosticsSection()
+
                 AppSection("Account") {
                     AppCard {
                         Button {
@@ -953,3 +955,48 @@ struct ProfilePhotoCropView: View {
     }
 }
 #endif
+
+// Temporary on-device instrumentation for diagnosing blocking re-block timing.
+// Remove before App Store submission.
+struct BlockingDiagnosticsSection: View {
+    @State private var entries: [String] = BlockingDiagnosticsLog.entries()
+
+    var body: some View {
+        AppSection("Blocking Diagnostics") {
+            AppCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Button("Refresh") {
+                            AppHaptics.buttonTap()
+                            entries = BlockingDiagnosticsLog.entries()
+                        }
+                        Spacer()
+                        Button("Clear", role: .destructive) {
+                            AppHaptics.buttonTap()
+                            BlockingDiagnosticsLog.clear()
+                            entries = []
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+
+                    if entries.isEmpty {
+                        Text("No monitor events logged yet.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(entries.reversed().enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .appCardRow(verticalPadding: 12)
+            }
+        }
+        .onAppear {
+            entries = BlockingDiagnosticsLog.entries()
+        }
+    }
+}

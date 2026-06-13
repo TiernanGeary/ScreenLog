@@ -3,6 +3,7 @@ import Foundation
 
 final class ScreenLogActivityMonitorExtension: DeviceActivityMonitor {
     override func intervalDidStart(for activity: DeviceActivityName) {
+        BlockingDiagnosticsLog.record("intervalDidStart: \(activity.rawValue)")
         let state = ExtensionBlockingSupport.state()
 
         // An unblock window's re-block monitor starts its interval at the unblock
@@ -25,6 +26,7 @@ final class ScreenLogActivityMonitorExtension: DeviceActivityMonitor {
     }
 
     override func intervalDidEnd(for activity: DeviceActivityName) {
+        BlockingDiagnosticsLog.record("intervalDidEnd: \(activity.rawValue)")
         let state = ExtensionBlockingSupport.state()
         if BlockingMonitorNameBuilder.isUnblockActivity(activity.rawValue) {
             ExtensionBlockingSupport.refreshActiveShields(state: state)
@@ -39,6 +41,7 @@ final class ScreenLogActivityMonitorExtension: DeviceActivityMonitor {
     }
 
     override func eventDidReachThreshold(_ event: DeviceActivityEvent.Name, activity: DeviceActivityName) {
+        BlockingDiagnosticsLog.record("eventDidReachThreshold: \(activity.rawValue)")
         let state = ExtensionBlockingSupport.state()
         guard let groupID = ExtensionBlockingSupport.groupID(forRuleNamed: activity.rawValue, state: state) else {
             return
