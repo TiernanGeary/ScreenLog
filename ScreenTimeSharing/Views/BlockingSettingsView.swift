@@ -347,6 +347,12 @@ struct RequestFeedView: View {
             return
         }
 
+        if approve {
+            AppHaptics.success()
+        } else {
+            AppHaptics.warning()
+        }
+
         let remainingIDs = currentIDs.filter { $0 != request.id }
         if remainingIDs.isEmpty {
             selectedPhotoRequestID = ""

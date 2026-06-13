@@ -204,7 +204,10 @@ private struct PendingInviteRow: View {
             isPresented: $isConfirmingCancel,
             titleVisibility: .visible
         ) {
-            Button("Cancel Invite", role: .destructive, action: onCancel)
+            Button("Cancel Invite", role: .destructive) {
+                AppHaptics.warning()
+                onCancel()
+            }
             Button("Keep", role: .cancel) {}
         }
     }

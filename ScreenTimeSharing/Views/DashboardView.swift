@@ -1993,7 +1993,7 @@ struct FriendApprovalRequestView: View {
             message: message,
             photoJPEGData: selectedPhotoData
         ) {
-            AppHaptics.buttonTap()
+            AppHaptics.success()
             didSendRequest = true
             dismiss()
         }
