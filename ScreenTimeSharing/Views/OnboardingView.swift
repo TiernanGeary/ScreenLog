@@ -58,48 +58,50 @@ struct OnboardingView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    TabView(selection: $currentPage) {
-                        AgeSliderPage(age: $age, isActive: currentPage == 0).tag(0)
-                        ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
-                        WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
-                        FriendMonitorPage(isActive: currentPage == 3).tag(3)
-                        HowItWorksPage(isActive: currentPage == 4).tag(4)
-                        AppleSignInProfilePage(
-                            displayName: $draftDisplayName,
-                            avatarImageData: draftAvatarImageData,
-                            avatarColorHex: model.profile.avatarColorHex,
-                            isAuthenticated: model.isAuthenticated,
-                            isSigningIn: isSigningIn,
-                            signInError: signInError,
-                            isActive: currentPage == profilePage,
-                            onSignIn: { performAppleSignIn() },
-                            onPhotoTap: {
-                                AppHaptics.buttonTap()
-                                isShowingProfilePhotoOptions = true
-                            }
-                        )
-                        .tag(profilePage)
-                        FinalPage(
-                            isActive: currentPage == lastPage,
-                            showsAuthorizationError: screenTimeAuthorizationFailed
-                        )
-                        .tag(lastPage)
-                    }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
-                    .ignoresSafeArea(edges: .top)
-                    .animation(.easeInOut, value: currentPage)
-                    .onChange(of: currentPage) { oldPage, newPage in
-                        guard oldPage == profilePage, newPage != profilePage else {
-                            return
+                TabView(selection: $currentPage) {
+                    AgeSliderPage(age: $age, isActive: currentPage == 0).tag(0)
+                    ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
+                    WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
+                    FriendMonitorPage(isActive: currentPage == 3).tag(3)
+                    HowItWorksPage(isActive: currentPage == 4).tag(4)
+                    AppleSignInProfilePage(
+                        displayName: $draftDisplayName,
+                        avatarImageData: draftAvatarImageData,
+                        avatarColorHex: model.profile.avatarColorHex,
+                        isAuthenticated: model.isAuthenticated,
+                        isSigningIn: isSigningIn,
+                        signInError: signInError,
+                        isActive: currentPage == profilePage,
+                        onSignIn: { performAppleSignIn() },
+                        onPhotoTap: {
+                            AppHaptics.buttonTap()
+                            isShowingProfilePhotoOptions = true
                         }
+                    )
+                    .tag(profilePage)
+                    FinalPage(
+                        isActive: currentPage == lastPage,
+                        showsAuthorizationError: screenTimeAuthorizationFailed
+                    )
+                    .tag(lastPage)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .ignoresSafeArea()
+                .animation(.easeInOut, value: currentPage)
+                .onChange(of: currentPage) { oldPage, newPage in
+                    guard oldPage == profilePage, newPage != profilePage else {
+                        return
+                    }
 
-                        if trimmedDraftDisplayName.isEmpty, newPage > profilePage {
-                            withAnimation { currentPage = profilePage }
-                        } else if !trimmedDraftDisplayName.isEmpty {
-                            saveProfileDraft()
-                        }
+                    if trimmedDraftDisplayName.isEmpty, newPage > profilePage {
+                        withAnimation { currentPage = profilePage }
+                    } else if !trimmedDraftDisplayName.isEmpty {
+                        saveProfileDraft()
                     }
+                }
+
+                VStack(spacing: 0) {
+                    Spacer()
 
                     pageIndicator
                         .padding(.top, 8)
