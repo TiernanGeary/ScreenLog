@@ -49,6 +49,17 @@ enum ExtensionBlockingSupport {
         applyShields(for: activeGroupIDs, state: state)
     }
 
+    /// Re-applies shields as an unblock ends. The warning callback fires up to a
+    /// minute before the session's stored expiry, so the session would still
+    /// count as active; exclude it explicitly so the shield actually returns.
+    static func reapplyShieldsEndingUnblock(sessionID: String, state: BlockingState) {
+        let enabledGroupIDs = Set(BlockingStateResolver.enabledGroups(in: state).map(\.id))
+        let activeGroupIDs = activeShieldedGroupIDs().intersection(enabledGroupIDs)
+        defaults?.set(Array(activeGroupIDs), forKey: BlockingStoreCodec.activeShieldedGroupIDsKey)
+        saveShieldIndex(activeGroupIDs: activeGroupIDs, state: state)
+        applyShields(for: activeGroupIDs, state: state, excludingUnblockSessionID: sessionID)
+    }
+
     @discardableResult
     static func queueFriendRequestDraft(matching _: ApplicationToken? = nil) -> Bool {
         queueFriendRequestDraft(groupID: shieldIndex().friendRequestGroupID)
@@ -160,13 +171,17 @@ enum ExtensionBlockingSupport {
         Set(defaults?.stringArray(forKey: BlockingStoreCodec.activeShieldedGroupIDsKey) ?? [])
     }
 
-    private static func applyShields(for groupIDs: Set<String>, state: BlockingState) {
+    private static func applyShields(
+        for groupIDs: Set<String>,
+        state: BlockingState,
+        excludingUnblockSessionID excludedID: String? = nil
+    ) {
         let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state)
         let selections = state.groups
             .filter { groupIDs.contains($0.id) && $0.isEnabled && !suppressedGroupIDs.contains($0.id) }
             .compactMap { decodeSelection($0.selectionData) }
 
-        let exemptSelections = activeUnblockSelections(in: state)
+        let exemptSelections = activeUnblockSelections(in: state, excluding: excludedID)
         let exemptApplications = exemptSelections.reduce(into: Set<ApplicationToken>()) { partial, selection in
             partial.formUnion(selection.applicationTokens)
         }
@@ -192,8 +207,14 @@ enum ExtensionBlockingSupport {
         managedStore.shield.webDomainCategories = categories.isEmpty ? nil : .specific(categories, except: exemptWebDomains)
     }
 
-    private static func activeUnblockSelections(in state: BlockingState, now: Date = Date()) -> [FamilyActivitySelection] {
-        BlockingStateResolver.activeUnblockSessions(in: state, now: now).compactMap { session in
+    private static func activeUnblockSelections(
+        in state: BlockingState,
+        now: Date = Date(),
+        excluding excludedID: String? = nil
+    ) -> [FamilyActivitySelection] {
+        BlockingStateResolver.activeUnblockSessions(in: state, now: now)
+            .filter { $0.id != excludedID }
+            .compactMap { session in
             if let selectionData = session.selectionData,
                let selection = decodeSelection(selectionData) {
                 return selection

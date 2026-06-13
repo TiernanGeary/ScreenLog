@@ -1207,6 +1207,15 @@ public enum BlockingMonitorNameBuilder {
         rawName.contains(".unblock.")
     }
 
+    public static func parseUnblockSessionID(from rawName: String) -> String? {
+        let marker = "\(prefix).unblock."
+        guard rawName.hasPrefix(marker) else {
+            return nil
+        }
+        let id = String(rawName.dropFirst(marker.count))
+        return id.isEmpty ? nil : id
+    }
+
     private static func sanitized(_ value: String) -> String {
         value
             .replacingOccurrences(of: ".", with: "-")

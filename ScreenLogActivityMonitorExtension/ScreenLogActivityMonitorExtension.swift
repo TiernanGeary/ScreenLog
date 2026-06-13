@@ -6,11 +6,9 @@ final class ScreenLogActivityMonitorExtension: DeviceActivityMonitor {
         BlockingDiagnosticsLog.record("intervalDidStart: \(activity.rawValue)")
         let state = ExtensionBlockingSupport.state()
 
-        // An unblock window's re-block monitor starts its interval at the unblock
-        // expiry (a >=15-minute window is required by the system), so this start
-        // callback is our signal to re-apply shields.
+        // An unblock window starting just means the unblock is in effect; the app
+        // already removed the shield. Re-blocking happens at intervalWillEndWarning.
         if BlockingMonitorNameBuilder.isUnblockActivity(activity.rawValue) {
-            ExtensionBlockingSupport.refreshActiveShields(state: state)
             return
         }
 
@@ -45,8 +43,8 @@ final class ScreenLogActivityMonitorExtension: DeviceActivityMonitor {
     override func intervalWillEndWarning(for activity: DeviceActivityName) {
         BlockingDiagnosticsLog.record("intervalWillEndWarning: \(activity.rawValue)")
         let state = ExtensionBlockingSupport.state()
-        if BlockingMonitorNameBuilder.isUnblockActivity(activity.rawValue) {
-            ExtensionBlockingSupport.refreshActiveShields(state: state)
+        if let sessionID = BlockingMonitorNameBuilder.parseUnblockSessionID(from: activity.rawValue) {
+            ExtensionBlockingSupport.reapplyShieldsEndingUnblock(sessionID: sessionID, state: state)
         }
     }
 

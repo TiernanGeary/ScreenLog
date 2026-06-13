@@ -22,37 +22,54 @@ struct BlockingEnforcementService {
         self.defaults = defaults
     }
 
+    private static let unblockSignatureKey = "BlockingEnforcementUnblockSignature.v1"
+
     func syncMonitoring(for state: BlockingState) throws {
         let now = Date()
-        let signature = enforcementSignature(for: state, now: now)
+        let blockSig = blockSignature(for: state)
+        let unblockSig = unblockSignature(for: state, now: now)
+        let blockChanged = defaults?.string(forKey: BlockingStoreCodec.blockingEnforcementSignatureKey) != blockSig
+        let unblockChanged = defaults?.string(forKey: Self.unblockSignatureKey) != unblockSig
 
-        if defaults?.string(forKey: BlockingStoreCodec.blockingEnforcementSignatureKey) == signature {
+        if !blockChanged && !unblockChanged {
             saveShieldIndex(activeGroupIDs: currentActiveGroupIDs(for: state, now: now), state: state)
             return
         }
 
-        center.stopMonitoring()
-        reconcileActiveShields(for: state, now: now)
+        if blockChanged {
+            // Block configuration changed: re-register every block monitor. This
+            // is the churny path, now gated so it does NOT run when only an
+            // unblock session was added/expired — which was thrashing the
+            // scheduled-block monitors and toggling their shields off.
+            center.stopMonitoring()
+            reconcileActiveShields(for: state, now: now)
 
-        for group in BlockingStateResolver.enabledGroups(in: state) {
-            guard let selection = try? BlockingSelectionCodec.decode(group.selectionData),
-                  !selection.isEmpty else {
-                continue
-            }
+            for group in BlockingStateResolver.enabledGroups(in: state) {
+                guard let selection = try? BlockingSelectionCodec.decode(group.selectionData),
+                      !selection.isEmpty else {
+                    continue
+                }
 
-            switch group.mode {
-            case .timeLimit(let seconds, let days):
-                try startTimeLimit(group: group, selection: selection, seconds: seconds, days: days)
-            case .scheduled(let startMinute, let endMinute, let days):
-                try startScheduledWindows(group: group, days: days, startMinute: startMinute, endMinute: endMinute)
+                switch group.mode {
+                case .timeLimit(let seconds, let days):
+                    try startTimeLimit(group: group, selection: selection, seconds: seconds, days: days)
+                case .scheduled(let startMinute, let endMinute, let days):
+                    try startScheduledWindows(group: group, days: days, startMinute: startMinute, endMinute: endMinute)
+                }
             }
+            defaults?.set(blockSig, forKey: BlockingStoreCodec.blockingEnforcementSignatureKey)
+        } else {
+            // Only unblock state changed: leave the block monitors untouched and
+            // just re-apply shields to reflect current exemptions.
+            applyShields(for: currentActiveGroupIDs(for: state, now: now), in: state)
         }
 
+        // (Re)register monitors for active unblock sessions either way.
         for session in BlockingStateResolver.activeUnblockSessions(in: state, now: now) {
-            try startUnblockExpirationMonitor(for: session, now: now)
+            try? startUnblockExpirationMonitor(for: session, now: now)
         }
 
-        defaults?.set(signature, forKey: BlockingStoreCodec.blockingEnforcementSignatureKey)
+        defaults?.set(unblockSig, forKey: Self.unblockSignatureKey)
         defaults?.synchronize()
     }
 
@@ -240,8 +257,8 @@ struct BlockingEnforcementService {
         return activeGroupIDs.intersection(enabledGroupIDs).subtracting(suppressedGroupIDs)
     }
 
-    private func enforcementSignature(for state: BlockingState, now: Date) -> String {
-        let groupSignature = state.groups
+    private func blockSignature(for state: BlockingState) -> String {
+        state.groups
             .sorted { $0.id < $1.id }
             .map { group in
                 [
@@ -252,8 +269,10 @@ struct BlockingEnforcementService {
                 ].joined(separator: ":")
             }
             .joined(separator: "|")
+    }
 
-        let activeUnblockSignature = state.unblockSessions
+    private func unblockSignature(for state: BlockingState, now: Date) -> String {
+        state.unblockSessions
             .filter { $0.isActive(now: now) }
             .sorted { $0.id < $1.id }
             .map { session in
@@ -266,8 +285,6 @@ struct BlockingEnforcementService {
                 ].joined(separator: ":")
             }
             .joined(separator: "|")
-
-        return [groupSignature, activeUnblockSignature].joined(separator: "||")
     }
 
     private func modeSignature(_ mode: BlockGroupMode) -> String {
