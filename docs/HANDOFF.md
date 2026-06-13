@@ -21,11 +21,17 @@
 - **Codex はコミットできない**（サンドボックスが `.git/index.lock` 書き込みを拒否）。→ Codex には「**編集のみ・コミットするな**」と指示し、**Claude（あなた）が差分を検証してコミット**する。メモリ [[codex-commits-blocked]] 参照。
 - **Codex は `swift test` も走らせられない**（サンドボックスが module cache 書き込みを拒否）。→ **`swift test` は Claude が実行**して検証する。
 - **Codex は1回の実行で約2タスクで停止しがち**（完了レポート無しで出力が途切れる）。→ **小分け委譲**（1〜2タスク/回）し、毎回 `git status`/`git diff` で**実体を確認**（「完了」を鵜呑みにしない）。
-- **この環境にフル Xcode が無い**（Command Line Tools のみ）。→ **アプリターゲット（Views/AppModel/Extensions）はコンパイル検証不可**。`swift test` は **`ScreenTimeSharingCore`（SPM）のみ**。検証可能にしたいロジックは **Core に寄せる**。アプリ層は**コードレビュー＋ユーザー側 Xcode ビルド保留**。メモリ [[phase1-verification-gap]] 参照。
+- **フル Xcode が利用可能（2026-06-13 判明）**: Xcode 26.5。**アプリターゲットは `xcodebuild` でビルド検証できる**（過去セッションは「CLT のみ」と誤認しコードレビュー止まりだった）。アプリ層作業の完了前に必ずビルドすること:
+  ```
+  xcodebuild build -project ScreenTimeSharing.xcodeproj -scheme ScreenTimeSharing \
+    -destination 'id=<sim-udid>' -configuration Debug CODE_SIGNING_ALLOWED=NO
+  ```
+  （sim UDID は `xcrun simctl list devices available` から。`name=` 単独＋OS無しは失敗するので `id=` 推奨。ScreenTimeSharing スキームは埋め込み4拡張もビルドする。）`swift test` は引き続き Core（SPM, 68件）。検証可能ロジックは Core に寄せる方針は維持。
+- **`.xcodeproj` はファイル明示参照（同期フォルダではない）**。→ **新規 Core ファイルは `swift test` では自動認識されるがアプリターゲットには手動追加が必要**。漏れると Xcode ビルドで `cannot find X in scope`（Phase 2a `UsageStatsCache` / 3a `FriendBoard` で実際に発生）。`xcodeproj` gem(v1.27.0) で追加。メモリ [[phase1-verification-gap]] にコード例あり。
 - コミット時の `LF will be replaced by CRLF` 警告は無害（無視可）。
-- コミットメッセージ末尾に必ず: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+- コミットメッセージ末尾に必ず: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
 
-検証の鉄則: **Codex が「やった」と言っても、差分を `git diff` で精査し、Core は `swift test`、アプリ層は計画との突合で確認してからコミット**する。
+検証の鉄則: **Codex が「やった」と言っても、差分を `git diff` で精査し、Core は `swift test`、アプリ層は `xcodebuild` でビルド確認してからコミット**する。
 
 ---
 
@@ -98,14 +104,20 @@ Home の申請ボタンを `Ask Friends` 主役化、Feed を受信専用化。`
 - ✅ T3: Friends に「Pending Invites」セクション（ShareLink 再送/コピー/確認付き取消）。シート閉鎖・pull-to-refresh・初回表示でリロード（`4c8c7ec`）。
 - 見送り（計画に理由付き）: 受信済み招待一覧（CloudKit は未承認 share の受信箱をクエリ不可）/ QR 表示。
 
+#### ✅ Xcode ビルド検証（2026-06-13・フル Xcode で実施）
+`feature/phase3-friends-and-invites` の tip で **`xcodebuild` がアプリ＋埋め込み4拡張ともビルド成功**。検出して修正したもの（`1ce67b1`、push 済み）:
+- 新規 Core 2ファイル（`UsageStatsCache.swift`=2a / `FriendBoard.swift`=3a）が**アプリターゲット未登録**で `cannot find X in scope` → `xcodeproj` gem で app target に追加。
+- アプリ内 private `UsageHistorySignature` が Core 昇格版と衝突 → Core イニシャライザに統一。
+- `swift test` 68件 PASS（フル Xcode ツールチェーン）。
+
 ---
 
 ## 4. 次にやること（順番）
 
-1. **ユーザーに確認**: Phase 2/3 の Xcode ビルド＋検証のタイミング、PR 作成の要否とベースブランチ（phase0→1→2→3 を順に積むか、`product/accountability-locks` へ直接か）。
+1. **ユーザーに確認**: PR 作成の要否とベースブランチ（phase0→1→2→3 を順に積むか、`product/accountability-locks` へ直接か）。アプリのビルドは検証済み（残るは実機 CloudKit/Shield の動作確認）。
 2. spec の主要7領域（#1〜#7）はこれで全フェーズ着手済み。残りは各計画の「見送り」項目（フレンド詳細View、unfriend、オンボーディングのアプリ選択統合、完了後ガイド等）と横断基盤（spec §3: 通知インボックス統合・準リアルタイム同期）。次のスコープはユーザーと相談して決める。
 
-**ユーザー側に残る検証(AI 環境では不可)**: 全 phase ブランチの Xcode ビルド、シミュレータ手動確認（Phase 2b の onboarding 7ページ遷移と権限フロー、Phase 3a の Friends 統合表示）、**Phase 3b の実機 iCloud E2E（招待作成→保留表示→別端末で承認→保留から消滅→取消→リンク失効）**、Phase 1 B1 の実機 Shield フロー確認。
+**残る検証**: Xcode ビルドは AI 側で完了（tip でグリーン）。残りは**実機/シミュレータの動作確認のみ**: シミュレータ手動確認（Phase 2b の onboarding 7ページ遷移と権限フロー、Phase 3a の Friends 統合表示）、**Phase 3b の実機 iCloud E2E（招待作成→保留表示→別端末で承認→保留から消滅→取消→リンク失効）**、Phase 1 B1 の実機 Shield フロー確認。これらは実デバイス権限/CloudKit 依存のためビルドだけでは担保できない。
 
 ---
 
