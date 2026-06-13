@@ -74,7 +74,6 @@ struct OnboardingView: View {
                         isActive: currentPage == profilePage,
                         onSignIn: { performAppleSignIn() },
                         onPhotoTap: {
-                            AppHaptics.buttonTap()
                             isShowingProfilePhotoOptions = true
                         }
                     )
@@ -702,7 +701,7 @@ private struct ProfileSetupPage: View {
                                 .offset(x: 4, y: 4)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.haptic)
                     .accessibilityLabel("Set profile photo")
 
                     Text("Set up your profile")
@@ -737,14 +736,13 @@ private struct ProfileSetupPage: View {
 
                         if !displayName.isEmpty {
                             Button {
-                                AppHaptics.buttonTap()
                                 displayName = ""
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.title3)
                                     .foregroundStyle(.tertiary)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.haptic)
                             .accessibilityLabel("Clear name")
                         }
                     }
@@ -940,7 +938,7 @@ private struct AppleSignInProfilePage: View {
                             .offset(x: 4, y: 4)
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .accessibilityLabel("Set profile photo")
 
                 Text("Set up your profile")
@@ -973,14 +971,13 @@ private struct AppleSignInProfilePage: View {
 
                     if !displayName.isEmpty {
                         Button {
-                            AppHaptics.buttonTap()
                             displayName = ""
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.title3)
                                 .foregroundStyle(.tertiary)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                     }
                 }
                 .padding(.horizontal, 14)

@@ -240,9 +240,6 @@ private struct FriendBoardModePicker: View {
         HStack(spacing: 4) {
             ForEach(FriendBoardMode.allCases, id: \.self) { mode in
                 Button {
-                    if selection != mode {
-                        AppHaptics.selectionChanged()
-                    }
                     selection = mode
                 } label: {
                     Text(mode.label)
@@ -261,7 +258,7 @@ private struct FriendBoardModePicker: View {
                         }
                         .appCapsuleButtonHitArea()
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic(.selection))
             }
         }
         .padding(4)
@@ -314,9 +311,6 @@ private struct FriendLeaderboardWindowSelector: View {
         HStack(spacing: 4) {
             ForEach(visibleWindows, id: \.self) { window in
                 Button {
-                    if selection != window {
-                        AppHaptics.selectionChanged()
-                    }
                     selection = window
                 } label: {
                     Text(shortLabel(for: window))
@@ -335,7 +329,7 @@ private struct FriendLeaderboardWindowSelector: View {
                         }
                         .appCapsuleButtonHitArea()
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic(.selection))
             }
         }
         .padding(4)

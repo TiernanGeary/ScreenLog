@@ -205,9 +205,6 @@ private struct StatsRangeSelector: View {
         HStack(spacing: 4) {
             ForEach(StatsRange.allCases) { range in
                 Button {
-                    if selection != range {
-                        AppHaptics.selectionChanged()
-                    }
                     selection = range
                 } label: {
                     Text(range.label)
@@ -226,7 +223,7 @@ private struct StatsRangeSelector: View {
                         }
                         .appCapsuleButtonHitArea()
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic(.selection))
             }
         }
         .padding(4)
@@ -265,7 +262,6 @@ private struct PeriodNavigator: View {
     var body: some View {
         HStack {
             Button {
-                AppHaptics.buttonTap()
                 move(-1)
             } label: {
                 Image(systemName: "chevron.left")
@@ -275,7 +271,7 @@ private struct PeriodNavigator: View {
                     .background(Color.blue, in: Circle())
                     .shadow(color: Color.blue.opacity(0.14), radius: 6, x: 0, y: 3)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .accessibilityLabel("Previous \(range.label)")
 
             Spacer()
@@ -288,7 +284,6 @@ private struct PeriodNavigator: View {
             Spacer()
 
             Button {
-                AppHaptics.buttonTap()
                 move(1)
             } label: {
                 Image(systemName: "chevron.right")
@@ -302,7 +297,7 @@ private struct PeriodNavigator: View {
                     }
                     .shadow(color: Color.blue.opacity(canMoveForward ? 0.14 : 0), radius: 6, x: 0, y: 3)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .disabled(!canMoveForward)
             .accessibilityLabel("Next \(range.label)")
         }
@@ -343,9 +338,6 @@ private struct DayDateStrip: View {
                         date: date,
                         isSelected: calendar.isDate(date, inSameDayAs: selectedDate)
                     ) {
-                        if !calendar.isDate(date, inSameDayAs: selectedDate) {
-                            AppHaptics.selectionChanged()
-                        }
                         selectedDate = date
                     }
                     .frame(width: 42)
@@ -387,7 +379,7 @@ private struct DayDateChip: View {
             .minimumScaleFactor(0.7)
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.haptic(.selection))
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
