@@ -5,7 +5,8 @@ import UIKit
 
 struct FriendsView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var selectedLeaderboardWindow: LeaderboardWindow = .week
+    @AppStorage("friends.boardMode") private var boardMode: FriendBoardMode = .activity
+    @AppStorage("friends.leaderboardWindow") private var selectedLeaderboardWindow: LeaderboardWindow = .week
     @State private var isShowingShareSheet = false
 
     private var leaderboardEntries: [LeaderboardEntry] {
@@ -13,41 +14,48 @@ struct FriendsView: View {
         return StatsBoardBuilder.mostExtraRequested(entries: friendEntries)
     }
 
+    private var activityRows: [FriendUsageSummary] {
+        FriendBoardBuilder.activityRows(model.friendSummaries)
+    }
+
     var body: some View {
         NavigationStack {
             AppScreenScroll {
-                AppSection("Leaderboard") {
+                AppSection("Friends") {
                     VStack(alignment: .leading, spacing: 10) {
-                        FriendLeaderboardWindowSelector(selection: $selectedLeaderboardWindow)
+                        syncStatusRow
 
-                        FriendLeaderboardCard(entries: leaderboardEntries)
+                        FriendBoardModePicker(selection: $boardMode)
+
+                        if boardMode == .leaderboard {
+                            FriendLeaderboardWindowSelector(selection: $selectedLeaderboardWindow)
+
+                            FriendLeaderboardCard(entries: leaderboardEntries)
+                        } else {
+                            activityCard
+                        }
                     }
                 }
 
-                AppSection("Friend Usage") {
-                    if model.friendSummaries.isEmpty {
+                if !model.pendingInvites.isEmpty {
+                    AppSection("Pending Invites") {
                         AppCard {
-                            ContentUnavailableView(
-                                "No Friends Yet",
-                                systemImage: "person.2.slash",
-                                description: Text("Invite a friend or accept their invite to start sharing requests.")
-                            )
-                            .appCardRow(verticalPadding: 16)
-                        }
-                    } else {
-                        AppCard {
-                            ForEach(Array(model.friendSummaries.enumerated()), id: \.element.id) { index, friend in
-                                FriendSummaryRow(friend: friend)
-                                    .appCardRow(verticalPadding: 8)
+                            ForEach(Array(model.pendingInvites.enumerated()), id: \.element.id) { index, invite in
+                                PendingInviteRow(invite: invite) {
+                                    Task { await model.cancelPendingInvite(invite) }
+                                }
+                                .appCardRow(verticalPadding: 8)
 
-                                if index < model.friendSummaries.count - 1 {
+                                if index < model.pendingInvites.count - 1 {
                                     AppCardDivider()
                                 }
                             }
                         }
                     }
                 }
-
+            }
+            .task {
+                await model.reloadPendingInvites()
             }
             .refreshable {
                 AppHaptics.selectionChanged()
@@ -71,8 +79,59 @@ struct FriendsView: View {
             .onChange(of: selectedLeaderboardWindow) { _, newWindow in
                 model.setLeaderboardWindow(newWindow)
             }
-            .sheet(isPresented: $isShowingShareSheet) {
+            .sheet(isPresented: $isShowingShareSheet, onDismiss: {
+                Task { await model.reloadPendingInvites() }
+            }) {
                 CloudShareSheet(store: model.snapshotStore, profile: model.profile)
+            }
+        }
+    }
+
+    private var syncStatusRow: some View {
+        HStack(spacing: 8) {
+            Text(UsageFormatting.lastUpdated(model.friendsLastSyncedAt))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button {
+                AppHaptics.buttonTap()
+                Task { await refreshFriends() }
+            } label: {
+                if model.isSyncingFriends {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Label("Sync Now", systemImage: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(model.isSyncingFriends)
+            .accessibilityLabel("Sync friends now")
+        }
+    }
+
+    private var activityCard: some View {
+        AppCard {
+            if activityRows.isEmpty {
+                ContentUnavailableView(
+                    "No Friends Yet",
+                    systemImage: "person.2.slash",
+                    description: Text("Invite a friend or accept their invite to start sharing requests.")
+                )
+                .appCardRow(verticalPadding: 16)
+            } else {
+                ForEach(Array(activityRows.enumerated()), id: \.element.id) { index, friend in
+                    FriendSummaryRow(friend: friend)
+                        .appCardRow(verticalPadding: 8)
+
+                    if index < activityRows.count - 1 {
+                        AppCardDivider()
+                    }
+                }
             }
         }
     }
@@ -80,6 +139,167 @@ struct FriendsView: View {
     private func refreshFriends() async {
         await model.reloadFriends()
         await model.syncFriendRequests()
+        await model.reloadPendingInvites()
+    }
+}
+
+private struct PendingInviteRow: View {
+    let invite: PendingFriendInvite
+    let onCancel: () -> Void
+
+    @State private var didCopyLink = false
+    @State private var isConfirmingCancel = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "link")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.blue)
+                .frame(width: 34, height: 34)
+                .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Invite link")
+                    .font(.subheadline.weight(.semibold))
+
+                Text(createdLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            if let url = invite.url {
+                ShareLink(item: url) {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Resend invite link")
+
+                Button {
+                    AppHaptics.buttonTap()
+                    UIPasteboard.general.url = url
+                    didCopyLink = true
+                } label: {
+                    Image(systemName: didCopyLink ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Copy invite link")
+            }
+
+            Button(role: .destructive) {
+                AppHaptics.buttonTap()
+                isConfirmingCancel = true
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Cancel invite")
+        }
+        .confirmationDialog(
+            "Cancel this invite? The link will stop working.",
+            isPresented: $isConfirmingCancel,
+            titleVisibility: .visible
+        ) {
+            Button("Cancel Invite", role: .destructive) {
+                AppHaptics.warning()
+                onCancel()
+            }
+            Button("Keep", role: .cancel) {}
+        }
+    }
+
+    private var createdLabel: String {
+        guard let createdAt = invite.createdAt else {
+            return "Waiting for a friend to accept"
+        }
+        return "Created " + createdAt.formatted(.relative(presentation: .named))
+    }
+}
+
+private enum FriendBoardMode: String, CaseIterable {
+    case activity
+    case leaderboard
+
+    var label: String {
+        switch self {
+        case .activity:
+            return "Activity"
+        case .leaderboard:
+            return "Leaderboard"
+        }
+    }
+}
+
+private struct FriendBoardModePicker: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Binding var selection: FriendBoardMode
+    @Namespace private var namespace
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(FriendBoardMode.allCases, id: \.self) { mode in
+                Button {
+                    selection = mode
+                } label: {
+                    Text(mode.label)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 34)
+                        .foregroundStyle(selection == mode ? .white : .primary)
+                        .background {
+                            if selection == mode {
+                                Capsule()
+                                    .fill(Color.blue)
+                                    .matchedGeometryEffect(id: "selected-friend-board-mode", in: namespace)
+                                    .shadow(color: Color.blue.opacity(0.18), radius: 7, x: 0, y: 3)
+                            }
+                        }
+                        .appCapsuleButtonHitArea()
+                }
+                .buttonStyle(.haptic(.selection))
+            }
+        }
+        .padding(4)
+        .background {
+            Capsule()
+                .fill(backgroundColor)
+                .overlay {
+                    Capsule()
+                        .strokeBorder(borderColor, lineWidth: 0.8)
+                }
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.05), radius: 14, x: 0, y: 7)
+        }
+        .animation(.snappy(duration: 0.22), value: selection)
+    }
+
+    private var backgroundColor: Color {
+        colorScheme == .dark
+            ? Color(red: 0.075, green: 0.085, blue: 0.10)
+            : Color.white.opacity(0.72)
+    }
+
+    private var borderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.86)
+    }
+}
+
+private extension FriendFreshness {
+    var indicatorColor: Color {
+        switch self {
+        case .fresh:
+            return .green
+        case .aging:
+            return .yellow
+        case .stale:
+            return .orange
+        case .missing:
+            return Color.secondary
+        }
     }
 }
 
@@ -94,9 +314,6 @@ private struct FriendLeaderboardWindowSelector: View {
         HStack(spacing: 4) {
             ForEach(visibleWindows, id: \.self) { window in
                 Button {
-                    if selection != window {
-                        AppHaptics.selectionChanged()
-                    }
                     selection = window
                 } label: {
                     Text(shortLabel(for: window))
@@ -115,7 +332,7 @@ private struct FriendLeaderboardWindowSelector: View {
                         }
                         .appCapsuleButtonHitArea()
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic(.selection))
             }
         }
         .padding(4)
@@ -233,6 +450,12 @@ private struct FriendLeaderboardRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
+
+                if let lastUpdated = entry.lastUpdated {
+                    Text(UsageFormatting.lastUpdated(lastUpdated))
+                        .font(.caption2)
+                        .foregroundStyle(FriendFreshness.tier(lastUpdated: lastUpdated).indicatorColor)
+                }
             }
         }
     }
@@ -312,11 +535,11 @@ struct FriendSummaryRow: View {
                     Text(friend.displayName)
                         .font(.headline)
 
-                    if friend.isStale {
-                        Text("Stale")
-                            .font(.caption2.bold())
-                            .foregroundStyle(.orange)
-                    }
+                    Spacer(minLength: 8)
+
+                    Text(UsageFormatting.lastUpdated(friend.lastUpdated))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(FriendFreshness.tier(lastUpdated: friend.lastUpdated).indicatorColor)
                 }
 
                 HStack(spacing: 12) {

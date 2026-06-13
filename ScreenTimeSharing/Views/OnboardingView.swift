@@ -58,47 +58,50 @@ struct OnboardingView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    TabView(selection: $currentPage) {
-                        AgeSliderPage(age: $age, isActive: currentPage == 0).tag(0)
-                        ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
-                        WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
-                        FriendMonitorPage(isActive: currentPage == 3).tag(3)
-                        HowItWorksPage(isActive: currentPage == 4).tag(4)
-                        AppleSignInProfilePage(
-                            displayName: $draftDisplayName,
-                            avatarImageData: draftAvatarImageData,
-                            avatarColorHex: model.profile.avatarColorHex,
-                            isAuthenticated: model.isAuthenticated,
-                            isSigningIn: isSigningIn,
-                            signInError: signInError,
-                            isActive: currentPage == profilePage,
-                            onSignIn: { performAppleSignIn() },
-                            onPhotoTap: {
-                                AppHaptics.buttonTap()
-                                isShowingProfilePhotoOptions = true
-                            }
-                        )
-                        .tag(profilePage)
-                        FinalPage(
-                            isActive: currentPage == lastPage,
-                            showsAuthorizationError: screenTimeAuthorizationFailed
-                        )
-                        .tag(lastPage)
-                    }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
-                    .animation(.easeInOut, value: currentPage)
-                    .onChange(of: currentPage) { oldPage, newPage in
-                        guard oldPage == profilePage, newPage != profilePage else {
-                            return
+                TabView(selection: $currentPage) {
+                    AgeSliderPage(age: $age, isActive: currentPage == 0).tag(0)
+                    ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
+                    WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
+                    FriendMonitorPage(isActive: currentPage == 3).tag(3)
+                    HowItWorksPage(isActive: currentPage == 4).tag(4)
+                    AppleSignInProfilePage(
+                        displayName: $draftDisplayName,
+                        avatarImageData: draftAvatarImageData,
+                        avatarColorHex: model.profile.avatarColorHex,
+                        isAuthenticated: model.isAuthenticated,
+                        isSigningIn: isSigningIn,
+                        signInError: signInError,
+                        isActive: currentPage == profilePage,
+                        onSignIn: { performAppleSignIn() },
+                        onPhotoTap: {
+                            isShowingProfilePhotoOptions = true
                         }
+                    )
+                    .tag(profilePage)
+                    FinalPage(
+                        isActive: currentPage == lastPage,
+                        showsAuthorizationError: screenTimeAuthorizationFailed
+                    )
+                    .tag(lastPage)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .ignoresSafeArea()
+                .sensoryFeedback(.selection, trigger: currentPage)
+                .animation(.easeInOut, value: currentPage)
+                .onChange(of: currentPage) { oldPage, newPage in
+                    guard oldPage == profilePage, newPage != profilePage else {
+                        return
+                    }
 
-                        if trimmedDraftDisplayName.isEmpty, newPage > profilePage {
-                            withAnimation { currentPage = profilePage }
-                        } else if !trimmedDraftDisplayName.isEmpty {
-                            saveProfileDraft()
-                        }
+                    if trimmedDraftDisplayName.isEmpty, newPage > profilePage {
+                        withAnimation { currentPage = profilePage }
+                    } else if !trimmedDraftDisplayName.isEmpty {
+                        saveProfileDraft()
                     }
+                }
+
+                VStack(spacing: 0) {
+                    Spacer()
 
                     pageIndicator
                         .padding(.top, 8)
@@ -345,6 +348,7 @@ private struct AgeSliderPage: View {
                     .padding(.horizontal, 32)
                     .opacity(entered ? 1 : 0)
                     .animation(.easeOut(duration: 0.5).delay(0.4), value: entered)
+                    .sensoryFeedback(.selection, trigger: age)
 
                 Spacer(minLength: 20)
             }
@@ -400,6 +404,7 @@ private struct ScreenTimeSliderPage: View {
                     .padding(.horizontal, 32)
                     .opacity(entered ? 1 : 0)
                     .animation(.easeOut(duration: 0.5).delay(0.4), value: entered)
+                    .sensoryFeedback(.selection, trigger: hours)
 
                 Spacer(minLength: 20)
             }
@@ -696,7 +701,7 @@ private struct ProfileSetupPage: View {
                                 .offset(x: 4, y: 4)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.haptic)
                     .accessibilityLabel("Set profile photo")
 
                     Text("Set up your profile")
@@ -731,14 +736,13 @@ private struct ProfileSetupPage: View {
 
                         if !displayName.isEmpty {
                             Button {
-                                AppHaptics.buttonTap()
                                 displayName = ""
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.title3)
                                     .foregroundStyle(.tertiary)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.haptic)
                             .accessibilityLabel("Clear name")
                         }
                     }
@@ -934,7 +938,7 @@ private struct AppleSignInProfilePage: View {
                             .offset(x: 4, y: 4)
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .accessibilityLabel("Set profile photo")
 
                 Text("Set up your profile")
@@ -967,14 +971,13 @@ private struct AppleSignInProfilePage: View {
 
                     if !displayName.isEmpty {
                         Button {
-                            AppHaptics.buttonTap()
                             displayName = ""
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.title3)
                                 .foregroundStyle(.tertiary)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                     }
                 }
                 .padding(.horizontal, 14)

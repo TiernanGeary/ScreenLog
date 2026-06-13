@@ -151,14 +151,6 @@ enum FriendRequestDemoPhotoFactory {
 }
 #endif
 
-private struct UsageHistorySignature: Equatable {
-    let snapshotCount: Int
-    let latestSnapshotUpdate: Date?
-    let totalDuration: TimeInterval
-    let hourlyDayCount: Int
-    let hourlyDuration: TimeInterval
-}
-
 @MainActor
 final class IncomingFriendShareInvite: Identifiable {
     let id: String
@@ -236,6 +228,9 @@ final class AppModel: ObservableObject {
     @Published var usageHistory: [DailyUsageSnapshot] = []
     @Published var hourlyUsageByDayID: [String: [TimeInterval]] = [:]
     @Published var friendSummaries: [FriendUsageSummary] = []
+    @Published var friendsLastSyncedAt: Date?
+    @Published var isSyncingFriends = false
+    @Published var pendingInvites: [PendingFriendInvite] = []
     @Published var leaderboardEntries: [LeaderboardEntry] = []
     @Published var leaderboardWindow: LeaderboardWindow = .week
     @Published var cloudAvailability: CloudAvailability = .checking
@@ -576,15 +571,8 @@ final class AppModel: ObservableObject {
 
     private func usageHistorySignature() -> UsageHistorySignature {
         UsageHistorySignature(
-            snapshotCount: usageHistory.count,
-            latestSnapshotUpdate: usageHistory.map(\.lastUpdated).max(),
-            totalDuration: usageHistory.reduce(TimeInterval(0)) { partial, snapshot in
-                partial + max(0, snapshot.totalDuration ?? 0)
-            },
-            hourlyDayCount: hourlyUsageByDayID.count,
-            hourlyDuration: hourlyUsageByDayID.values.reduce(TimeInterval(0)) { partial, values in
-                partial + values.reduce(TimeInterval(0)) { $0 + max(0, $1) }
-            }
+            history: usageHistory,
+            hourlyDurationsByDayID: hourlyUsageByDayID
         )
     }
 
@@ -1213,11 +1201,15 @@ final class AppModel: ObservableObject {
     }
 
     func reloadFriends() async {
+        isSyncingFriends = true
+        defer { isSyncingFriends = false }
+
         do {
             let previousFriendIDs = Set(friendSummaries.map(\.id))
             let hadLoadedFriends = hasLoadedFriendsOnce
             let friends = try await snapshotStore.fetchFriendSummaries(for: profile)
             friendSummaries = friends
+            friendsLastSyncedAt = Date()
             leaderboardEntries = []
             refreshLocalAccountabilityStats()
             try widgetCacheWriter.write(
@@ -1239,6 +1231,24 @@ final class AppModel: ObservableObject {
             hasLoadedFriendsOnce = true
         } catch {
             message = "Could not refresh friends: \(error.localizedDescription)"
+        }
+    }
+
+    func reloadPendingInvites() async {
+        do {
+            pendingInvites = try await snapshotStore.fetchPendingInvites(profile: profile)
+        } catch {
+            // Keep the previous list; the pending section is advisory and
+            // reloadFriends already surfaces connectivity errors.
+        }
+    }
+
+    func cancelPendingInvite(_ invite: PendingFriendInvite) async {
+        do {
+            try await snapshotStore.cancelPendingInvite(channelUUID: invite.id, profile: profile)
+            pendingInvites.removeAll { $0.id == invite.id }
+        } catch {
+            message = "Could not cancel invite: \(error.localizedDescription)"
         }
     }
 

@@ -800,13 +800,12 @@ private struct BlockingOverviewCard: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 Button {
-                    AppHaptics.buttonTap()
                     hasSeenAskFriendsCoachmark = true
                 } label: {
                     Text("Got it")
                         .font(.caption.weight(.semibold))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .foregroundStyle(.tint)
             }
             .appCardRow(verticalPadding: 14)
@@ -836,13 +835,12 @@ private struct BlockingOverviewCard: View {
                     AppCard {
                         HStack(spacing: 12) {
                             Button {
-                                AppHaptics.buttonTap()
                                 newGroupDraft = BlockGroupDraft()
                             } label: {
                                 Label("New Group", systemImage: "plus.circle.fill")
                                     .font(.subheadline.weight(.semibold))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.haptic)
                             .foregroundStyle(.tint)
                         }
                         .appCardRow(verticalPadding: 14)
@@ -874,7 +872,6 @@ private struct BlockingOverviewCard: View {
 
     private var startBlockingButton: some View {
         Button {
-            AppHaptics.buttonTap()
             newGroupDraft = BlockGroupDraft()
         } label: {
             HStack(spacing: 14) {
@@ -886,7 +883,7 @@ private struct BlockingOverviewCard: View {
             }
             .appCardRow(verticalPadding: 18)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.haptic)
         .foregroundStyle(.tint)
     }
 
@@ -940,7 +937,7 @@ private struct BlockingOverviewCard: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button {
@@ -952,7 +949,7 @@ private struct BlockingOverviewCard: View {
                         .frame(width: 28, height: 32)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .accessibilityLabel("Open \(group.name) settings")
             }
 
@@ -971,7 +968,6 @@ private struct BlockingOverviewCard: View {
     }
 
     private func openGroup(_ group: BlockGroup) {
-        AppHaptics.buttonTap()
         viewedGroup = group
     }
 
@@ -986,7 +982,6 @@ private struct BlockingOverviewCard: View {
         let isDisabled = totalUnblocks == 0 || remainingUnblocks == 0 || hasActiveUnblock
 
         return Button {
-            AppHaptics.buttonTap()
             unblockConfirmationGroup = group
         } label: {
             Text("Unblock \(remainingUnblocks)/\(totalUnblocks)")
@@ -1001,7 +996,7 @@ private struct BlockingOverviewCard: View {
                 )
                 .appCapsuleButtonHitArea()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.haptic)
         .foregroundStyle(isDisabled ? Color.secondary : Color.accentColor)
         .disabled(isDisabled)
         .accessibilityLabel("Unblock \(group.name), \(remainingUnblocks) of \(totalUnblocks) left today")
@@ -1012,7 +1007,6 @@ private struct BlockingOverviewCard: View {
         let pendingCount = model.pendingOutgoingFriendRequestCount(for: group.id)
 
         return Button {
-            AppHaptics.buttonTap()
             if isEnabled {
                 friendRequestGroup = group
             } else {
@@ -1047,7 +1041,7 @@ private struct BlockingOverviewCard: View {
                     }
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.haptic)
         .foregroundStyle(isEnabled ? Color.white : Color.secondary)
         .accessibilityLabel(
             isEnabled
@@ -1294,10 +1288,7 @@ private struct UnblockConfirmationView: View {
     private func bottomButton(for group: BlockGroup) -> some View {
         Button {
             if model.startLocalUnblock(groupID: group.id, seconds: group.unblockConfig.maxDurationSeconds) {
-                AppHaptics.buttonTap()
                 dismiss()
-            } else {
-                AppHaptics.selectionChanged()
             }
         } label: {
             Text("Stop Blocking")
@@ -1305,7 +1296,7 @@ private struct UnblockConfirmationView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.haptic)
         .foregroundStyle(Color.white)
         .background {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1347,12 +1338,11 @@ private struct BlockingDeveloperToolsCard: View {
                 }
 
                 Button {
-                    AppHaptics.buttonTap()
                     isShowingDummyBlockedApp = true
                 } label: {
                     DummyBlockedAppRow(title: "Preview Blocked App")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
             }
             .appCardRow(verticalPadding: 14)
         }
@@ -1435,7 +1425,6 @@ private struct DummyBlockedAppPreviewView: View {
 
                 AppCard {
                     Button {
-                        AppHaptics.buttonTap()
                         dismiss()
                     } label: {
                         Text("OK")
@@ -1448,7 +1437,7 @@ private struct DummyBlockedAppPreviewView: View {
                             )
                             .appRoundedButtonHitArea(cornerRadius: 14)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.haptic)
                     .foregroundStyle(.white)
                     .appCardRow(verticalPadding: 10)
 
@@ -1469,7 +1458,6 @@ private struct DummyBlockedAppPreviewView: View {
     private var friendRequestButton: some View {
         if let group, group.friendRequestConfig.isEnabled {
             Button {
-                AppHaptics.buttonTap()
                 friendRequestGroup = group
             } label: {
                 Text("Request time from friends")
@@ -1482,7 +1470,7 @@ private struct DummyBlockedAppPreviewView: View {
                     )
                     .appRoundedButtonHitArea(cornerRadius: 14)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(.tint)
             .appCardRow(verticalPadding: 10)
         } else {
@@ -1498,7 +1486,7 @@ private struct DummyBlockedAppPreviewView: View {
                     )
                     .appRoundedButtonHitArea(cornerRadius: 14)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(.secondary)
             .disabled(true)
             .appCardRow(verticalPadding: 10)
@@ -1734,7 +1722,6 @@ struct FriendApprovalRequestView: View {
             AppSection("Request") {
                 AppCard {
                     Button {
-                        AppHaptics.buttonTap()
                         isMessageFocused = false
                         isShowingMinutePicker = true
                     } label: {
@@ -1757,7 +1744,7 @@ struct FriendApprovalRequestView: View {
                         }
                         .appCardRow()
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.haptic)
                 }
 
                 Text("Shorter requests (5–15 min) tend to get approved faster.")
@@ -1782,7 +1769,6 @@ struct FriendApprovalRequestView: View {
                                 AppCardDivider()
                             }
                             Button {
-                                AppHaptics.selectionChanged()
                                 isMessageFocused = false
                                 if selectedFriendIDs.contains(friend.id) {
                                     selectedFriendIDs.remove(friend.id)
@@ -1809,7 +1795,7 @@ struct FriendApprovalRequestView: View {
                                 }
                                 .appCardRow()
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.haptic(.selection))
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel(friend.name)
                             .accessibilityValue(selectedFriendIDs.contains(friend.id) ? "Selected" : "Not selected")
@@ -1862,7 +1848,7 @@ struct FriendApprovalRequestView: View {
                 returnToCamera()
             }
             .font(.caption.weight(.semibold))
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(Color.accentColor)
         }
     }
@@ -1889,7 +1875,7 @@ struct FriendApprovalRequestView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(Color.accentColor)
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1898,7 +1884,6 @@ struct FriendApprovalRequestView: View {
             .appRoundedButtonHitArea(cornerRadius: 16)
 
             Button {
-                AppHaptics.buttonTap()
                 requestStep = .details
             } label: {
                 Text("Continue")
@@ -1906,7 +1891,7 @@ struct FriendApprovalRequestView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(Color.white)
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -1937,7 +1922,7 @@ struct FriendApprovalRequestView: View {
                     }
                     .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(canSendRequest ? Color.white : Color.secondary)
             .disabled(!canSendRequest)
             .accessibilityLabel("Send time request")
@@ -2008,7 +1993,7 @@ struct FriendApprovalRequestView: View {
             message: message,
             photoJPEGData: selectedPhotoData
         ) {
-            AppHaptics.buttonTap()
+            AppHaptics.success()
             didSendRequest = true
             dismiss()
         }
@@ -2026,7 +2011,6 @@ struct FriendApprovalRequestView: View {
     }
 
     private func returnToCamera() {
-        AppHaptics.buttonTap()
         selectedPhotoData = nil
         requestStep = .capture
     }

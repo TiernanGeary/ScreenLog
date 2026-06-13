@@ -62,14 +62,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        // Explicitly request alert permission up front. registerForRemoteNotifications()
-        // returns an APNs token even without alert permission, so a server *alert*
-        // push is silently dropped by iOS unless the user has authorized alerts.
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
-            DispatchQueue.main.async {
-                application.registerForRemoteNotifications()
-            }
-        }
+        // Notification authorization is requested during onboarding's final page,
+        // coordinated with Screen Time and camera, instead of ambushing the user at
+        // launch. Still register for remote notifications so we have an APNs token;
+        // iOS only delivers *alert* pushes once the user has authorized them (which
+        // onboarding handles), while silent CloudKit pushes work regardless.
+        application.registerForRemoteNotifications()
         return true
     }
 

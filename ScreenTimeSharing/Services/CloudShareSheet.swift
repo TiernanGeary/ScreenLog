@@ -157,6 +157,7 @@ struct CloudShareSheet: View {
             preparedShare = result.share
             preparedContainer = result.container
             phase = .ready(url)
+            AppHaptics.success()
             presentCloudSharing()
         } catch {
             phase = .failed(error.localizedDescription)
