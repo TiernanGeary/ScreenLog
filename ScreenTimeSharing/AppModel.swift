@@ -151,14 +151,6 @@ enum FriendRequestDemoPhotoFactory {
 }
 #endif
 
-private struct UsageHistorySignature: Equatable {
-    let snapshotCount: Int
-    let latestSnapshotUpdate: Date?
-    let totalDuration: TimeInterval
-    let hourlyDayCount: Int
-    let hourlyDuration: TimeInterval
-}
-
 @MainActor
 final class IncomingFriendShareInvite: Identifiable {
     let id: String
@@ -579,15 +571,8 @@ final class AppModel: ObservableObject {
 
     private func usageHistorySignature() -> UsageHistorySignature {
         UsageHistorySignature(
-            snapshotCount: usageHistory.count,
-            latestSnapshotUpdate: usageHistory.map(\.lastUpdated).max(),
-            totalDuration: usageHistory.reduce(TimeInterval(0)) { partial, snapshot in
-                partial + max(0, snapshot.totalDuration ?? 0)
-            },
-            hourlyDayCount: hourlyUsageByDayID.count,
-            hourlyDuration: hourlyUsageByDayID.values.reduce(TimeInterval(0)) { partial, values in
-                partial + values.reduce(TimeInterval(0)) { $0 + max(0, $1) }
-            }
+            history: usageHistory,
+            hourlyDurationsByDayID: hourlyUsageByDayID
         )
     }
 

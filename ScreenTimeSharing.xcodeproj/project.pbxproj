@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		49F04D585B1A0662820F9B72 /* UsageStatsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 537F24C2141DAC4FC714057C /* UsageStatsCache.swift */; };
+		A9216282F0743207BA8D67F4 /* FriendBoard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 442D31BFB000AFFBF2E14692 /* FriendBoard.swift */; };
 		B10000000000000000000001 /* CapabilityStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* CapabilityStatus.swift */; };
 		B10000000000000000000002 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* Models.swift */; };
 		B10000000000000000000003 /* DateBoundaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000003 /* DateBoundaries.swift */; };
@@ -22,9 +24,6 @@
 		B10000000000000000000013 /* DeviceActivityScreenTimeProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000010 /* DeviceActivityScreenTimeProvider.swift */; };
 		B10000000000000000000014 /* AppGroupWidgetCacheWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000011 /* AppGroupWidgetCacheWriter.swift */; };
 		B10000000000000000000015 /* CloudKitUsageSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000012 /* CloudKitUsageSnapshotStore.swift */; };
-		B10000000000000000000033 /* AppleSignInService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000027 /* AppleSignInService.swift */; };
-		B10000000000000000000034 /* SubscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000028 /* SubscriptionService.swift */; };
-		B10000000000000000000035 /* PushServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000029 /* PushServerClient.swift */; };
 		B10000000000000000000016 /* CloudShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000013 /* CloudShareSheet.swift */; };
 		B10000000000000000000017 /* CloudKitShareAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000014 /* CloudKitShareAcceptance.swift */; };
 		B10000000000000000000018 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000015 /* RootView.swift */; };
@@ -42,7 +41,10 @@
 		B10000000000000000000030 /* ScreenTimeReportStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000009 /* ScreenTimeReportStorage.swift */; };
 		B10000000000000000000031 /* ScreenTimeReportContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000025 /* ScreenTimeReportContext.swift */; };
 		B10000000000000000000032 /* ScreenTimeReportBridgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000026 /* ScreenTimeReportBridgeView.swift */; };
-		B30000000000000000000001 /* Resources/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000006 /* Resources/Assets.xcassets */; };
+		B10000000000000000000033 /* AppleSignInService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000027 /* AppleSignInService.swift */; };
+		B10000000000000000000034 /* SubscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000028 /* SubscriptionService.swift */; };
+		B10000000000000000000035 /* PushServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000029 /* PushServerClient.swift */; };
+		B30000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000006 /* Assets.xcassets */; };
 		B40000000000000000000002 /* ScreenLogActivityMonitorExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F10000000000000000000010 /* ScreenLogActivityMonitorExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B40000000000000000000003 /* ScreenLogShieldActionExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F20000000000000000000010 /* ScreenLogShieldActionExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B40000000000000000000004 /* ScreenLogShieldConfigurationExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F30000000000000000000010 /* ScreenLogShieldConfigurationExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -120,6 +122,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		442D31BFB000AFFBF2E14692 /* FriendBoard.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FriendBoard.swift; sourceTree = "<group>"; };
+		537F24C2141DAC4FC714057C /* UsageStatsCache.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UsageStatsCache.swift; sourceTree = "<group>"; };
 		A00000000000000000000012 /* ScreenTimeSharing.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScreenTimeSharing.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C00000000000000000000001 /* CapabilityStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapabilityStatus.swift; sourceTree = "<group>"; };
 		C00000000000000000000002 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -135,16 +139,13 @@
 		D00000000000000000000003 /* ScreenTimeSharingApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeSharingApp.swift; sourceTree = "<group>"; };
 		D00000000000000000000004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D00000000000000000000005 /* ScreenTimeSharing.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ScreenTimeSharing.entitlements; sourceTree = "<group>"; };
-		D00000000000000000000006 /* Resources/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
+		D00000000000000000000006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		D00000000000000000000007 /* LocalProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalProfileStore.swift; sourceTree = "<group>"; };
 		D00000000000000000000008 /* FamilyActivitySelectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FamilyActivitySelectionStore.swift; sourceTree = "<group>"; };
 		D00000000000000000000009 /* ScreenTimeProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeProvider.swift; sourceTree = "<group>"; };
 		D00000000000000000000010 /* DeviceActivityScreenTimeProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceActivityScreenTimeProvider.swift; sourceTree = "<group>"; };
 		D00000000000000000000011 /* AppGroupWidgetCacheWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroupWidgetCacheWriter.swift; sourceTree = "<group>"; };
 		D00000000000000000000012 /* CloudKitUsageSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitUsageSnapshotStore.swift; sourceTree = "<group>"; };
-		D00000000000000000000027 /* AppleSignInService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInService.swift; sourceTree = "<group>"; };
-		D00000000000000000000028 /* SubscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionService.swift; sourceTree = "<group>"; };
-		D00000000000000000000029 /* PushServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushServerClient.swift; sourceTree = "<group>"; };
 		D00000000000000000000013 /* CloudShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudShareSheet.swift; sourceTree = "<group>"; };
 		D00000000000000000000014 /* CloudKitShareAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitShareAcceptance.swift; sourceTree = "<group>"; };
 		D00000000000000000000015 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -159,6 +160,9 @@
 		D00000000000000000000024 /* BlockingSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockingSettingsView.swift; sourceTree = "<group>"; };
 		D00000000000000000000025 /* ScreenTimeReportContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeReportContext.swift; sourceTree = "<group>"; };
 		D00000000000000000000026 /* ScreenTimeReportBridgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenTimeReportBridgeView.swift; sourceTree = "<group>"; };
+		D00000000000000000000027 /* AppleSignInService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInService.swift; sourceTree = "<group>"; };
+		D00000000000000000000028 /* SubscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionService.swift; sourceTree = "<group>"; };
+		D00000000000000000000029 /* PushServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushServerClient.swift; sourceTree = "<group>"; };
 		F10000000000000000000001 /* ExtensionBlockingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionBlockingSupport.swift; sourceTree = "<group>"; };
 		F10000000000000000000002 /* ScreenLogActivityMonitorExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenLogActivityMonitorExtension.swift; sourceTree = "<group>"; };
 		F10000000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -226,7 +230,7 @@
 				F20000000000000000000020 /* ScreenLogShieldActionExtension */,
 				F30000000000000000000020 /* ScreenLogShieldConfigurationExtension */,
 				F40000000000000000000020 /* ScreenLogDeviceActivityReportExtension */,
-				A00000000000000000000006 /* Sources/ScreenTimeSharingCore */,
+				A00000000000000000000006 /* ScreenTimeSharingCore */,
 				A00000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -251,14 +255,14 @@
 				D00000000000000000000003 /* ScreenTimeSharingApp.swift */,
 				A00000000000000000000007 /* Services */,
 				A00000000000000000000008 /* Views */,
-				D00000000000000000000006 /* Resources/Assets.xcassets */,
+				D00000000000000000000006 /* Assets.xcassets */,
 				D00000000000000000000004 /* Info.plist */,
 				D00000000000000000000005 /* ScreenTimeSharing.entitlements */,
 			);
 			path = ScreenTimeSharing;
 			sourceTree = "<group>";
 		};
-		A00000000000000000000006 /* Sources/ScreenTimeSharingCore */ = {
+		A00000000000000000000006 /* ScreenTimeSharingCore */ = {
 			isa = PBXGroup;
 			children = (
 				C00000000000000000000001 /* CapabilityStatus.swift */,
@@ -270,6 +274,8 @@
 				C00000000000000000000007 /* AccountabilityModels.swift */,
 				C00000000000000000000008 /* BlockingModels.swift */,
 				C00000000000000000000009 /* ScreenTimeReportStorage.swift */,
+				537F24C2141DAC4FC714057C /* UsageStatsCache.swift */,
+				442D31BFB000AFFBF2E14692 /* FriendBoard.swift */,
 			);
 			path = Sources/ScreenTimeSharingCore;
 			sourceTree = "<group>";
@@ -501,7 +507,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B30000000000000000000001 /* Resources/Assets.xcassets in Resources */,
+				B30000000000000000000001 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -575,6 +581,8 @@
 				B10000000000000000000022 /* SettingsView.swift in Sources */,
 				B10000000000000000000023 /* SharedViewBits.swift in Sources */,
 				B10000000000000000000032 /* ScreenTimeReportBridgeView.swift in Sources */,
+				49F04D585B1A0662820F9B72 /* UsageStatsCache.swift in Sources */,
+				A9216282F0743207BA8D67F4 /* FriendBoard.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
