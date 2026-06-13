@@ -248,9 +248,12 @@ extension View {
 enum AppHaptics {
     #if canImport(UIKit)
     @MainActor private static let buttonTapGenerator = UIImpactFeedbackGenerator(style: .light)
+    @MainActor private static let softGenerator = UIImpactFeedbackGenerator(style: .soft)
     @MainActor private static let selectionGenerator = UISelectionFeedbackGenerator()
+    @MainActor private static let notificationGenerator = UINotificationFeedbackGenerator()
     #endif
 
+    /// Light tap for ordinary button presses.
     static func buttonTap() {
         #if canImport(UIKit)
         Task { @MainActor in
@@ -260,6 +263,7 @@ enum AppHaptics {
         #endif
     }
 
+    /// Selection change for toggles, pickers, segmented controls, tab switches.
     static func selectionChanged() {
         #if canImport(UIKit)
         Task { @MainActor in
@@ -267,6 +271,91 @@ enum AppHaptics {
             selectionGenerator.prepare()
         }
         #endif
+    }
+
+    /// Soft, low-key feedback for incidental state changes.
+    static func soft() {
+        #if canImport(UIKit)
+        Task { @MainActor in
+            softGenerator.impactOccurred(intensity: 0.5)
+            softGenerator.prepare()
+        }
+        #endif
+    }
+
+    /// Strong, rewarding success — approvals, sends, invite creation.
+    static func success() {
+        #if canImport(UIKit)
+        Task { @MainActor in
+            notificationGenerator.notificationOccurred(.success)
+            notificationGenerator.prepare()
+        }
+        #endif
+    }
+
+    /// Warning — cancel, revoke, destructive confirmations.
+    static func warning() {
+        #if canImport(UIKit)
+        Task { @MainActor in
+            notificationGenerator.notificationOccurred(.warning)
+            notificationGenerator.prepare()
+        }
+        #endif
+    }
+
+    /// Error — failed operations.
+    static func error() {
+        #if canImport(UIKit)
+        Task { @MainActor in
+            notificationGenerator.notificationOccurred(.error)
+            notificationGenerator.prepare()
+        }
+        #endif
+    }
+}
+
+/// Semantic haptic vocabulary used by HapticButtonStyle and call sites.
+enum HapticStyle {
+    case tap
+    case selection
+    case soft
+    case success
+    case warning
+
+    @MainActor func fire() {
+        switch self {
+        case .tap: AppHaptics.buttonTap()
+        case .selection: AppHaptics.selectionChanged()
+        case .soft: AppHaptics.soft()
+        case .success: AppHaptics.success()
+        case .warning: AppHaptics.warning()
+        }
+    }
+}
+
+/// Plain-looking button style that adds a haptic on press-down, so every button
+/// using it buzzes without a manual call. Visually matches `.plain` (renders the
+/// label unchanged); the haptic is the only added behavior.
+struct HapticButtonStyle: ButtonStyle {
+    var haptic: HapticStyle = .tap
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .onChange(of: configuration.isPressed) { _, isPressed in
+                if isPressed {
+                    haptic.fire()
+                }
+            }
+    }
+}
+
+extension ButtonStyle where Self == HapticButtonStyle {
+    /// Drop-in replacement for `.plain` that also fires a light tap.
+    static var haptic: HapticButtonStyle { HapticButtonStyle() }
+
+    /// Variant for buttons whose meaning warrants a different haptic.
+    static func haptic(_ style: HapticStyle) -> HapticButtonStyle {
+        HapticButtonStyle(haptic: style)
     }
 }
 
