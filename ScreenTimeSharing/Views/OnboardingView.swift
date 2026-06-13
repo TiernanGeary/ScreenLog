@@ -87,6 +87,7 @@ struct OnboardingView: View {
                         .tag(lastPage)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
+                    .ignoresSafeArea(edges: .top)
                     .animation(.easeInOut, value: currentPage)
                     .onChange(of: currentPage) { oldPage, newPage in
                         guard oldPage == profilePage, newPage != profilePage else {
