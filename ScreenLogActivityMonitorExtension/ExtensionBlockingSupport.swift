@@ -176,7 +176,15 @@ enum ExtensionBlockingSupport {
         state: BlockingState,
         excludingUnblockSessionID excludedID: String? = nil
     ) {
-        let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state)
+        // A group with an active unblock session is suppressed (not shielded).
+        // When ending a specific unblock, that session must also be dropped from
+        // suppression — otherwise the group stays suppressed because the warning
+        // fires just before the session's stored expiry, and nothing re-shields.
+        let suppressedGroupIDs = Set(
+            BlockingStateResolver.activeUnblockSessions(in: state)
+                .filter { $0.id != excludedID }
+                .map(\.groupID)
+        )
         let selections = state.groups
             .filter { groupIDs.contains($0.id) && $0.isEnabled && !suppressedGroupIDs.contains($0.id) }
             .compactMap { decodeSelection($0.selectionData) }
