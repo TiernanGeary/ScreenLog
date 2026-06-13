@@ -40,6 +40,16 @@ final class ScreenLogActivityMonitorExtension: DeviceActivityMonitor {
         ExtensionBlockingSupport.setShieldActive(false, groupID: groupID, state: state)
     }
 
+    // Fires `warningTime` before intervalEnd — for unblock windows this lands at
+    // the unblock expiry, giving us a reliable sub-15-minute re-block trigger.
+    override func intervalWillEndWarning(for activity: DeviceActivityName) {
+        BlockingDiagnosticsLog.record("intervalWillEndWarning: \(activity.rawValue)")
+        let state = ExtensionBlockingSupport.state()
+        if BlockingMonitorNameBuilder.isUnblockActivity(activity.rawValue) {
+            ExtensionBlockingSupport.refreshActiveShields(state: state)
+        }
+    }
+
     override func eventDidReachThreshold(_ event: DeviceActivityEvent.Name, activity: DeviceActivityName) {
         BlockingDiagnosticsLog.record("eventDidReachThreshold: \(activity.rawValue)")
         let state = ExtensionBlockingSupport.state()

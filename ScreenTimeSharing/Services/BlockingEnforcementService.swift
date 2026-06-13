@@ -150,26 +150,30 @@ struct BlockingEnforcementService {
         let activityName = DeviceActivityName(
             BlockingMonitorNameBuilder.unblockActivityName(sessionID: session.id)
         )
-        // DeviceActivity won't deliver callbacks for intervals shorter than
-        // ~15 minutes, so we cannot fire intervalDidEnd at a 5-minute mark.
-        // Instead schedule a >=15-minute window that STARTS at the unblock
-        // expiry — intervalDidStart fires at that moment (re-applying shields)
-        // while the interval length still satisfies the system minimum.
-        // Schedules also operate at minute resolution, so align to the minute.
+        // DeviceActivity enforces a 15-minute minimum interval (intervalTooShort)
+        // and its intervalDidStart/intervalDidEnd callbacks are unreliable for
+        // short non-repeating windows. The supported way to get a sub-15-minute
+        // callback is warningTime + intervalWillEndWarning: schedule a >=15-minute
+        // interval and set the warning so the warning callback lands at the
+        // unblock expiry. e.g. a 5-minute unblock => 15-minute interval with a
+        // 10-minute warning fires the warning at the 5-minute mark.
         let calendar = Calendar.current
-        let reblockStart = session.expiresAt
-        let reblockEnd = calendar.date(byAdding: .minute, value: 16, to: reblockStart)
-            ?? reblockStart.addingTimeInterval(16 * 60)
+        let durationMinutes = max(1, Int((session.expiresAt.timeIntervalSince(now) / 60).rounded()))
+        let minutesToEnd = max(15, durationMinutes + 1)
+        let warningMinutes = minutesToEnd - durationMinutes
+        let intervalEnd = calendar.date(byAdding: .minute, value: minutesToEnd, to: now)
+            ?? now.addingTimeInterval(Double(minutesToEnd) * 60)
+
         let schedule = DeviceActivitySchedule(
-            intervalStart: minuteAlignedComponents(for: reblockStart),
-            intervalEnd: minuteAlignedComponents(for: reblockEnd),
-            repeats: false
+            intervalStart: minuteAlignedComponents(for: now),
+            intervalEnd: minuteAlignedComponents(for: intervalEnd),
+            repeats: false,
+            warningTime: DateComponents(minute: warningMinutes)
         )
 
         do {
             try center.startMonitoring(activityName, during: schedule)
-            let f = DateFormatter(); f.dateFormat = "HH:mm"
-            BlockingDiagnosticsLog.record("scheduled re-block monitor, fires ~\(f.string(from: reblockStart))")
+            BlockingDiagnosticsLog.record("scheduled re-block: warning at \(durationMinutes)m (interval \(minutesToEnd)m, warn \(warningMinutes)m)")
         } catch {
             BlockingDiagnosticsLog.record("FAILED to schedule re-block: \(error)")
             throw error
