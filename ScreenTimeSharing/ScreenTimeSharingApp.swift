@@ -59,6 +59,7 @@ struct ScreenTimeSharingApp: App {
                         return
                     }
 
+                    model.reapplyBlockingOnForeground()
                     model.reloadUsageHistoryFromSharedStorage()
                     model.requestScreenTimeReportRefresh()
                     model.refreshPendingShieldFriendRequest()

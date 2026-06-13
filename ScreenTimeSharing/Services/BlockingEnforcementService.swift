@@ -150,9 +150,16 @@ struct BlockingEnforcementService {
         let activityName = DeviceActivityName(
             BlockingMonitorNameBuilder.unblockActivityName(sessionID: session.id)
         )
+        // DeviceActivity schedules operate at MINUTE resolution. Including the
+        // seconds component produced a malformed interval whose intervalDidEnd
+        // never fired, so timed unblocks never re-blocked. Build the interval at
+        // minute granularity, starting a minute in the past so the system treats
+        // it as already-running and only needs to deliver the end callback.
+        let calendar = Calendar.current
+        let start = calendar.date(byAdding: .minute, value: -1, to: now) ?? now
         let schedule = DeviceActivitySchedule(
-            intervalStart: absoluteDateComponents(for: now),
-            intervalEnd: absoluteDateComponents(for: session.expiresAt),
+            intervalStart: minuteAlignedComponents(for: start),
+            intervalEnd: minuteAlignedComponents(for: session.expiresAt),
             repeats: false
         )
 
@@ -281,9 +288,9 @@ struct BlockingEnforcementService {
         )
     }
 
-    private func absoluteDateComponents(for date: Date) -> DateComponents {
+    private func minuteAlignedComponents(for date: Date) -> DateComponents {
         Calendar.current.dateComponents(
-            [.calendar, .timeZone, .year, .month, .day, .hour, .minute, .second],
+            [.calendar, .timeZone, .year, .month, .day, .hour, .minute],
             from: date
         )
     }

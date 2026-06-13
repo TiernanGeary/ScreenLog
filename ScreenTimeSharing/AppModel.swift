@@ -1580,6 +1580,27 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Backstop for timed unblocks: re-evaluates blocking whenever the app
+    /// returns to the foreground. If an unblock window has expired, dropping the
+    /// stale session and re-syncing slams the shield back on immediately — even
+    /// if the background DeviceActivity callback was late or missed.
+    func reapplyBlockingOnForeground(now: Date = Date()) {
+        let hadActiveUnblock = blockingState.unblockSessions.contains { $0.isActive(now: now) }
+        let expiredCount = blockingState.unblockSessions.filter { !$0.isActive(now: now) }.count
+
+        if expiredCount > 0 {
+            blockingState.unblockSessions.removeAll { !$0.isActive(now: now) }
+            try? persistBlockingState()
+        }
+
+        // Re-sync whenever there were (or are) unblock sessions, so the shield
+        // state always reflects reality on return to the app.
+        if hadActiveUnblock || expiredCount > 0 {
+            syncBlockingEnforcement()
+            refreshLocalAccountabilityStats()
+        }
+    }
+
     private func loadUsageHistory() {
         guard let data = usageHistoryDefaults?.data(forKey: UsageHistoryCodec.storageKey),
               let payload = try? UsageHistoryCodec.decode(data) else {
