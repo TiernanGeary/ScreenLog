@@ -150,16 +150,19 @@ struct BlockingEnforcementService {
         let activityName = DeviceActivityName(
             BlockingMonitorNameBuilder.unblockActivityName(sessionID: session.id)
         )
-        // DeviceActivity schedules operate at MINUTE resolution. Including the
-        // seconds component produced a malformed interval whose intervalDidEnd
-        // never fired, so timed unblocks never re-blocked. Build the interval at
-        // minute granularity, starting a minute in the past so the system treats
-        // it as already-running and only needs to deliver the end callback.
+        // DeviceActivity won't deliver callbacks for intervals shorter than
+        // ~15 minutes, so we cannot fire intervalDidEnd at a 5-minute mark.
+        // Instead schedule a >=15-minute window that STARTS at the unblock
+        // expiry — intervalDidStart fires at that moment (re-applying shields)
+        // while the interval length still satisfies the system minimum.
+        // Schedules also operate at minute resolution, so align to the minute.
         let calendar = Calendar.current
-        let start = calendar.date(byAdding: .minute, value: -1, to: now) ?? now
+        let reblockStart = session.expiresAt
+        let reblockEnd = calendar.date(byAdding: .minute, value: 16, to: reblockStart)
+            ?? reblockStart.addingTimeInterval(16 * 60)
         let schedule = DeviceActivitySchedule(
-            intervalStart: minuteAlignedComponents(for: start),
-            intervalEnd: minuteAlignedComponents(for: session.expiresAt),
+            intervalStart: minuteAlignedComponents(for: reblockStart),
+            intervalEnd: minuteAlignedComponents(for: reblockEnd),
             repeats: false
         )
 
