@@ -87,6 +87,7 @@ struct OnboardingView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .ignoresSafeArea()
+                .sensoryFeedback(.selection, trigger: currentPage)
                 .animation(.easeInOut, value: currentPage)
                 .onChange(of: currentPage) { oldPage, newPage in
                     guard oldPage == profilePage, newPage != profilePage else {
@@ -348,6 +349,7 @@ private struct AgeSliderPage: View {
                     .padding(.horizontal, 32)
                     .opacity(entered ? 1 : 0)
                     .animation(.easeOut(duration: 0.5).delay(0.4), value: entered)
+                    .sensoryFeedback(.selection, trigger: age)
 
                 Spacer(minLength: 20)
             }
@@ -403,6 +405,7 @@ private struct ScreenTimeSliderPage: View {
                     .padding(.horizontal, 32)
                     .opacity(entered ? 1 : 0)
                     .animation(.easeOut(duration: 0.5).delay(0.4), value: entered)
+                    .sensoryFeedback(.selection, trigger: hours)
 
                 Spacer(minLength: 20)
             }

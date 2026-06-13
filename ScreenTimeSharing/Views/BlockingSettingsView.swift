@@ -2533,6 +2533,7 @@ struct BlockGroupEditorView: View {
                 AppCard {
                     Toggle("Allow friend approval requests", isOn: $draft.friendRequestsEnabled)
                         .appCardRow()
+                        .sensoryFeedback(.selection, trigger: draft.friendRequestsEnabled)
                 }
             }
 
@@ -3183,6 +3184,7 @@ private struct RepeatDaysPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Toggle("Repeat every day", isOn: everyDayBinding)
+                .sensoryFeedback(.selection, trigger: everyDayBinding.wrappedValue)
 
             if selectedDays != Set(BlockWeekday.everyDay) {
                 HStack(spacing: 7) {

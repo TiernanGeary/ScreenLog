@@ -272,6 +272,7 @@ private struct AppTabs: View {
             }
         }
         .animation(.snappy(duration: 0.22), value: selection)
+        .sensoryFeedback(.selection, trigger: selection)
         .safeAreaInset(edge: .bottom) {
             GlassTabBar(selection: $selection, feedBadgeCount: requestFeedAttentionCount)
         }
