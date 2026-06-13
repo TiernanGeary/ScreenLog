@@ -223,7 +223,7 @@ struct RequestFeedView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
 
             friendRequestActions(request, direction: direction)
         }
@@ -245,9 +245,7 @@ struct RequestFeedView: View {
         case .sent:
             if request.status == .approved {
                 Button {
-                    if model.collectFriendRequest(id: request.id) {
-                        AppHaptics.buttonTap()
-                    }
+                    _ = model.collectFriendRequest(id: request.id)
                 } label: {
                     Label("Collect", systemImage: "checkmark.circle.fill")
                         .font(.caption.weight(.semibold))
@@ -259,7 +257,7 @@ struct RequestFeedView: View {
                         )
                         .appRoundedButtonHitArea(cornerRadius: 12)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
                 .frame(maxWidth: .infinity)
             }
@@ -349,7 +347,6 @@ struct RequestFeedView: View {
             return
         }
 
-        AppHaptics.buttonTap()
         let remainingIDs = currentIDs.filter { $0 != request.id }
         if remainingIDs.isEmpty {
             selectedPhotoRequestID = ""
@@ -738,7 +735,7 @@ private struct FriendRequestPhotoBookCard: View {
                                 .padding(.vertical, 13)
                                 .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.white)
 
                         Button {
@@ -750,7 +747,7 @@ private struct FriendRequestPhotoBookCard: View {
                                 .padding(.vertical, 13)
                                 .background(Color.green.opacity(0.86), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.white)
                     }
                     .padding(.top, 4)
@@ -947,7 +944,7 @@ private struct FriendRequestDetailView: View {
                         )
                         .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .accessibilityLabel("Back")
             }
         }
@@ -962,9 +959,7 @@ private struct FriendRequestDetailView: View {
         case .sent:
             if request.status == .approved {
                 Button {
-                    if model.collectFriendRequest(id: request.id) {
-                        AppHaptics.buttonTap()
-                    }
+                    _ = model.collectFriendRequest(id: request.id)
                 } label: {
                     Label("Collect Time", systemImage: "checkmark.circle.fill")
                         .font(.subheadline.weight(.semibold))
@@ -975,7 +970,7 @@ private struct FriendRequestDetailView: View {
                                 .fill(Color.green.opacity(0.12))
                         )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
             }
         case .received:
@@ -1256,13 +1251,12 @@ struct BlockingSettingsView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                             Button {
-                                AppHaptics.buttonTap()
                                 editorDraft = BlockGroupDraft()
                             } label: {
                                 Label("Create Block Group", systemImage: "plus")
                                     .font(.subheadline.weight(.semibold))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.haptic)
                             .foregroundStyle(.tint)
                         }
                         .appCardRow()
@@ -1272,14 +1266,13 @@ struct BlockingSettingsView: View {
                 AppSection("Block Groups") {
                     AppCard {
                         Button {
-                            AppHaptics.buttonTap()
                             editorDraft = BlockGroupDraft()
                         } label: {
                             Label("New Block Group", systemImage: "plus.circle.fill")
                                 .font(.subheadline.weight(.semibold))
                                 .appCardRow()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.tint)
                     }
                 }
@@ -1469,9 +1462,7 @@ struct BlockingSettingsView: View {
         case .sent:
             if request.status == .approved {
                 Button {
-                    if model.collectFriendRequest(id: request.id) {
-                        AppHaptics.buttonTap()
-                    }
+                    _ = model.collectFriendRequest(id: request.id)
                 } label: {
                     Label("Collect", systemImage: "checkmark.circle.fill")
                         .font(.caption.weight(.semibold))
@@ -1482,7 +1473,7 @@ struct BlockingSettingsView: View {
                                 .fill(Color.green.opacity(0.12))
                         )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .foregroundStyle(Color(red: 0.08, green: 0.58, blue: 0.32))
             }
         case .received:
@@ -1618,7 +1609,7 @@ struct BlockingSettingsView: View {
                     Image(systemName: "pencil")
                         .font(.subheadline.weight(.semibold))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .foregroundStyle(.tint)
                 .accessibilityLabel("Edit group")
 
@@ -1642,7 +1633,7 @@ struct BlockingSettingsView: View {
                     Image(systemName: "trash")
                         .font(.subheadline)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
             }
         }
         .saturation(isMuted ? 0 : 1)
@@ -1678,7 +1669,6 @@ struct BlockingSettingsView: View {
     }
 
     private func beginProtectedAction(_ kind: PasswordProtectedAction.Kind, group: BlockGroup) {
-        AppHaptics.buttonTap()
         if kind == .edit, group.requiresPasswordSetup {
             editorDraft = BlockGroupDraft(group: group)
             return
@@ -1884,12 +1874,11 @@ struct PasswordPromptView: View {
                                     Text("\(group.name) needs a passcode before it can be changed.")
                                         .font(.subheadline)
                                     Button {
-                                        AppHaptics.buttonTap()
                                         onSetPassword(group)
                                     } label: {
                                         Label("Set Passcode", systemImage: "key")
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.haptic)
                                     .foregroundStyle(.tint)
                                 }
                                 .appCardRow()
@@ -1907,11 +1896,9 @@ struct PasswordPromptView: View {
 
                                     Button {
                                         if model.verifyPassword(for: group, password: password) {
-                                            AppHaptics.buttonTap()
                                             passwordError = nil
                                             onUnlocked(action.kind, group, password)
                                         } else {
-                                            AppHaptics.selectionChanged()
                                             withAnimation(.snappy(duration: 0.18)) {
                                                 passwordError = password.isEmpty
                                                     ? "Enter the group passcode."
@@ -1922,7 +1909,7 @@ struct PasswordPromptView: View {
                                         Label(submitLabel, systemImage: submitSystemImage)
                                             .font(.subheadline.weight(.semibold))
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.haptic)
                                     .foregroundStyle(submitColor)
                                 }
                                 .appCardRow()
@@ -1958,26 +1945,24 @@ struct PasswordPromptView: View {
                                         Button {
                                             if model.completePasswordReset(for: group, newPassword: newPassword),
                                                let updatedGroup = model.blockingState.groups.first(where: { $0.id == group.id }) {
-                                                AppHaptics.buttonTap()
                                                 onUnlocked(action.kind, updatedGroup, newPassword)
                                             }
                                         } label: {
                                             Label("Reset Passcode", systemImage: "key.fill")
                                         }
-                                        .buttonStyle(.plain)
+                                        .buttonStyle(.haptic)
                                         .foregroundStyle(.tint)
                                     }
                                 }
                                 .appCardRow()
                             } else {
                                 Button {
-                                    AppHaptics.buttonTap()
                                     isConfirmingPasswordRecovery = true
                                 } label: {
                                     Label("Forgot Password", systemImage: "clock.badge.exclamationmark")
                                         .appCardRow()
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.haptic)
                                 .foregroundStyle(.yellow)
                             }
                         }
@@ -2226,7 +2211,7 @@ struct BlockGroupConfigurationView: View {
                     .tint(.secondary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.haptic)
         .foregroundStyle(.secondary)
         .opacity(0.72)
         .appCardRow(verticalPadding: 12)
@@ -2318,7 +2303,6 @@ struct BlockGroupConfigurationView: View {
     private func footerActions(for group: BlockGroup) -> some View {
         VStack(spacing: 10) {
             Button {
-                AppHaptics.buttonTap()
                 beginPasscodeEdit(for: group)
             } label: {
                 Label(editButtonTitle(for: group), systemImage: "lock.open")
@@ -2326,7 +2310,7 @@ struct BlockGroupConfigurationView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(Color.white)
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -2361,7 +2345,6 @@ struct BlockGroupConfigurationView: View {
     }
 
     private func beginPasscodeToggle(for group: BlockGroup) {
-        AppHaptics.buttonTap()
         passwordAction = PasswordProtectedAction(kind: .toggleEnabled, groupID: group.id)
     }
 
@@ -2459,7 +2442,6 @@ struct BlockGroupEditorView: View {
             AppSection("Apps & Websites To Block") {
                 AppCard {
                     Button {
-                        AppHaptics.buttonTap()
                         isShowingActivityPicker = true
                     } label: {
                         HStack(spacing: 12) {
@@ -2480,7 +2462,7 @@ struct BlockGroupEditorView: View {
                         }
                         .appCardRow()
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.haptic)
                 }
             }
 
@@ -2547,7 +2529,6 @@ struct BlockGroupEditorView: View {
 
             if canDelete, onDelete != nil {
                 Button(role: .destructive) {
-                    AppHaptics.buttonTap()
                     isConfirmingDelete = true
                 } label: {
                     Text("Delete Block Group")
@@ -2555,7 +2536,7 @@ struct BlockGroupEditorView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .foregroundStyle(Color.white)
                 .background {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -2631,7 +2612,6 @@ struct BlockGroupEditorView: View {
     private var saveButton: some View {
         VStack(spacing: 0) {
             Button {
-                AppHaptics.buttonTap()
                 save()
             } label: {
                 HStack(spacing: 10) {
@@ -2647,7 +2627,7 @@ struct BlockGroupEditorView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(Color.white)
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -2723,7 +2703,6 @@ struct BlockGroupEditorView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button {
-            AppHaptics.buttonTap()
             action()
         } label: {
             HStack {
@@ -2738,7 +2717,7 @@ struct BlockGroupEditorView: View {
             }
             .appCardRow()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.haptic)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.45)
     }
@@ -2880,7 +2859,7 @@ private struct BlockGroupPasswordSetupView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .foregroundStyle(Color.white)
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -2938,7 +2917,6 @@ private struct BlockGroupPasswordSetupView: View {
         }
 
         validationMessage = nil
-        AppHaptics.buttonTap()
         isSaving = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
@@ -3190,7 +3168,6 @@ private struct RepeatDaysPicker: View {
                 HStack(spacing: 7) {
                     ForEach(BlockWeekday.everyDay) { day in
                         Button {
-                            AppHaptics.selectionChanged()
                             toggle(day)
                         } label: {
                             Text(day.shortLabel)
@@ -3202,7 +3179,7 @@ private struct RepeatDaysPicker: View {
                                         .fill(selectedDays.contains(day) ? Color.accentColor : unselectedDayBackground)
                                 )
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic(.selection))
                     }
                 }
             }
