@@ -34,13 +34,12 @@ struct SettingsView: View {
                 AppSection("Sharing") {
                     AppCard {
                         Button {
-                            AppHaptics.buttonTap()
                             isShowingShareSheet = true
                         } label: {
                             Label("Invite Friends", systemImage: "square.and.arrow.up")
                                 .appCardRow()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.tint)
                     }
                 }
@@ -56,7 +55,6 @@ struct SettingsView: View {
                         AppCardDivider()
                         if !model.hasScreenTimeAuthorization {
                             Button {
-                                AppHaptics.buttonTap()
                                 Task {
                                     await model.requestScreenTimeAuthorization()
                                 }
@@ -64,12 +62,11 @@ struct SettingsView: View {
                                 Label("Request Screen Time Access", systemImage: "hourglass.badge.plus")
                                     .appCardRow()
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.haptic)
                             .foregroundStyle(.tint)
                             AppCardDivider()
                         }
                         Button {
-                            AppHaptics.buttonTap()
                             Task {
                                 await model.refreshAndPublish()
                             }
@@ -77,11 +74,10 @@ struct SettingsView: View {
                             Label("Refresh Screen Time", systemImage: "arrow.clockwise")
                                 .appCardRow()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.tint)
                         AppCardDivider()
                         Button {
-                            AppHaptics.buttonTap()
                             Task {
                                 await model.bootstrapCloudKitDevelopmentSchema()
                             }
@@ -89,7 +85,7 @@ struct SettingsView: View {
                             Label("Bootstrap CloudKit Schema", systemImage: "icloud.and.arrow.up")
                                 .appCardRow()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.tint)
                         AppCardDivider()
                         LabeledContent("iCloud", value: model.cloudAvailability.label)
@@ -102,7 +98,6 @@ struct SettingsView: View {
                 AppSection("Danger Zone") {
                     AppCard {
                         Button(role: .destructive) {
-                            AppHaptics.buttonTap()
                             Task {
                                 await model.resetAccountForDebugging()
                             }
@@ -110,7 +105,7 @@ struct SettingsView: View {
                             Label("Reset Account (Wipe All Data)", systemImage: "trash")
                                 .appCardRow()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.red)
                         .disabled(model.isWorking)
                     }
@@ -121,23 +116,21 @@ struct SettingsView: View {
                 AppSection("Simulator Demo") {
                     AppCard {
                         Button {
-                            AppHaptics.buttonTap()
                             model.seedDemoScreenTime()
                         } label: {
                             Label("Add Demo Screen Time", systemImage: "iphone.gen3")
                                 .appCardRow()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.tint)
 
                         Button {
-                            AppHaptics.buttonTap()
                             model.resetOnboarding()
                         } label: {
                             Label("Replay Onboarding", systemImage: "arrow.counterclockwise")
                                 .appCardRow()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.haptic)
                         .foregroundStyle(.tint)
                     }
                 }
@@ -202,7 +195,6 @@ struct SettingsView: View {
 
         return VStack(spacing: 13) {
             Button {
-                AppHaptics.buttonTap()
                 isShowingProfilePhotoOptions = true
             } label: {
                 ProfileAvatar(
@@ -224,7 +216,7 @@ struct SettingsView: View {
                         .offset(x: 3, y: 3)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .confirmationDialog("Profile Photo", isPresented: $isShowingProfilePhotoOptions, titleVisibility: .visible) {
                 #if canImport(UIKit)
                 Button("Take Photo") {
@@ -248,7 +240,6 @@ struct SettingsView: View {
             .accessibilityLabel("Change profile icon")
 
             Button {
-                AppHaptics.buttonTap()
                 draftDisplayName = profile.displayName
                 isEditingDisplayName = true
             } label: {
@@ -264,7 +255,7 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .accessibilityLabel("Edit display name")
         }
         .frame(maxWidth: .infinity)
@@ -288,12 +279,11 @@ struct SettingsView: View {
                     LazyVGrid(columns: photoBoardColumns, spacing: 10) {
                         ForEach(acceptedPhotoItems) { item in
                             Button {
-                                AppHaptics.buttonTap()
                                 selectedCollectionPhoto = item
                             } label: {
                                 AcceptedRequestPhotoTile(item: item)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.haptic)
                         }
                     }
                     .appCardRow(verticalPadding: 12)
@@ -598,14 +588,13 @@ struct EditDisplayNameSheet: View {
     private var clearButton: some View {
         if !displayName.isEmpty {
             Button {
-                AppHaptics.buttonTap()
                 displayName = ""
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title3)
                     .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.haptic)
             .accessibilityLabel("Clear name")
         }
     }
@@ -622,7 +611,6 @@ struct EditDisplayNameSheet: View {
 
     private var saveButton: some View {
         Button {
-            AppHaptics.buttonTap()
             save()
         } label: {
             Text("Save")
@@ -633,7 +621,7 @@ struct EditDisplayNameSheet: View {
                 .foregroundStyle(saveButtonTextColor)
                 .appRoundedButtonHitArea(cornerRadius: 14)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.haptic)
         .disabled(trimmedDisplayName.isEmpty)
     }
 
@@ -746,7 +734,6 @@ struct ProfilePhotoCropView: View {
                 .frame(height: 390)
 
                 Button {
-                    AppHaptics.buttonTap()
                     if let data = croppedImageData(cropSide: activeCropSide) {
                         onSave(data)
                         dismiss()
@@ -760,7 +747,7 @@ struct ProfilePhotoCropView: View {
                         .foregroundStyle(.white)
                         .appRoundedButtonHitArea(cornerRadius: 14)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.haptic)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
             }
