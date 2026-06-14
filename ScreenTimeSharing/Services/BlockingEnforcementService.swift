@@ -170,27 +170,28 @@ struct BlockingEnforcementService {
         // DeviceActivity enforces a 15-minute minimum interval (intervalTooShort)
         // and its intervalDidStart/intervalDidEnd callbacks are unreliable for
         // short non-repeating windows. The supported way to get a sub-15-minute
-        // callback is warningTime + intervalWillEndWarning: schedule a >=15-minute
-        // interval and set the warning so the warning callback lands at the
-        // unblock expiry. e.g. a 5-minute unblock => 15-minute interval with a
-        // 10-minute warning fires the warning at the 5-minute mark.
-        let calendar = Calendar.current
-        let durationMinutes = max(1, Int((session.expiresAt.timeIntervalSince(now) / 60).rounded()))
-        let minutesToEnd = max(15, durationMinutes + 1)
-        let warningMinutes = minutesToEnd - durationMinutes
-        let intervalEnd = calendar.date(byAdding: .minute, value: minutesToEnd, to: now)
-            ?? now.addingTimeInterval(Double(minutesToEnd) * 60)
+        // callback is warningTime + intervalWillEndWarning: schedule an interval
+        // that ends a fixed 15 minutes AFTER the unblock expiry, with a flat
+        // 15-minute warning, so intervalWillEndWarning lands exactly at expiry.
+        //
+        // Precision lives in intervalEnd's seconds (not in warningTime): pinning
+        // intervalEnd to expiresAt + 15m and warningTime to a round 15m makes the
+        // warning fire at the true expiry instant instead of snapping to the next
+        // clock minute, so the re-block matches the visible countdown.
+        let warningInterval: TimeInterval = 15 * 60
+        let intervalEnd = session.expiresAt.addingTimeInterval(warningInterval)
 
         let schedule = DeviceActivitySchedule(
-            intervalStart: minuteAlignedComponents(for: now),
-            intervalEnd: minuteAlignedComponents(for: intervalEnd),
+            intervalStart: secondAlignedComponents(for: now),
+            intervalEnd: secondAlignedComponents(for: intervalEnd),
             repeats: false,
-            warningTime: DateComponents(minute: warningMinutes)
+            warningTime: DateComponents(minute: 15)
         )
 
         do {
             try center.startMonitoring(activityName, during: schedule)
-            BlockingDiagnosticsLog.record("scheduled re-block: warning at \(durationMinutes)m (interval \(minutesToEnd)m, warn \(warningMinutes)m)")
+            let secondsToExpiry = Int(session.expiresAt.timeIntervalSince(now).rounded())
+            BlockingDiagnosticsLog.record("scheduled re-block: warning at expiry (+\(secondsToExpiry)s), interval ends +\(secondsToExpiry + 900)s")
         } catch {
             BlockingDiagnosticsLog.record("FAILED to schedule re-block: \(error)")
             throw error
@@ -319,9 +320,9 @@ struct BlockingEnforcementService {
         )
     }
 
-    private func minuteAlignedComponents(for date: Date) -> DateComponents {
+    private func secondAlignedComponents(for date: Date) -> DateComponents {
         Calendar.current.dateComponents(
-            [.calendar, .timeZone, .year, .month, .day, .hour, .minute],
+            [.calendar, .timeZone, .year, .month, .day, .hour, .minute, .second],
             from: date
         )
     }

@@ -878,6 +878,11 @@ private struct BlockingOverviewCard: View {
         }
     }
 
+    private func unblockCountdownLabel(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.up))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
     private func blockGroupRow(_ group: BlockGroup, isMuted: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
@@ -895,10 +900,24 @@ private struct BlockingOverviewCard: View {
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
 
-                            Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                            TimelineView(.periodic(from: Date(), by: 1)) { context in
+                                let now = context.date
+                                if let session = model.blockingState.unblockSessions
+                                    .filter({ $0.groupID == group.id && $0.isActive(now: now) })
+                                    .min(by: { $0.expiresAt < $1.expiresAt }) {
+                                    let remaining = max(0, session.expiresAt.timeIntervalSince(now))
+                                    Text("Unblocked · locks in \(unblockCountdownLabel(remaining))")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.orange)
+                                        .contentTransition(.numericText())
+                                        .lineLimit(1)
+                                } else {
+                                    Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
                         }
 
                         Spacer(minLength: 8)
