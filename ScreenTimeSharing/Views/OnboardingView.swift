@@ -1,6 +1,8 @@
 import AuthenticationServices
+import AVFoundation
 import PhotosUI
 import SwiftUI
+import UserNotifications
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -12,6 +14,7 @@ struct OnboardingView: View {
     @State private var age: Double = 25
     @State private var avgScreenTime: Double = 4
     @State private var isAuthorizing = false
+    @State private var screenTimeAuthorizationFailed = false
     @State private var isSigningIn = false
     @State private var signInError: String?
     @State private var draftDisplayName = ""
@@ -26,7 +29,7 @@ struct OnboardingView: View {
     @State private var pendingProfileCameraImage: UIImage?
     #endif
 
-    private let totalPages = 6
+    private let totalPages = 7
     private var lastPage: Int { totalPages - 1 }
     private var profilePage: Int { lastPage - 1 }
 
@@ -43,7 +46,7 @@ struct OnboardingView: View {
 
     private var primaryTitle: String {
         switch currentPage {
-        case lastPage: return "Let's Get Started!"
+        case lastPage: return screenTimeAuthorizationFailed ? "Try Again" : "Let's Get Started!"
         case profilePage: return model.isAuthenticated ? "Save and Continue" : "Sign in to Continue"
         case 2: return "Get Started"
         default: return "Continue"
@@ -61,6 +64,7 @@ struct OnboardingView: View {
                         ScreenTimeSliderPage(hours: $avgScreenTime, isActive: currentPage == 1).tag(1)
                         WastedTimePage(screenTimeHours: avgScreenTime, isActive: currentPage == 2).tag(2)
                         FriendMonitorPage(isActive: currentPage == 3).tag(3)
+                        HowItWorksPage(isActive: currentPage == 4).tag(4)
                         AppleSignInProfilePage(
                             displayName: $draftDisplayName,
                             avatarImageData: draftAvatarImageData,
@@ -76,7 +80,11 @@ struct OnboardingView: View {
                             }
                         )
                         .tag(profilePage)
-                        FinalPage(isActive: currentPage == lastPage).tag(lastPage)
+                        FinalPage(
+                            isActive: currentPage == lastPage,
+                            showsAuthorizationError: screenTimeAuthorizationFailed
+                        )
+                        .tag(lastPage)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .animation(.easeInOut, value: currentPage)
@@ -197,6 +205,17 @@ struct OnboardingView: View {
                 Task {
                     isAuthorizing = true
                     await model.requestScreenTimeAuthorization()
+
+                    guard model.hasScreenTimeAuthorization else {
+                        isAuthorizing = false
+                        screenTimeAuthorizationFailed = true
+                        return
+                    }
+
+                    screenTimeAuthorizationFailed = false
+                    _ = try? await UNUserNotificationCenter.current()
+                        .requestAuthorization(options: [.alert, .sound, .badge])
+                    _ = await AVCaptureDevice.requestAccess(for: .video)
                     isAuthorizing = false
                     model.completeOnboarding()
                     model.requestScreenTimeReportRefresh()
@@ -561,6 +580,76 @@ private struct FriendMonitorPage: View {
     }
 }
 
+// MARK: - How it works (core request loop)
+
+private struct HowItWorksPage: View {
+    let isActive: Bool
+
+    @State private var entered = false
+
+    private let steps: [(symbol: String, title: String, detail: String)] = [
+        ("lock.fill", "Your apps get blocked", "Pick the apps that waste your time and Deny locks you out."),
+        ("camera.fill", "Ask with a selfie", "Want extra time? Snap a photo and choose how many minutes."),
+        ("person.2.fill", "A friend decides", "They see your photo and approve or deny your request."),
+        ("lock.open.fill", "Unlock on approval", "Approved minutes unlock the apps — then they lock again.")
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                Spacer(minLength: 48)
+
+                Text("How Deny works")
+                    .font(.largeTitle.bold())
+                    .multilineTextAlignment(.center)
+                    .opacity(entered ? 1 : 0)
+                    .offset(y: entered ? 0 : 14)
+                    .animation(.easeOut(duration: 0.5).delay(0.1), value: entered)
+
+                VStack(spacing: 14) {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                        HStack(alignment: .top, spacing: 14) {
+                            Image(systemName: step.symbol)
+                                .font(.title3)
+                                .foregroundStyle(.tint)
+                                .frame(width: 44, height: 44)
+                                .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(step.title)
+                                    .font(.headline)
+                                Text(step.detail)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(14)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 16))
+                        .opacity(entered ? 1 : 0)
+                        .offset(y: entered ? 0 : 14)
+                        .animation(.easeOut(duration: 0.5).delay(0.2 + Double(index) * 0.12), value: entered)
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                Spacer(minLength: 20)
+            }
+            .padding(.horizontal, 20)
+        }
+        .onChange(of: isActive, initial: true) { _, nowActive in
+            entered = false
+            guard nowActive else { return }
+            Task {
+                try? await Task.sleep(for: .milliseconds(50))
+                entered = true
+            }
+        }
+    }
+}
+
 // MARK: - Profile setup
 
 private struct ProfileSetupPage: View {
@@ -769,11 +858,27 @@ private struct AppleSignInProfilePage: View {
                 .font(.largeTitle.bold())
                 .multilineTextAlignment(.center)
 
-            Text("Your Apple ID keeps your account safe and lets you recover it on a new device.")
+            Text("Deny is built around your friends, so it needs an account.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 18)
+
+            VStack(spacing: 10) {
+                SignInBenefitRow(
+                    icon: "person.2.fill",
+                    text: "Friend requests and approvals are tied to your account"
+                )
+                SignInBenefitRow(
+                    icon: "icloud.fill",
+                    text: "Your data stays in sync through iCloud"
+                )
+                SignInBenefitRow(
+                    icon: "arrow.counterclockwise",
+                    text: "Recover everything when you switch devices"
+                )
+            }
+            .padding(.horizontal, 8)
 
             SignInWithAppleButton(.signIn, onRequest: { request in
                 request.requestedScopes = [.fullName, .email]
@@ -902,10 +1007,36 @@ private struct AppleSignInProfilePage: View {
     }
 }
 
+private struct SignInBenefitRow: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.tint)
+                .frame(width: 32, height: 32)
+                .background(.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
 // MARK: - Final page (animated gradient)
 
 private struct FinalPage: View {
     let isActive: Bool
+    let showsAuthorizationError: Bool
 
     @State private var entered = false
 
@@ -945,7 +1076,7 @@ private struct FinalPage: View {
                         .offset(y: entered ? 0 : 14)
                         .animation(.easeOut(duration: 0.5).delay(0.15), value: entered)
 
-                    Text("Tap below and grant Screen Time access to start sharing with friends.")
+                    Text("Grant access below to finish setting up.")
                         .font(.title3)
                         .foregroundStyle(.white.opacity(0.9))
                         .multilineTextAlignment(.center)
@@ -953,6 +1084,36 @@ private struct FinalPage: View {
                         .opacity(entered ? 1 : 0)
                         .offset(y: entered ? 0 : 14)
                         .animation(.easeOut(duration: 0.5).delay(0.3), value: entered)
+
+                    VStack(spacing: 10) {
+                        FinalPermissionRow(
+                            icon: "hourglass",
+                            title: "Screen Time — Required",
+                            detail: "Powers your usage stats and app blocking."
+                        )
+                        FinalPermissionRow(
+                            icon: "bell.badge.fill",
+                            title: "Notifications — Optional",
+                            detail: "Know right away when friends request or approve time."
+                        )
+                        FinalPermissionRow(
+                            icon: "camera.fill",
+                            title: "Camera — Optional",
+                            detail: "Time requests include a selfie so friends know it's really you."
+                        )
+                    }
+                    .padding(.horizontal, 24)
+                    .opacity(entered ? 1 : 0)
+                    .offset(y: entered ? 0 : 14)
+                    .animation(.easeOut(duration: 0.5).delay(0.45), value: entered)
+
+                    if showsAuthorizationError {
+                        Text("Screen Time access is required to continue. Tap Try Again to re-request it.")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 28)
+                    }
 
                     Spacer(minLength: 20)
                 }
@@ -966,5 +1127,35 @@ private struct FinalPage: View {
                 entered = true
             }
         }
+    }
+}
+
+private struct FinalPermissionRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 11))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
     }
 }

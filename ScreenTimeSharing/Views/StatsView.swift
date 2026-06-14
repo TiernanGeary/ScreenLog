@@ -11,15 +11,16 @@ struct StatsView: View {
     @State private var selectedChartBucketID: String?
 
     private var summary: UsageStatsSummary {
-        UsageStatsBuilder.summary(
+        model.usageStatsCache.summary(
             range: selectedRange,
             selectedDate: selectedDate,
-            history: statsHistory
+            history: statsHistory,
+            hourlyDurationsByDayID: model.hourlyUsageByDayID
         )
     }
 
     private var chartBuckets: [UsageChartBucket] {
-        UsageStatsBuilder.chartBuckets(
+        model.usageStatsCache.chartBuckets(
             range: selectedRange,
             selectedDate: selectedDate,
             history: statsHistory,
@@ -48,7 +49,7 @@ struct StatsView: View {
     }
 
     private var appUsageRows: [SharedAppUsage] {
-        UsageStatsBuilder.appUsageRows(
+        model.usageStatsCache.appUsageRows(
             range: selectedRange,
             selectedDate: selectedDate,
             history: statsHistory
