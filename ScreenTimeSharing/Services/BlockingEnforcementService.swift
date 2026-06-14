@@ -188,14 +188,7 @@ struct BlockingEnforcementService {
             warningTime: DateComponents(minute: 15)
         )
 
-        do {
-            try center.startMonitoring(activityName, during: schedule)
-            let secondsToExpiry = Int(session.expiresAt.timeIntervalSince(now).rounded())
-            BlockingDiagnosticsLog.record("scheduled re-block: warning at expiry (+\(secondsToExpiry)s), interval ends +\(secondsToExpiry + 900)s")
-        } catch {
-            BlockingDiagnosticsLog.record("FAILED to schedule re-block: \(error)")
-            throw error
-        }
+        try center.startMonitoring(activityName, during: schedule)
     }
 
     private func applyShields(
