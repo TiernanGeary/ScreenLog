@@ -765,6 +765,7 @@ private struct TopAppEmptyTile: View {
 
 private struct BlockingOverviewCard: View {
     @EnvironmentObject private var model: AppModel
+    @AppStorage("hasSeenAskFriendsCoachmark.v1") private var hasSeenAskFriendsCoachmark = false
     @State private var newGroupDraft: BlockGroupDraft?
     @State private var viewedGroup: BlockGroup?
     @State private var unblockConfirmationGroup: BlockGroup?
@@ -782,6 +783,36 @@ private struct BlockingOverviewCard: View {
         groups.filter { !$0.isEnabled }
     }
 
+    private var showsAskFriendsCoachmark: Bool {
+        !hasSeenAskFriendsCoachmark && activeGroups.contains { $0.friendRequestConfig.isEnabled }
+    }
+
+    private var askFriendsCoachmarkCard: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Stuck? Ask a friend for time", systemImage: "hands.sparkles.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.tint)
+
+                Text("When you want more time on a blocked app, tap “Ask Friends” below to send a selfie request. Once a friend approves, the app unlocks for a while.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button {
+                    AppHaptics.buttonTap()
+                    hasSeenAskFriendsCoachmark = true
+                } label: {
+                    Text("Got it")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+            }
+            .appCardRow(verticalPadding: 14)
+        }
+    }
+
     var body: some View {
         Group {
             if groups.isEmpty {
@@ -796,6 +827,10 @@ private struct BlockingOverviewCard: View {
 
                     if !inactiveGroups.isEmpty {
                         blockGroupSection("Inactive", groups: inactiveGroups, isMuted: true)
+                    }
+
+                    if showsAskFriendsCoachmark {
+                        askFriendsCoachmarkCard
                     }
 
                     AppCard {
@@ -974,12 +1009,20 @@ private struct BlockingOverviewCard: View {
 
     private func friendRequestButton(for group: BlockGroup) -> some View {
         let isEnabled = group.friendRequestConfig.isEnabled
+        let pendingCount = model.pendingOutgoingFriendRequestCount(for: group.id)
 
         return Button {
             AppHaptics.buttonTap()
-            friendRequestGroup = group
+            if isEnabled {
+                friendRequestGroup = group
+            } else {
+                viewedGroup = group
+            }
         } label: {
-            Label("Ask Friends", systemImage: "hands.sparkles.fill")
+            Label(
+                isEnabled ? "Ask Friends" : "Enable Requests",
+                systemImage: isEnabled ? "hands.sparkles.fill" : "gearshape.fill"
+            )
                 .font(.caption.weight(.semibold))
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
@@ -991,14 +1034,27 @@ private struct BlockingOverviewCard: View {
                         .fill(isEnabled ? Color.accentColor : Color.secondary.opacity(0.12))
                 )
                 .appCapsuleButtonHitArea()
+                .overlay(alignment: .topTrailing) {
+                    if isEnabled && pendingCount > 0 {
+                        Text("\(pendingCount)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.red))
+                            .offset(x: 6, y: -6)
+                            .accessibilityHidden(true)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .foregroundStyle(isEnabled ? Color.white : Color.secondary)
-        .disabled(!isEnabled)
         .accessibilityLabel(
             isEnabled
-                ? "Request time from friends for \(group.name)"
-                : "Friend requests disabled for \(group.name)"
+                ? (pendingCount > 0
+                    ? "Request time from friends for \(group.name), \(pendingCount) pending"
+                    : "Request time from friends for \(group.name)")
+                : "Enable friend requests for \(group.name) in settings"
         )
     }
 
@@ -1494,8 +1550,10 @@ struct FriendApprovalRequestView: View {
     @State private var selectedPhotoData: Data?
     @State private var message = ""
     @FocusState private var isMessageFocused: Bool
+    @State private var didSendRequest = false
 
     private let minuteOptions = [5, 10, 15, 20, 30, 45, 60]
+    @State private var isShowingCameraSettingsAlert = false
 
     private var friends: [FriendChoice] {
         #if DEBUG && targetEnvironment(simulator)
@@ -1516,6 +1574,12 @@ struct FriendApprovalRequestView: View {
         NavigationStack {
             requestStepContent
                 .navigationTitle(navigationTitle)
+                .onAppear {
+                    restoreDraftIfAvailable()
+                }
+                .onDisappear {
+                    persistDraftIfNeeded()
+                }
             .safeAreaInset(edge: .bottom) {
                 bottomBar
             }
@@ -1529,7 +1593,7 @@ struct FriendApprovalRequestView: View {
                 }
 
                 ToolbarItemGroup(placement: .keyboard) {
-                    if requestStep == .details && isMessageFocused {
+                    if requestStep == .review && isMessageFocused {
                         Spacer()
 
                         Button("Done") {
@@ -1580,12 +1644,25 @@ struct FriendApprovalRequestView: View {
     @ViewBuilder
     private var captureStep: some View {
         #if canImport(UIKit)
-        FriendRequestCameraCaptureView { image in
-            acceptCapturedPhoto(image)
-        }
+        FriendRequestCameraCaptureView(
+            onPermissionDenied: {
+                isShowingCameraSettingsAlert = true
+            },
+            onImage: { image in
+                acceptCapturedPhoto(image)
+            }
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .ignoresSafeArea(edges: .bottom)
+        .alert("Camera Access Off", isPresented: $isShowingCameraSettingsAlert) {
+            Button("Open Settings") {
+                openCameraSettings()
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text("Photo requests need camera access. Turn it on for Deny in Settings.")
+        }
         #else
         AppScreenScroll(backgroundStyle: .white) {
             AppCard {
@@ -1625,7 +1702,21 @@ struct FriendApprovalRequestView: View {
                     .appCardRow(verticalPadding: 24)
                 }
             }
+
+            AppSection("Message") {
+                AppCard {
+                    TextField("Optional message", text: $message, axis: .vertical)
+                        .lineLimit(2...4)
+                        .focused($isMessageFocused)
+                        .submitLabel(.done)
+                        .onSubmit {
+                            isMessageFocused = false
+                        }
+                        .appCardRow()
+                }
+            }
         }
+        .scrollDismissesKeyboard(.interactively)
     }
 
     private var detailsStep: some View {
@@ -1667,18 +1758,13 @@ struct FriendApprovalRequestView: View {
                         .appCardRow()
                     }
                     .buttonStyle(.plain)
-
-                    AppCardDivider()
-
-                    TextField("Optional message", text: $message, axis: .vertical)
-                        .lineLimit(2...4)
-                        .focused($isMessageFocused)
-                        .submitLabel(.done)
-                        .onSubmit {
-                            isMessageFocused = false
-                        }
-                        .appCardRow()
                 }
+
+                Text("Shorter requests (5–15 min) tend to get approved faster.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
             }
 
             AppSection("Friends") {
@@ -1724,6 +1810,13 @@ struct FriendApprovalRequestView: View {
                                 .appCardRow()
                             }
                             .buttonStyle(.plain)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(friend.name)
+                            .accessibilityValue(selectedFriendIDs.contains(friend.id) ? "Selected" : "Not selected")
+                            .accessibilityHint("Double tap to toggle selection.")
+                            .accessibilityAddTraits(
+                                selectedFriendIDs.contains(friend.id) ? [.isButton, .isSelected] : .isButton
+                            )
                         }
                     }
                 }
@@ -1847,11 +1940,60 @@ struct FriendApprovalRequestView: View {
             .buttonStyle(.plain)
             .foregroundStyle(canSendRequest ? Color.white : Color.secondary)
             .disabled(!canSendRequest)
+            .accessibilityLabel("Send time request")
+            .accessibilityHint(
+                canSendRequest
+                    ? "Sends your photo request to the selected friends."
+                    : "Take a photo and choose at least one friend to enable sending."
+            )
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background(.regularMaterial)
+    }
+
+    private func restoreDraftIfAvailable() {
+        guard selectedPhotoData == nil,
+              message.isEmpty,
+              selectedFriendIDs.isEmpty,
+              let draft = model.friendRequestDraft(for: group.id) else {
+            return
+        }
+
+        selectedPhotoData = draft.photoJPEGData
+        requestedMinutes = draft.requestedMinutes
+        message = draft.message
+        selectedFriendIDs = Set(draft.selectedFriendIDs)
+
+        if selectedPhotoData != nil {
+            requestStep = .review
+        }
+    }
+
+    private func persistDraftIfNeeded() {
+        if didSendRequest {
+            model.clearFriendRequestDraft(for: group.id)
+            return
+        }
+
+        let hasContent = selectedPhotoData != nil
+            || !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !selectedFriendIDs.isEmpty
+
+        if hasContent {
+            model.saveFriendRequestDraft(
+                AppModel.FriendRequestDraft(
+                    photoJPEGData: selectedPhotoData,
+                    requestedMinutes: requestedMinutes,
+                    message: message,
+                    selectedFriendIDs: Array(selectedFriendIDs)
+                ),
+                for: group.id
+            )
+        } else {
+            model.clearFriendRequestDraft(for: group.id)
+        }
     }
 
     private func sendRequest() {
@@ -1867,6 +2009,7 @@ struct FriendApprovalRequestView: View {
             photoJPEGData: selectedPhotoData
         ) {
             AppHaptics.buttonTap()
+            didSendRequest = true
             dismiss()
         }
     }
@@ -1891,6 +2034,14 @@ struct FriendApprovalRequestView: View {
     private func requestImage(from data: Data) -> UIImage? {
         UIImage(data: data)
     }
+
+    private func openCameraSettings() {
+        #if canImport(UIKit)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #endif
+    }
     #else
     private func returnToCamera() {
         model.message = "Camera is unavailable on this device."
@@ -1910,15 +2061,18 @@ private struct FriendRequestCameraCaptureView: UIViewControllerRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     let showsCloseButton: Bool
     let onCancel: (() -> Void)?
+    let onPermissionDenied: (() -> Void)?
     let onImage: (UIImage) -> Void
 
     init(
         showsCloseButton: Bool = false,
         onCancel: (() -> Void)? = nil,
+        onPermissionDenied: (() -> Void)? = nil,
         onImage: @escaping (UIImage) -> Void
     ) {
         self.showsCloseButton = showsCloseButton
         self.onCancel = onCancel
+        self.onPermissionDenied = onPermissionDenied
         self.onImage = onImage
     }
 
@@ -1931,6 +2085,9 @@ private struct FriendRequestCameraCaptureView: UIViewControllerRepresentable {
             },
             onCancel: {
                 onCancel?()
+            },
+            onPermissionDenied: {
+                onPermissionDenied?()
             }
         )
     }
@@ -2061,6 +2218,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
     private var colorScheme: ColorScheme
     private let onCapture: (UIImage) -> Void
     private let onCancel: (() -> Void)?
+    private let onPermissionDenied: (() -> Void)?
     private let showsCloseButton: Bool
     private let selfieLightIdleAlpha: CGFloat = 0.72
     private let selfieLightCaptureAlpha: CGFloat = 0.92
@@ -2094,12 +2252,14 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
         colorScheme: ColorScheme,
         showsCloseButton: Bool,
         onCapture: @escaping (UIImage) -> Void,
-        onCancel: (() -> Void)?
+        onCancel: (() -> Void)?,
+        onPermissionDenied: (() -> Void)? = nil
     ) {
         self.colorScheme = colorScheme
         self.showsCloseButton = showsCloseButton
         self.onCapture = onCapture
         self.onCancel = onCancel
+        self.onPermissionDenied = onPermissionDenied
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -2329,6 +2489,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
                             title: "Camera Access Off",
                             detail: "Enable camera access to send a photo request."
                         )
+                        self.onPermissionDenied?()
                     }
                 }
             }
@@ -2337,6 +2498,7 @@ private final class FriendRequestCameraViewController: UIViewController, @precon
                 title: "Camera Access Off",
                 detail: "Enable camera access to send a photo request."
             )
+            onPermissionDenied?()
         @unknown default:
             showUnavailable(
                 title: "Camera Unavailable",

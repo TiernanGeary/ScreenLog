@@ -21,7 +21,8 @@ import Testing
     )
 
     #expect(summary.baselineStatus == .ready(days: 0))
-    #expect(summary.netSavedDuration == 3 * (5.5 * 3_600 - 4 * 3_600))
+    let expectedNetSaved: TimeInterval = 3 * (5.5 * 3_600 - 4 * 3_600)
+    #expect(summary.netSavedDuration == expectedNetSaved)
     #expect(summary.screenTimePercentChange != nil)
 }
 

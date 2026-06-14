@@ -471,6 +471,60 @@ import Testing
     #expect(BlockingStateResolver.pendingReceivedFriendRequests(forAny: currentIDs, in: state).map(\.id) == ["incoming"])
 }
 
+@Test func pendingSentFriendRequestsAreGroupScopedAndPendingOnly() {
+    let now = Date(timeIntervalSince1970: 1_779_236_400)
+    let sentPendingSocial = BlockFriendRequest(
+        id: "sent-pending-social",
+        groupID: "social",
+        requestedSeconds: 15 * 60,
+        selectedFriendIDs: ["sam"],
+        message: "",
+        requesterID: "me",
+        createdAt: now
+    )
+    let sentPendingGames = BlockFriendRequest(
+        id: "sent-pending-games",
+        groupID: "games",
+        requestedSeconds: 15 * 60,
+        selectedFriendIDs: ["sam"],
+        message: "",
+        requesterID: "me",
+        createdAt: now.addingTimeInterval(-10)
+    )
+    let sentApprovedSocial = BlockFriendRequest(
+        id: "sent-approved-social",
+        groupID: "social",
+        requestedSeconds: 15 * 60,
+        selectedFriendIDs: ["sam"],
+        message: "",
+        requesterID: "me",
+        status: .approved,
+        createdAt: now.addingTimeInterval(-20)
+    )
+    let receivedPendingSocial = BlockFriendRequest(
+        id: "received-pending-social",
+        groupID: "social",
+        requestedSeconds: 15 * 60,
+        selectedFriendIDs: ["me"],
+        message: "",
+        requesterID: "sam",
+        createdAt: now.addingTimeInterval(-5)
+    )
+    let state = BlockingState(
+        friendRequests: [sentPendingSocial, sentPendingGames, sentApprovedSocial, receivedPendingSocial],
+        lastUpdated: now
+    )
+    let currentIDs: Set<String> = ["me", "profile-me"]
+
+    let ids = BlockingStateResolver.pendingSentFriendRequests(
+        forAny: currentIDs,
+        inGroup: "social",
+        in: state
+    ).map(\.id)
+
+    #expect(ids == ["sent-pending-social"])
+}
+
 @Test func friendRequestsExpireAndCollectAfterApproval() {
     let now = Date(timeIntervalSince1970: 1_779_236_400)
     let request = BlockFriendRequest(

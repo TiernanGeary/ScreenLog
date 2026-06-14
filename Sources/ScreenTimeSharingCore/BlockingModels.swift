@@ -1063,6 +1063,16 @@ public enum BlockingStateResolver {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
+    public static func pendingSentFriendRequests(
+        forAny userIDs: Set<String>,
+        inGroup groupID: String,
+        in state: BlockingState
+    ) -> [BlockFriendRequest] {
+        state.friendRequests
+            .filter { $0.groupID == groupID && $0.isSent(byAny: userIDs) && $0.status == .pending }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
     public static func dailyAllowanceSeconds(for groupID: String, in state: BlockingState) -> TimeInterval? {
         timeLimitSeconds(for: groupID, in: state)
     }
