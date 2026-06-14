@@ -1729,7 +1729,7 @@ struct BlockingSettingsView: View {
             }
 
             HStack(spacing: 8) {
-                statusPill(for: group)
+                pill(group.isEnabled ? "Active" : "Inactive", systemImage: group.isEnabled ? "checkmark.circle" : "pause.circle")
                 pill("\(selectionCount(for: group)) selected", systemImage: "app.badge")
                 if group.unblockConfig.isEnabled {
                     pill("\(group.unblockConfig.unblocksPerDay)x unblocks", systemImage: "lock.open")
@@ -1804,31 +1804,6 @@ struct BlockingSettingsView: View {
         case .delete:
             _ = model.deleteBlockGroup(group, password: verifiedPassword)
         }
-    }
-
-    /// The group's status pill — a live "Unblocked · m:ss" countdown while a
-    /// temporary unblock is active, otherwise the Active/Inactive state.
-    @ViewBuilder
-    private func statusPill(for group: BlockGroup) -> some View {
-        TimelineView(.periodic(from: Date(), by: 1)) { context in
-            let now = context.date
-            if let session = model.blockingState.unblockSessions
-                .filter({ $0.groupID == group.id && $0.isActive(now: now) })
-                .min(by: { $0.expiresAt < $1.expiresAt }) {
-                let remaining = max(0, session.expiresAt.timeIntervalSince(now))
-                pill("Unblocked · \(countdownLabel(remaining))", systemImage: "lock.open.fill", foregroundStyle: .orange)
-            } else {
-                pill(
-                    group.isEnabled ? "Active" : "Inactive",
-                    systemImage: group.isEnabled ? "checkmark.circle" : "pause.circle"
-                )
-            }
-        }
-    }
-
-    private func countdownLabel(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds.rounded(.up))
-        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     private func pill(
@@ -2378,15 +2353,33 @@ struct BlockGroupConfigurationView: View {
                         .font(.headline)
                         .lineLimit(1)
 
-                    Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
-                        .font(.subheadline)
-                        .foregroundStyle(group.isEnabled ? Color.green : Color.secondary)
+                    TimelineView(.periodic(from: Date(), by: 1)) { context in
+                        let now = context.date
+                        if let session = model.blockingState.unblockSessions
+                            .filter({ $0.groupID == group.id && $0.isActive(now: now) })
+                            .min(by: { $0.expiresAt < $1.expiresAt }) {
+                            let remaining = max(0, session.expiresAt.timeIntervalSince(now))
+                            Text("Unblocked · locks in \(unblockCountdownLabel(remaining))")
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(.orange)
+                                .contentTransition(.numericText())
+                        } else {
+                            Text(group.isEnabled ? "Blocking enabled" : "Blocking paused")
+                                .font(.subheadline)
+                                .foregroundStyle(group.isEnabled ? Color.green : Color.secondary)
+                        }
+                    }
                 }
 
                 Spacer()
             }
             .appCardRow(verticalPadding: 16)
         }
+    }
+
+    private func unblockCountdownLabel(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.up))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     @ViewBuilder
