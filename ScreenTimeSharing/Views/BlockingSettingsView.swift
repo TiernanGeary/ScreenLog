@@ -3175,7 +3175,7 @@ struct BlockGroupDraft: Identifiable {
         scheduledEndDate = Self.date(forMinute: 7 * 60)
         limitMinutes = 30
         selectedDays = Set(BlockWeekday.everyDay)
-        localUnblocksEnabled = true
+        localUnblocksEnabled = false
         unblocksPerDay = 3
         maxUnblockMinutes = 15
         friendRequestsEnabled = true

@@ -37,6 +37,8 @@ struct DashboardView: View {
                         .frame(height: 32)
                         .accessibilityHidden(true)
 
+                    UnblockStatusCard()
+
                     TodayScreenTimeCard(
                         snapshot: model.localSnapshot,
                         usesLiveReport: model.hasScreenTimeAuthorization,
@@ -94,6 +96,64 @@ struct DashboardView: View {
         }
     }
 
+}
+
+/// Live status shown on Home while a temporary unblock is active: which apps
+/// are open and a countdown to when they lock again.
+private struct UnblockStatusCard: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let now = context.date
+            let active = model.blockingState.unblockSessions
+                .filter { $0.isActive(now: now) }
+                .sorted { $0.expiresAt < $1.expiresAt }
+
+            if let soonest = active.first {
+                let remaining = max(0, soonest.expiresAt.timeIntervalSince(now))
+                AppCard {
+                    HStack(spacing: 14) {
+                        Image(systemName: "lock.open.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                            .frame(width: 46, height: 46)
+                            .background(Color.orange, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(statusTitle(for: active))
+                                .font(.headline)
+                            Text("Locks again in \(countdownLabel(remaining))")
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .contentTransition(.numericText())
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .appCardRow(verticalPadding: 12)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    private func statusTitle(for sessions: [BlockUnblockSession]) -> String {
+        let groupIDs = Set(sessions.map(\.groupID))
+        if groupIDs.count == 1,
+           let id = groupIDs.first,
+           let group = BlockingStateResolver.group(for: id, in: model.blockingState) {
+            return "\(group.name) unblocked"
+        }
+        return "Apps unblocked"
+    }
+
+    private func countdownLabel(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.up))
+        let minutes = total / 60
+        let secs = total % 60
+        return String(format: "%d:%02d", minutes, secs)
+    }
 }
 
 private struct TodayScreenTimeCard: View {
