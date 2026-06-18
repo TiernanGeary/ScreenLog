@@ -8,6 +8,7 @@ public struct DailyUsageSnapshotRecordPayload: Codable, Equatable, Sendable {
     public var timeZoneIdentifier: String
     public var totalDuration: TimeInterval?
     public var selectedAppDuration: TimeInterval?
+    public var pickupCount: Int?
     public var appRowsJSON: Data?
     public var lastUpdated: Date
     public var capabilityStatus: String
@@ -35,6 +36,7 @@ public enum SnapshotRecordPayloadMapper {
             timeZoneIdentifier: uploadable.timeZoneIdentifier,
             totalDuration: uploadable.totalDuration,
             selectedAppDuration: uploadable.selectedAppDuration,
+            pickupCount: uploadable.pickupCount,
             appRowsJSON: rowsData,
             lastUpdated: uploadable.lastUpdated,
             capabilityStatus: uploadable.capability.status.rawValue,
@@ -59,6 +61,7 @@ public enum SnapshotRecordPayloadMapper {
             timeZoneIdentifier: payload.timeZoneIdentifier,
             totalDuration: payload.totalDuration,
             selectedAppDuration: payload.selectedAppDuration,
+            pickupCount: payload.pickupCount,
             appRows: rows,
             lastUpdated: payload.lastUpdated,
             capability: ScreenTimeCapability(status: status, reason: payload.capabilityReason)

@@ -7,12 +7,16 @@ public enum UsageDateBoundary {
         return DateInterval(start: start, end: end)
     }
 
-    public static func snapshotID(profileID: String, date: Date, calendar: Calendar = .current) -> String {
+    public static func localDayKey(date: Date, calendar: Calendar = .current) -> String {
         let interval = dayInterval(containing: date, calendar: calendar)
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "yyyy-MM-dd"
-        return "\(profileID)-\(formatter.string(from: interval.start))"
+        return formatter.string(from: interval.start)
+    }
+
+    public static func snapshotID(profileID: String, date: Date, calendar: Calendar = .current) -> String {
+        "\(profileID)-\(localDayKey(date: date, calendar: calendar))"
     }
 }

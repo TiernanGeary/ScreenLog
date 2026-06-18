@@ -8,8 +8,17 @@ final class AppGroupWidgetCacheWriter {
         self.defaults = UserDefaults(suiteName: suiteName)
     }
 
-    func write(_ friends: [FriendUsageSummary]) throws {
-        let payload = WidgetCachePayload(generatedAt: Date(), friends: friends)
+    func write(
+        friends: [FriendUsageSummary],
+        leaderboardEntries: [LeaderboardEntry] = [],
+        currentUserID: String? = nil
+    ) throws {
+        let payload = WidgetCachePayload(
+            generatedAt: Date(),
+            friends: friends,
+            leaderboardEntries: leaderboardEntries,
+            currentUserID: currentUserID
+        )
         let data = try WidgetCacheCodec.encode(payload)
         defaults?.set(data, forKey: WidgetCacheCodec.storageKey)
         WidgetCenter.shared.reloadAllTimelines()

@@ -24,17 +24,19 @@ The app target includes:
 - Family Controls: `com.apple.developer.family-controls`
 - Family Controls App and Website Usage: `com.apple.developer.family-controls.app-and-website-usage`
 - CloudKit: `iCloud.com.jdco.ScreenTimeSharing`
-- App Group: `group.com.jdco.ScreenTimeSharing`
+- App Group: `group.com.jdco.ScreenLog`
 
 The widget target only reads app-group cache data.
 
 ## Runtime Behavior
 
 - Users explicitly authorize Screen Time for the individual device owner.
-- Users choose selected apps/categories/websites through `FamilyActivityPicker`.
+- Home and Stats use all-activity Screen Time reports, so onboarding does not ask users to pick apps.
+- Week stats use a Sunday-Saturday calendar week and keep all seven bar slots visible.
+- Screen Time app rows keep local application token data for real app icons; upload payloads strip that token data.
+- Users choose apps/categories/websites through `FamilyActivityPicker` only when configuring blocking groups.
 - `approvedWithDataAccess` maps to per-app/per-website rows.
-- Ordinary approval maps to aggregate selected totals if Device Activity data is available.
-- Denied, unavailable, missing selection, or Device Activity errors produce an unavailable snapshot and do not upload placeholder data.
+- Denied, unavailable, or Device Activity errors produce an unavailable snapshot and do not upload placeholder data.
 - Friend summaries are mirrored into App Group storage and WidgetKit timelines refresh every 30 minutes.
 
 ## Verification
