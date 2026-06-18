@@ -16,6 +16,7 @@ struct OnboardingView: View {
     @State private var avgScreenTime: Double = 4
     @State private var isAuthorizing = false
     @State private var screenTimeAuthorizationFailed = false
+    @State private var didStartFirstBlock = false
     @State private var isSigningIn = false
     @State private var signInError: String?
     @State private var draftDisplayName = ""
@@ -34,6 +35,7 @@ struct OnboardingView: View {
     private var lastPage: Int { totalPages - 1 }
     private var profilePage: Int { 4 }
     private var permissionsPage: Int { 5 }
+    private var blockPage: Int { permissionsPage + 1 }
 
     private var trimmedDraftDisplayName: String {
         draftDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -92,10 +94,11 @@ struct OnboardingView: View {
                         )
                         .tag(permissionsPage)
                         BlockSetupPage(onStarted: {
+                            didStartFirstBlock = true
                             withAnimation { currentPage = 7 }
                         })
                         .tag(6)
-                        InviteFriendsOnboardingPage(onFinish: {
+                        InviteFriendsOnboardingPage(isActive: currentPage == 7, onFinish: {
                             model.completeOnboarding()
                         })
                         .tag(7)
@@ -107,6 +110,15 @@ struct OnboardingView: View {
                         // re-enter the How Deny works page.
                         if oldPage == howItWorksPage || newPage == howItWorksPage {
                             howItWorksStep = 0
+                        }
+
+                        if newPage > permissionsPage && !model.hasScreenTimeAuthorization {
+                            withAnimation { currentPage = permissionsPage }
+                            return
+                        }
+                        if newPage > blockPage && !didStartFirstBlock {
+                            withAnimation { currentPage = blockPage }
+                            return
                         }
 
                         guard oldPage == profilePage, newPage != profilePage else {
@@ -1181,7 +1193,7 @@ private struct BlockSetupPage: View {
             Text("Block your first app")
                 .font(.title.bold())
                 .multilineTextAlignment(.center)
-            Text("Lock the app you waste the most time on. You'll unlock it by asking a friend — set it up now while you're motivated.")
+            Text("Set a daily limit on the app you waste the most time on. You'll need your passcode to lift it — set it up now while you're motivated.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1209,6 +1221,8 @@ private struct BlockSetupPage: View {
             }
 
             Button {
+                guard canStart else { return }
+                isStarting = true
                 Task { await start() }
             } label: {
                 if isStarting { ProgressView() } else { Text("Start blocking") }
@@ -1232,7 +1246,6 @@ private struct BlockSetupPage: View {
 
     @MainActor
     private func start() async {
-        isStarting = true
         defer { isStarting = false }
         if !model.hasScreenTimeAuthorization {
             await model.requestScreenTimeAuthorization()
@@ -1250,6 +1263,7 @@ private struct BlockSetupPage: View {
 
 private struct InviteFriendsOnboardingPage: View {
     @EnvironmentObject private var model: AppModel
+    var isActive: Bool
     var onFinish: () -> Void
 
     @State private var invite: CreatedInvite?
@@ -1273,12 +1287,16 @@ private struct InviteFriendsOnboardingPage: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            if let shareText {
+            if let shareText, AppConfiguration.isAppStoreURLConfigured {
                 ShareLink(item: shareText) {
                     Text("Invite a friend").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .simultaneousGesture(TapGesture().onEnded { Haptics.success() })
+            } else if !AppConfiguration.isAppStoreURLConfigured {
+                Text("Sharing opens once the app's install link is set.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else if isGenerating {
                 ProgressView()
             } else {
@@ -1298,7 +1316,11 @@ private struct InviteFriendsOnboardingPage: View {
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 24)
-        .task { await generate() }
+        .onChange(of: isActive) { _, nowActive in
+            if nowActive && AppConfiguration.isAppStoreURLConfigured {
+                Task { await generate() }
+            }
+        }
     }
 
     @MainActor

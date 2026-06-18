@@ -31,6 +31,10 @@ enum AppConfiguration {
     /// TODO(owner): replace with the real published product URL.
     static let appStoreURL = URL(string: "https://apps.apple.com/app/id0000000000")!
 
+    static var isAppStoreURLConfigured: Bool {
+        !appStoreURL.absoluteString.contains("id0000000000")
+    }
+
     static var isPushServerConfigured: Bool {
         !pushServerBaseURL.contains("REPLACE_WITH") && !pushServerSharedSecret.contains("REPLACE_WITH")
     }
