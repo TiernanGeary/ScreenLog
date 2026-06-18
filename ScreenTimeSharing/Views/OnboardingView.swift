@@ -1,5 +1,6 @@
 import AuthenticationServices
 import AVFoundation
+import FamilyControls
 import PhotosUI
 import SwiftUI
 import UserNotifications
@@ -15,6 +16,7 @@ struct OnboardingView: View {
     @State private var avgScreenTime: Double = 4
     @State private var isAuthorizing = false
     @State private var screenTimeAuthorizationFailed = false
+    @State private var didStartFirstBlock = false
     @State private var isSigningIn = false
     @State private var signInError: String?
     @State private var draftDisplayName = ""
@@ -29,9 +31,11 @@ struct OnboardingView: View {
     @State private var pendingProfileCameraImage: UIImage?
     #endif
 
-    private let totalPages = 6
+    private let totalPages = 8
     private var lastPage: Int { totalPages - 1 }
-    private var profilePage: Int { lastPage - 1 }
+    private var profilePage: Int { 4 }
+    private var permissionsPage: Int { 5 }
+    private var blockPage: Int { permissionsPage + 1 }
 
     private var trimmedDraftDisplayName: String {
         draftDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -46,7 +50,7 @@ struct OnboardingView: View {
 
     private var primaryTitle: String {
         switch currentPage {
-        case lastPage: return screenTimeAuthorizationFailed ? "Try Again" : "Let's Get Started!"
+        case permissionsPage: return screenTimeAuthorizationFailed ? "Try Again" : "Let's Get Started!"
         case profilePage: return model.isAuthenticated ? "Save and Continue" : "Sign in to Continue"
         case 1: return "Get Started"
         default: return "Continue"
@@ -85,10 +89,19 @@ struct OnboardingView: View {
                         )
                         .tag(profilePage)
                         FinalPage(
-                            isActive: currentPage == lastPage,
+                            isActive: currentPage == permissionsPage,
                             showsAuthorizationError: screenTimeAuthorizationFailed
                         )
-                        .tag(lastPage)
+                        .tag(permissionsPage)
+                        BlockSetupPage(onStarted: {
+                            didStartFirstBlock = true
+                            withAnimation { currentPage = 7 }
+                        })
+                        .tag(6)
+                        InviteFriendsOnboardingPage(isActive: currentPage == 7, onFinish: {
+                            model.completeOnboarding()
+                        })
+                        .tag(7)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .animation(.easeInOut, value: currentPage)
@@ -97,6 +110,15 @@ struct OnboardingView: View {
                         // re-enter the How Deny works page.
                         if oldPage == howItWorksPage || newPage == howItWorksPage {
                             howItWorksStep = 0
+                        }
+
+                        if newPage > permissionsPage && !model.hasScreenTimeAuthorization {
+                            withAnimation { currentPage = permissionsPage }
+                            return
+                        }
+                        if newPage > blockPage && !didStartFirstBlock {
+                            withAnimation { currentPage = blockPage }
+                            return
                         }
 
                         guard oldPage == profilePage, newPage != profilePage else {
@@ -110,10 +132,12 @@ struct OnboardingView: View {
                         }
                     }
 
-                    primaryButton
-                        .padding(.horizontal, 20)
-                        .padding(.top, 16)
-                        .padding(.bottom, 12)
+                    if currentPage <= permissionsPage {
+                        primaryButton
+                            .padding(.horizontal, 20)
+                            .padding(.top, 16)
+                            .padding(.bottom, 12)
+                    }
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -212,9 +236,7 @@ struct OnboardingView: View {
 
     private var primaryButton: some View {
         Button {
-            if currentPage < lastPage {
-                advanceFromCurrentPage()
-            } else {
+            if currentPage == permissionsPage {
                 Haptics.success()
                 Task {
                     isAuthorizing = true
@@ -231,9 +253,11 @@ struct OnboardingView: View {
                         .requestAuthorization(options: [.alert, .sound, .badge])
                     _ = await AVCaptureDevice.requestAccess(for: .video)
                     isAuthorizing = false
-                    model.completeOnboarding()
                     model.requestScreenTimeReportRefresh()
+                    withAnimation { currentPage = 6 }
                 }
+            } else {
+                advanceFromCurrentPage()
             }
         } label: {
             Text(primaryTitle)
@@ -1137,6 +1161,174 @@ private struct FinalPage: View {
                 entered = true
             }
         }
+    }
+}
+
+private struct BlockSetupPage: View {
+    @EnvironmentObject private var model: AppModel
+    var onStarted: () -> Void
+
+    @State private var selection = FamilyActivitySelection()
+    @State private var isShowingPicker = false
+    @State private var passcode = ""
+    @State private var isStarting = false
+
+    private var selectedCount: Int {
+        selection.applicationTokens.count
+            + selection.categoryTokens.count
+            + selection.webDomainTokens.count
+    }
+
+    private var canStart: Bool {
+        OnboardingBlock.meetsMinimumSelection(
+            appCount: selection.applicationTokens.count,
+            categoryCount: selection.categoryTokens.count,
+            webCount: selection.webDomainTokens.count)
+            && passcode.count >= 4
+            && !isStarting
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("Block your first app")
+                .font(.title.bold())
+                .multilineTextAlignment(.center)
+            Text("Set a daily limit on the app you waste the most time on. You'll need your passcode to lift it — set it up now while you're motivated.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Button {
+                AppHaptics.buttonTap()
+                isShowingPicker = true
+            } label: {
+                Text(selectedCount > 0 ? "\(selectedCount) selected — edit" : "Choose apps to block")
+            }
+            .buttonStyle(.bordered)
+
+            SecureField("4-digit passcode", text: $passcode)
+                .keyboardType(.numberPad)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 240)
+            Text("Set a passcode so you can't just turn it off.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if !canStart {
+                Text("Select at least one app and set a 4-digit passcode.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                guard canStart else { return }
+                isStarting = true
+                Task { await start() }
+            } label: {
+                if isStarting { ProgressView() } else { Text("Start blocking") }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canStart)
+        }
+        .padding(.horizontal, 24)
+        .sheet(isPresented: $isShowingPicker) {
+            NavigationStack {
+                FamilyActivityPicker(selection: $selection)
+                    .navigationTitle("Blocked Apps")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { isShowingPicker = false }
+                        }
+                    }
+            }
+        }
+    }
+
+    @MainActor
+    private func start() async {
+        defer { isStarting = false }
+        if !model.hasScreenTimeAuthorization {
+            await model.requestScreenTimeAuthorization()
+            guard model.hasScreenTimeAuthorization else { return }
+        }
+        guard let data = try? BlockingSelectionCodec.encode(selection) else { return }
+        let group = OnboardingBlock.makeFirstBlockGroup(
+            id: UUID().uuidString, name: "My First Block", selectionData: data)
+        if model.upsertBlockGroup(group, password: passcode) {
+            Haptics.success()
+            onStarted()
+        }
+    }
+}
+
+private struct InviteFriendsOnboardingPage: View {
+    @EnvironmentObject private var model: AppModel
+    var isActive: Bool
+    var onFinish: () -> Void
+
+    @State private var invite: CreatedInvite?
+    @State private var isGenerating = false
+
+    private var shareText: String? {
+        guard let invite else { return nil }
+        return OnboardingInvite.shareMessage(
+            displayName: model.profile.displayName,
+            appStoreURL: AppConfiguration.appStoreURL,
+            inviteURL: invite.url)
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("You're all set — invite a friend")
+                .font(.title.bold())
+                .multilineTextAlignment(.center)
+            Text("Deny works best with a friend keeping you honest. Send them a link to install the app and connect with you.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if let shareText, AppConfiguration.isAppStoreURLConfigured {
+                ShareLink(item: shareText) {
+                    Text("Invite a friend").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .simultaneousGesture(TapGesture().onEnded { Haptics.success() })
+            } else if !AppConfiguration.isAppStoreURLConfigured {
+                Text("Sharing opens once the app's install link is set.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if isGenerating {
+                ProgressView()
+            } else {
+                Button {
+                    Task { await generate() }
+                } label: {
+                    Text("Try again").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button("Maybe later") {
+                AppHaptics.buttonTap()
+                onFinish()
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 24)
+        .onChange(of: isActive) { _, nowActive in
+            if nowActive && AppConfiguration.isAppStoreURLConfigured {
+                Task { await generate() }
+            }
+        }
+    }
+
+    @MainActor
+    private func generate() async {
+        guard invite == nil, !isGenerating else { return }
+        isGenerating = true
+        defer { isGenerating = false }
+        invite = try? await model.createInvite()
     }
 }
 
