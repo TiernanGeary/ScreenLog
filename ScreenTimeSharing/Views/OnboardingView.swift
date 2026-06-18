@@ -1252,10 +1252,61 @@ private struct InviteFriendsOnboardingPage: View {
     @EnvironmentObject private var model: AppModel
     var onFinish: () -> Void
 
+    @State private var invite: CreatedInvite?
+    @State private var isGenerating = false
+
+    private var shareText: String? {
+        guard let invite else { return nil }
+        return OnboardingInvite.shareMessage(
+            displayName: model.profile.displayName,
+            appStoreURL: AppConfiguration.appStoreURL,
+            inviteURL: invite.url)
+    }
+
     var body: some View {
-        VStack {
-            Text("Invite (stub)")
+        VStack(spacing: 20) {
+            Text("You're all set — invite a friend")
+                .font(.title.bold())
+                .multilineTextAlignment(.center)
+            Text("Deny works best with a friend keeping you honest. Send them a link to install the app and connect with you.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if let shareText {
+                ShareLink(item: shareText) {
+                    Text("Invite a friend").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .simultaneousGesture(TapGesture().onEnded { Haptics.success() })
+            } else if isGenerating {
+                ProgressView()
+            } else {
+                Button {
+                    Task { await generate() }
+                } label: {
+                    Text("Try again").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button("Maybe later") {
+                AppHaptics.buttonTap()
+                onFinish()
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 24)
+        .task { await generate() }
+    }
+
+    @MainActor
+    private func generate() async {
+        guard invite == nil, !isGenerating else { return }
+        isGenerating = true
+        defer { isGenerating = false }
+        invite = try? await model.createInvite()
     }
 }
 

@@ -27,6 +27,9 @@ enum AppConfiguration {
     /// Shared secret sent in the `x-deny-secret` header; must match the Worker's
     /// APP_SHARED_SECRET. Replaced at deploy time.
     static let pushServerSharedSecret = "97127fb9fd313f27fb3d5556706347e6cd735617f5826a8dfbf95c179548d840"
+    /// Public App Store product URL, used in onboarding invite shares.
+    /// TODO(owner): replace with the real published product URL.
+    static let appStoreURL = URL(string: "https://apps.apple.com/app/id0000000000")!
 
     static var isPushServerConfigured: Bool {
         !pushServerBaseURL.contains("REPLACE_WITH") && !pushServerSharedSecret.contains("REPLACE_WITH")
