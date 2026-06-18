@@ -233,6 +233,9 @@ extension View {
     func appCardRow(verticalPadding: CGFloat = 14) -> some View {
         frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, verticalPadding)
+            // Make the whole row tappable (not just its text/icons) when used as a
+            // Button label with .buttonStyle(.plain).
+            .contentShape(Rectangle())
     }
 
     func appRoundedButtonHitArea(cornerRadius: CGFloat = 16) -> some View {

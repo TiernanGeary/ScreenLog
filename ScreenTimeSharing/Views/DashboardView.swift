@@ -1267,6 +1267,7 @@ private struct UnblockConfirmationView: View {
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color.white)
@@ -1814,6 +1815,7 @@ struct FriendApprovalRequestView: View {
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.accentColor)
@@ -1831,6 +1833,7 @@ struct FriendApprovalRequestView: View {
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.white)
