@@ -1,5 +1,6 @@
 import AuthenticationServices
 import AVFoundation
+import FamilyControls
 import PhotosUI
 import SwiftUI
 import UserNotifications
@@ -1155,9 +1156,94 @@ private struct BlockSetupPage: View {
     @EnvironmentObject private var model: AppModel
     var onStarted: () -> Void
 
+    @State private var selection = FamilyActivitySelection()
+    @State private var isShowingPicker = false
+    @State private var passcode = ""
+    @State private var isStarting = false
+
+    private var selectedCount: Int {
+        selection.applicationTokens.count
+            + selection.categoryTokens.count
+            + selection.webDomainTokens.count
+    }
+
+    private var canStart: Bool {
+        OnboardingBlock.meetsMinimumSelection(
+            appCount: selection.applicationTokens.count,
+            categoryCount: selection.categoryTokens.count,
+            webCount: selection.webDomainTokens.count)
+            && passcode.count >= 4
+            && !isStarting
+    }
+
     var body: some View {
-        VStack {
-            Text("Block setup (stub)")
+        VStack(spacing: 20) {
+            Text("Block your first app")
+                .font(.title.bold())
+                .multilineTextAlignment(.center)
+            Text("Lock the app you waste the most time on. You'll unlock it by asking a friend — set it up now while you're motivated.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Button {
+                AppHaptics.buttonTap()
+                isShowingPicker = true
+            } label: {
+                Text(selectedCount > 0 ? "\(selectedCount) selected — edit" : "Choose apps to block")
+            }
+            .buttonStyle(.bordered)
+
+            SecureField("4-digit passcode", text: $passcode)
+                .keyboardType(.numberPad)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 240)
+            Text("Set a passcode so you can't just turn it off.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if !canStart {
+                Text("Select at least one app and set a 4-digit passcode.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                Task { await start() }
+            } label: {
+                if isStarting { ProgressView() } else { Text("Start blocking") }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canStart)
+        }
+        .padding(.horizontal, 24)
+        .sheet(isPresented: $isShowingPicker) {
+            NavigationStack {
+                FamilyActivityPicker(selection: $selection)
+                    .navigationTitle("Blocked Apps")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { isShowingPicker = false }
+                        }
+                    }
+            }
+        }
+    }
+
+    @MainActor
+    private func start() async {
+        isStarting = true
+        defer { isStarting = false }
+        if !model.hasScreenTimeAuthorization {
+            await model.requestScreenTimeAuthorization()
+            guard model.hasScreenTimeAuthorization else { return }
+        }
+        guard let data = try? BlockingSelectionCodec.encode(selection) else { return }
+        let group = OnboardingBlock.makeFirstBlockGroup(
+            id: UUID().uuidString, name: "My First Block", selectionData: data)
+        if model.upsertBlockGroup(group, password: passcode) {
+            Haptics.success()
+            onStarted()
         }
     }
 }
