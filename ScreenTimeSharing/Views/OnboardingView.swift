@@ -29,9 +29,10 @@ struct OnboardingView: View {
     @State private var pendingProfileCameraImage: UIImage?
     #endif
 
-    private let totalPages = 6
+    private let totalPages = 8
     private var lastPage: Int { totalPages - 1 }
-    private var profilePage: Int { lastPage - 1 }
+    private var profilePage: Int { 4 }
+    private var permissionsPage: Int { 5 }
 
     private var trimmedDraftDisplayName: String {
         draftDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -46,7 +47,7 @@ struct OnboardingView: View {
 
     private var primaryTitle: String {
         switch currentPage {
-        case lastPage: return screenTimeAuthorizationFailed ? "Try Again" : "Let's Get Started!"
+        case permissionsPage: return screenTimeAuthorizationFailed ? "Try Again" : "Let's Get Started!"
         case profilePage: return model.isAuthenticated ? "Save and Continue" : "Sign in to Continue"
         case 1: return "Get Started"
         default: return "Continue"
@@ -85,10 +86,18 @@ struct OnboardingView: View {
                         )
                         .tag(profilePage)
                         FinalPage(
-                            isActive: currentPage == lastPage,
+                            isActive: currentPage == permissionsPage,
                             showsAuthorizationError: screenTimeAuthorizationFailed
                         )
-                        .tag(lastPage)
+                        .tag(permissionsPage)
+                        BlockSetupPage(onStarted: {
+                            withAnimation { currentPage = 7 }
+                        })
+                        .tag(6)
+                        InviteFriendsOnboardingPage(onFinish: {
+                            model.completeOnboarding()
+                        })
+                        .tag(7)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .animation(.easeInOut, value: currentPage)
@@ -110,10 +119,12 @@ struct OnboardingView: View {
                         }
                     }
 
-                    primaryButton
-                        .padding(.horizontal, 20)
-                        .padding(.top, 16)
-                        .padding(.bottom, 12)
+                    if currentPage <= permissionsPage {
+                        primaryButton
+                            .padding(.horizontal, 20)
+                            .padding(.top, 16)
+                            .padding(.bottom, 12)
+                    }
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -212,9 +223,7 @@ struct OnboardingView: View {
 
     private var primaryButton: some View {
         Button {
-            if currentPage < lastPage {
-                advanceFromCurrentPage()
-            } else {
+            if currentPage == permissionsPage {
                 Haptics.success()
                 Task {
                     isAuthorizing = true
@@ -231,9 +240,11 @@ struct OnboardingView: View {
                         .requestAuthorization(options: [.alert, .sound, .badge])
                     _ = await AVCaptureDevice.requestAccess(for: .video)
                     isAuthorizing = false
-                    model.completeOnboarding()
                     model.requestScreenTimeReportRefresh()
+                    withAnimation { currentPage = 6 }
                 }
+            } else {
+                advanceFromCurrentPage()
             }
         } label: {
             Text(primaryTitle)
@@ -1136,6 +1147,28 @@ private struct FinalPage: View {
                 try? await Task.sleep(for: .milliseconds(50))
                 entered = true
             }
+        }
+    }
+}
+
+private struct BlockSetupPage: View {
+    @EnvironmentObject private var model: AppModel
+    var onStarted: () -> Void
+
+    var body: some View {
+        VStack {
+            Text("Block setup (stub)")
+        }
+    }
+}
+
+private struct InviteFriendsOnboardingPage: View {
+    @EnvironmentObject private var model: AppModel
+    var onFinish: () -> Void
+
+    var body: some View {
+        VStack {
+            Text("Invite (stub)")
         }
     }
 }
