@@ -24,6 +24,11 @@ export default {
       if (url.pathname === "/support" || url.pathname === "/support/") {
         return html(SUPPORT_HTML);
       }
+      if (url.pathname.startsWith("/invite/")) {
+        const raw = url.pathname.slice("/invite/".length).split("/")[0];
+        const code = (raw || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 16);
+        return html(inviteLandingHTML(code));
+      }
       return json({ error: "not found" }, 404);
     }
 
@@ -193,6 +198,52 @@ function html(body, status = 200) {
     status,
     headers: { "content-type": "text/html; charset=utf-8" },
   });
+}
+
+// Public App Store product page for Deny.
+const APP_STORE_URL = "https://apps.apple.com/app/id6773738211";
+
+// Invite landing page: tries to open the app via the deny:// scheme (which adds
+// the inviter as a friend) and falls back to the App Store if it isn't installed.
+function inviteLandingHTML(code) {
+  const appLink = `deny://invite/${code}`;
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deny — Friend Invite</title><style>${PAGE_STYLE}
+  .wrap { text-align: center; padding-top: 60px; }
+  .btn { display: inline-block; margin: 8px; padding: 14px 22px; border-radius: 14px;
+         font-weight: 600; text-decoration: none; }
+  .primary { background: #ff6a00; color: #fff; }
+  .secondary { border: 1px solid #ff6a00; color: #ff6a00; }
+  .code { font: 600 15px ui-monospace, Menlo, monospace; color: #8a8a8e; margin-top: 18px; }
+</style></head>
+<body>
+<div class="wrap">
+  <h1>You've been invited to Deny</h1>
+  <p>Opening the app to connect you…<br>Don't have it yet? Grab it free below.</p>
+  <p>
+    <a class="btn primary" href="${appLink}">Open in Deny</a>
+    <a class="btn secondary" href="${APP_STORE_URL}">Get the app</a>
+  </p>
+  <p class="code">Invite code: ${code}</p>
+</div>
+<script>
+  (function () {
+    var code = ${JSON.stringify(code)};
+    if (!code) { window.location.replace(${JSON.stringify(APP_STORE_URL)}); return; }
+    // Try to open the app; if still here after a beat, send to the App Store.
+    var t = setTimeout(function () {
+      window.location.replace(${JSON.stringify(APP_STORE_URL)});
+    }, 1200);
+    // If the app opens, the page is backgrounded — cancel the App Store redirect.
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) { clearTimeout(t); }
+    });
+    window.location.replace("deny://invite/" + code);
+  })();
+</script>
+</body></html>`;
 }
 
 const PAGE_STYLE = `

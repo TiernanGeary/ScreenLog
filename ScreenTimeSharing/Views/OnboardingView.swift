@@ -112,10 +112,14 @@ struct OnboardingView: View {
                             howItWorksStep = 0
                         }
 
+                        #if !(DEBUG && targetEnvironment(simulator))
+                        // Skipped in the simulator (Screen Time auth can't be
+                        // granted there) so block setup is reachable for testing.
                         if newPage > permissionsPage && !model.hasScreenTimeAuthorization {
                             withAnimation { currentPage = permissionsPage }
                             return
                         }
+                        #endif
                         if newPage > blockPage && !didStartFirstBlock {
                             withAnimation { currentPage = blockPage }
                             return
@@ -239,6 +243,16 @@ struct OnboardingView: View {
             if currentPage == permissionsPage {
                 Haptics.success()
                 Task {
+                    #if DEBUG && targetEnvironment(simulator)
+                    // The simulator can't satisfy the Family Controls passcode
+                    // prompt, so skip the Screen Time gate to reach block setup
+                    // for testing/screenshots. Never compiled into release.
+                    screenTimeAuthorizationFailed = false
+                    isAuthorizing = false
+                    model.requestScreenTimeReportRefresh()
+                    withAnimation { currentPage = 6 }
+                    return
+                    #endif
                     isAuthorizing = true
                     await model.requestScreenTimeAuthorization()
 
@@ -261,12 +275,10 @@ struct OnboardingView: View {
             }
         } label: {
             Text(primaryTitle)
-                .frame(maxWidth: .infinity)
+                .onboardingPrimaryButton(disabled: isPrimaryDisabled)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
+        .buttonStyle(.plain)
         .disabled(isPrimaryDisabled)
-        .opacity(isPrimaryDisabled ? 0.52 : 1)
     }
 
     private let howItWorksPage = 3
@@ -1164,14 +1176,49 @@ private struct FinalPage: View {
     }
 }
 
+private extension View {
+    /// Filled accent button matching the main app's primary action style.
+    func onboardingPrimaryButton(disabled: Bool = false) -> some View {
+        font(.headline)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .foregroundStyle(.white)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.accentColor))
+            .appRoundedButtonHitArea(cornerRadius: 16)
+            .opacity(disabled ? 0.52 : 1)
+    }
+
+    /// Tinted secondary button (e.g. Back) matching the app's accent styling.
+    func onboardingSecondaryButton() -> some View {
+        font(.headline)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .foregroundStyle(Color.accentColor)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.accentColor.opacity(0.12)))
+            .appRoundedButtonHitArea(cornerRadius: 16)
+    }
+}
+
 private struct BlockSetupPage: View {
     @EnvironmentObject private var model: AppModel
     var onStarted: () -> Void
 
+    private enum Step: Int, CaseIterable {
+        case apps, mode, configure, password
+    }
+
+    @State private var step: Step = .apps
     @State private var selection = FamilyActivitySelection()
     @State private var isShowingPicker = false
-    @State private var passcode = ""
+    @State private var modeChoice: BlockGroupModeChoice = .scheduled
+    @State private var limitMinutes = 30
+    @State private var startDate = BlockSetupPage.date(forMinute: 22 * 60)
+    @State private var endDate = BlockSetupPage.date(forMinute: 7 * 60)
+    @State private var selectedDays: Set<BlockWeekday> = Set(BlockWeekday.everyDay)
+    @State private var password = ""
+    @State private var confirmPassword = ""
     @State private var isStarting = false
+    @State private var startError: String?
 
     private var selectedCount: Int {
         selection.applicationTokens.count
@@ -1179,58 +1226,59 @@ private struct BlockSetupPage: View {
             + selection.webDomainTokens.count
     }
 
-    private var canStart: Bool {
-        OnboardingBlock.meetsMinimumSelection(
-            appCount: selection.applicationTokens.count,
-            categoryCount: selection.categoryTokens.count,
-            webCount: selection.webDomainTokens.count)
-            && passcode.count >= 4
-            && !isStarting
+    private var configuredMode: BlockGroupMode {
+        let days = selectedDays.isEmpty ? BlockWeekday.everyDay : selectedDays.sorted()
+        switch modeChoice {
+        case .timeLimit:
+            return .timeLimit(limitSeconds: TimeInterval(limitMinutes * 60), days: days)
+        case .scheduled:
+            return .scheduled(
+                startMinute: Self.minute(from: startDate),
+                endMinute: Self.minute(from: endDate),
+                days: days)
+        }
+    }
+
+    private var trimmedPassword: String {
+        password.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canAdvance: Bool {
+        switch step {
+        case .apps:
+            #if DEBUG && targetEnvironment(simulator)
+            return true // FamilyActivityPicker has no apps to select in the simulator
+            #else
+            return OnboardingBlock.meetsMinimumSelection(
+                appCount: selection.applicationTokens.count,
+                categoryCount: selection.categoryTokens.count,
+                webCount: selection.webDomainTokens.count)
+            #endif
+        case .mode:
+            return true
+        case .configure:
+            return configuredMode.isValid
+        case .password:
+            return !trimmedPassword.isEmpty && password == confirmPassword && !isStarting
+        }
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Block your first app")
-                .font(.title.bold())
-                .multilineTextAlignment(.center)
-            Text("Set a daily limit on the app you waste the most time on. You'll need your passcode to lift it — set it up now while you're motivated.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            Button {
-                AppHaptics.buttonTap()
-                isShowingPicker = true
-            } label: {
-                Text(selectedCount > 0 ? "\(selectedCount) selected — edit" : "Choose apps to block")
-            }
-            .buttonStyle(.bordered)
-
-            SecureField("4-digit passcode", text: $passcode)
-                .keyboardType(.numberPad)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 240)
-            Text("Set a passcode so you can't just turn it off.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            if !canStart {
-                Text("Select at least one app and set a 4-digit passcode.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 18) {
+                    header
+                    stepContent
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
             }
 
-            Button {
-                guard canStart else { return }
-                isStarting = true
-                Task { await start() }
-            } label: {
-                if isStarting { ProgressView() } else { Text("Start blocking") }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!canStart)
+            navButtons
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
         }
-        .padding(.horizontal, 24)
         .sheet(isPresented: $isShowingPicker) {
             NavigationStack {
                 FamilyActivityPicker(selection: $selection)
@@ -1244,20 +1292,343 @@ private struct BlockSetupPage: View {
         }
     }
 
+    // MARK: Header
+
+    private var header: some View {
+        VStack(spacing: 8) {
+            Image(stepImageName)
+                .resizable()
+                .scaledToFit()
+                .frame(height: 150)
+                .transition(.opacity)
+                .id(step)
+
+            Text("Step \(step.rawValue + 1) of \(Step.allCases.count)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.title.bold())
+                .multilineTextAlignment(.center)
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var stepImageName: String {
+        switch step {
+        case .apps: return "OnboardingBlockApps"
+        case .mode: return "OnboardingBlockMode"
+        case .configure: return "OnboardingBlockConfigure"
+        case .password: return "OnboardingBlockPassword"
+        }
+    }
+
+    private var title: String {
+        switch step {
+        case .apps: return "Pick what to block"
+        case .mode: return "How should it block?"
+        case .configure: return modeChoice == .timeLimit ? "Set your daily limit" : "Set your schedule"
+        case .password: return "Lock it with a password"
+        }
+    }
+
+    private var subtitle: String {
+        switch step {
+        case .apps:
+            return "Choose the apps, categories, or websites you lose the most time to. You can add more later."
+        case .mode:
+            return "Two ways to take control. You can change this anytime in Settings."
+        case .configure:
+            return modeChoice == .timeLimit
+                ? "Once you hit your daily limit, the apps lock for the rest of the day."
+                : "The apps stay blocked during the hours you choose."
+        case .password:
+            return "You'll need this to lift or edit the block — so you can't just turn it off in a weak moment."
+        }
+    }
+
+    // MARK: Step content
+
+    @ViewBuilder
+    private var stepContent: some View {
+        switch step {
+        case .apps:
+            appsStep
+        case .mode:
+            modeStep
+        case .configure:
+            configureStep
+        case .password:
+            passwordStep
+        }
+    }
+
+    private var appsStep: some View {
+        AppCard {
+            Button {
+                AppHaptics.buttonTap()
+                isShowingPicker = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "app.badge")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Choose apps & websites")
+                            .font(.subheadline.weight(.semibold))
+                        Text("\(selectedCount) selected")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .appCardRow()
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var modeStep: some View {
+        VStack(spacing: 12) {
+            ModeChoiceCard(
+                title: "Daily time limit",
+                detail: "Allow yourself a set amount of time per day, then lock the apps.",
+                systemImage: "hourglass",
+                isSelected: modeChoice == .timeLimit
+            ) {
+                AppHaptics.selectionChanged()
+                modeChoice = .timeLimit
+            }
+
+            ModeChoiceCard(
+                title: "Schedule",
+                detail: "Block the apps during set hours — like overnight or during work.",
+                systemImage: "calendar",
+                isSelected: modeChoice == .scheduled
+            ) {
+                AppHaptics.selectionChanged()
+                modeChoice = .scheduled
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var configureStep: some View {
+        VStack(spacing: 10) {
+            AppCard {
+                if modeChoice == .timeLimit {
+                    DurationWheelPicker(minutes: $limitMinutes)
+                        .appCardRow(verticalPadding: 14)
+                } else {
+                    DatePicker("Block from", selection: $startDate, displayedComponents: .hourAndMinute)
+                        .appCardRow()
+                    AppCardDivider()
+                    DatePicker("Until", selection: $endDate, displayedComponents: .hourAndMinute)
+                        .appCardRow()
+                }
+
+                AppCardDivider()
+
+                RepeatDaysPicker(selectedDays: $selectedDays)
+                    .appCardRow()
+            }
+
+            if !configuredMode.isValid {
+                Text(modeChoice == .scheduled
+                     ? "Pick a start and end time and at least one day."
+                     : "Pick at least one day.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    private var passwordStep: some View {
+        AppCard {
+            SecureField("Password", text: $password)
+                .textContentType(.newPassword)
+                .appCardRow()
+            AppCardDivider()
+            SecureField("Confirm password", text: $confirmPassword)
+                .textContentType(.newPassword)
+                .appCardRow()
+        }
+        .onChange(of: password) { startError = nil }
+        .onChange(of: confirmPassword) { startError = nil }
+    }
+
+    // MARK: Navigation
+
+    private var navButtons: some View {
+        VStack(spacing: 8) {
+            if let feedback = feedbackMessage {
+                Text(feedback)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .transition(.opacity)
+            }
+
+            HStack(spacing: 12) {
+                if step != .apps {
+                    Button {
+                        AppHaptics.buttonTap()
+                        back()
+                    } label: {
+                        Text("Back").onboardingSecondaryButton()
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isStarting)
+                }
+
+                Button {
+                    advance()
+                } label: {
+                    Group {
+                        if isStarting {
+                            ProgressView().tint(.white)
+                        } else {
+                            Text(step == .password ? "Start blocking" : "Continue")
+                        }
+                    }
+                    .onboardingPrimaryButton(disabled: !canAdvance)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canAdvance)
+            }
+        }
+    }
+
+    /// A visible reason the user can't continue (or why starting failed), so
+    /// nothing fails silently.
+    private var feedbackMessage: String? {
+        if let startError {
+            return startError
+        }
+        if step == .password, !canAdvance {
+            if trimmedPassword.isEmpty {
+                return "Enter a password to continue."
+            }
+            if password != confirmPassword {
+                return "Passwords don't match."
+            }
+        }
+        return nil
+    }
+
+    private func back() {
+        guard let previous = Step(rawValue: step.rawValue - 1) else { return }
+        withAnimation { step = previous }
+    }
+
+    private func advance() {
+        guard canAdvance else { return }
+        if step == .password {
+            isStarting = true
+            Task { await start() }
+        } else if let next = Step(rawValue: step.rawValue + 1) {
+            AppHaptics.buttonTap()
+            withAnimation { step = next }
+        }
+    }
+
     @MainActor
     private func start() async {
         defer { isStarting = false }
+        startError = nil
+        #if !(DEBUG && targetEnvironment(simulator))
         if !model.hasScreenTimeAuthorization {
             await model.requestScreenTimeAuthorization()
-            guard model.hasScreenTimeAuthorization else { return }
+            guard model.hasScreenTimeAuthorization else {
+                startError = "Screen Time access is required to start blocking. Enable it and try again."
+                return
+            }
         }
-        guard let data = try? BlockingSelectionCodec.encode(selection) else { return }
+        #endif
+        guard let data = try? BlockingSelectionCodec.encode(selection) else {
+            startError = "Couldn't save your app selection. Please try again."
+            return
+        }
         let group = OnboardingBlock.makeFirstBlockGroup(
-            id: UUID().uuidString, name: "My First Block", selectionData: data)
-        if model.upsertBlockGroup(group, password: passcode) {
+            id: UUID().uuidString,
+            name: "My First Block",
+            selectionData: data,
+            mode: configuredMode)
+        if model.upsertBlockGroup(group, password: password) {
             Haptics.success()
             onStarted()
+            return
         }
+        // upsertBlockGroup failed — surface the reason instead of doing nothing.
+        #if DEBUG && targetEnvironment(simulator)
+        // The simulator's app picker is empty, so the block can't actually be
+        // created; continue so the rest of onboarding stays testable.
+        onStarted()
+        #else
+        startError = model.message ?? "Couldn't start blocking. Check your apps and password, then try again."
+        #endif
+    }
+
+    // MARK: Minute <-> Date helpers (schedule pickers)
+
+    private static func date(forMinute minute: Int) -> Date {
+        let comps = DateComponents(hour: minute / 60, minute: minute % 60)
+        return Calendar.current.date(from: comps) ?? Date()
+    }
+
+    private static func minute(from date: Date) -> Int {
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+    }
+}
+
+private struct ModeChoiceCard: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: systemImage)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .frame(width: 30)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.5))
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1268,6 +1639,8 @@ private struct InviteFriendsOnboardingPage: View {
 
     @State private var invite: CreatedInvite?
     @State private var isGenerating = false
+    @State private var didFail = false
+    @State private var didCopy = false
 
     private var shareText: String? {
         guard let invite else { return nil }
@@ -1279,33 +1652,45 @@ private struct InviteFriendsOnboardingPage: View {
 
     var body: some View {
         VStack(spacing: 20) {
+            Image("OnboardingInviteFriend")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 180)
+
             Text("You're all set — invite a friend")
                 .font(.title.bold())
                 .multilineTextAlignment(.center)
-            Text("Deny works best with a friend keeping you honest. Send them a link to install the app and connect with you.")
+            Text("Deny works best with a friend keeping you honest. Send them your link — it installs the app and connects you automatically.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            if let shareText, AppConfiguration.isAppStoreURLConfigured {
+            if let invite, let shareText {
+                linkBox(invite.url.absoluteString)
+
                 ShareLink(item: shareText) {
-                    Text("Invite a friend").frame(maxWidth: .infinity)
+                    Label("Share invite", systemImage: "square.and.arrow.up")
+                        .onboardingPrimaryButton()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.plain)
                 .simultaneousGesture(TapGesture().onEnded { Haptics.success() })
-            } else if !AppConfiguration.isAppStoreURLConfigured {
-                Text("Sharing opens once the app's install link is set.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
+                Button {
+                    copyLink(invite.url.absoluteString)
+                } label: {
+                    Label(didCopy ? "Copied!" : "Copy link", systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                        .onboardingSecondaryButton()
+                }
+                .buttonStyle(.plain)
             } else if isGenerating {
-                ProgressView()
-            } else {
+                ProgressView().padding(.vertical, 8)
+            } else if didFail {
                 Button {
                     Task { await generate() }
                 } label: {
-                    Text("Try again").frame(maxWidth: .infinity)
+                    Text("Try again").onboardingSecondaryButton()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
             }
 
             Button("Maybe later") {
@@ -1317,9 +1702,37 @@ private struct InviteFriendsOnboardingPage: View {
         }
         .padding(.horizontal, 24)
         .onChange(of: isActive) { _, nowActive in
-            if nowActive && AppConfiguration.isAppStoreURLConfigured {
-                Task { await generate() }
-            }
+            if nowActive { Task { await generate() } }
+        }
+        .task {
+            if isActive { await generate() }
+        }
+    }
+
+    private func linkBox(_ link: String) -> some View {
+        Text(link)
+            .font(.footnote.monospaced())
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
+            )
+    }
+
+    private func copyLink(_ link: String) {
+        AppHaptics.success()
+        #if canImport(UIKit)
+        UIPasteboard.general.string = link
+        #endif
+        withAnimation { didCopy = true }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation { didCopy = false }
         }
     }
 
@@ -1327,8 +1740,13 @@ private struct InviteFriendsOnboardingPage: View {
     private func generate() async {
         guard invite == nil, !isGenerating else { return }
         isGenerating = true
+        didFail = false
         defer { isGenerating = false }
-        invite = try? await model.createInvite()
+        if let created = try? await model.createInvite() {
+            invite = created
+        } else {
+            didFail = true
+        }
     }
 }
 

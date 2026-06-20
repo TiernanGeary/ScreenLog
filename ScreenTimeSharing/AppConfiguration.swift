@@ -28,11 +28,18 @@ enum AppConfiguration {
     /// APP_SHARED_SECRET. Replaced at deploy time.
     static let pushServerSharedSecret = "97127fb9fd313f27fb3d5556706347e6cd735617f5826a8dfbf95c179548d840"
     /// Public App Store product URL, used in onboarding invite shares.
-    /// TODO(owner): replace with the real published product URL.
-    static let appStoreURL = URL(string: "https://apps.apple.com/app/id0000000000")!
+    static let appStoreURL = URL(string: "https://apps.apple.com/app/id6773738211")!
 
     static var isAppStoreURLConfigured: Bool {
         !appStoreURL.absoluteString.contains("id0000000000")
+    }
+
+    /// Public https invite link served by the push worker. When opened, the
+    /// worker page tries to open the app (`deny://invite/<code>`) and otherwise
+    /// sends the friend to the App Store. Works whether or not the app is
+    /// installed, unlike the raw `deny://` scheme.
+    static func inviteWebLink(code: String) -> URL {
+        URL(string: "\(pushServerBaseURL)/invite/\(code)") ?? appStoreURL
     }
 
     static var isPushServerConfigured: Bool {

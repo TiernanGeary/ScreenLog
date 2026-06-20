@@ -28,12 +28,14 @@ public enum OnboardingBlock {
 }
 
 extension OnboardingBlock {
-    /// Builds the onboarding "first block" with agreed defaults. The caller
-    /// passes the resulting group to AppModel.upsertBlockGroup(_:password:),
-    /// which persists and immediately enforces it.
+    /// Builds the onboarding "first block" with the mode the user configured
+    /// during setup (time limit or schedule). The caller passes the resulting
+    /// group to AppModel.upsertBlockGroup(_:password:), which persists and
+    /// immediately enforces it.
     public static func makeFirstBlockGroup(id: String,
                                            name: String,
-                                           selectionData: Data) -> BlockGroup {
+                                           selectionData: Data,
+                                           mode: BlockGroupMode = .defaultTimeLimit) -> BlockGroup {
         let now = Date()
         return BlockGroup(
             id: id,
@@ -41,7 +43,7 @@ extension OnboardingBlock {
             colorHex: "#E84855",
             selectionData: selectionData,
             isEnabled: true,
-            mode: .timeLimit(limitSeconds: 30 * 60, days: BlockWeekday.everyDay),
+            mode: mode,
             createdAt: now,
             updatedAt: now
         )

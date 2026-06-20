@@ -2447,6 +2447,7 @@ struct BlockGroupConfigurationView: View {
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.white)
@@ -2675,6 +2676,7 @@ struct BlockGroupEditorView: View {
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 15)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.white)
@@ -2767,6 +2769,7 @@ struct BlockGroupEditorView: View {
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.white)
@@ -3000,6 +3003,7 @@ private struct BlockGroupPasswordSetupView: View {
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 15)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.white)
@@ -3188,7 +3192,7 @@ struct BlockGroupDraft: Identifiable {
         colorHex = "#2E86AB"
         selection = FamilyActivitySelection()
         isEnabled = true
-        modeChoice = .timeLimit
+        modeChoice = .scheduled
         scheduledStartDate = Self.date(forMinute: 22 * 60)
         scheduledEndDate = Self.date(forMinute: 7 * 60)
         limitMinutes = 30
@@ -3284,7 +3288,7 @@ struct BlockGroupDraft: Identifiable {
     }
 }
 
-private struct RepeatDaysPicker: View {
+struct RepeatDaysPicker: View {
     @Environment(\.colorScheme) private var colorScheme
     @Binding var selectedDays: Set<BlockWeekday>
 
@@ -3344,7 +3348,7 @@ private struct RepeatDaysPicker: View {
     }
 }
 
-private struct DurationWheelPicker: View {
+struct DurationWheelPicker: View {
     @Binding var minutes: Int
     private let options = Array(stride(from: 5, through: 480, by: 5))
 

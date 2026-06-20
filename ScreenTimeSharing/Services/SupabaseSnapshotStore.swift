@@ -219,10 +219,12 @@ final class SupabaseSnapshotStore {
             .rpc("create_friend_invite")
             .execute()
             .value
-        guard let row = rows.first,
-              let url = URL(string: "deny://invite/\(row.code)") else {
+        guard let row = rows.first else {
             throw SupabaseSnapshotStoreError.invalidInvite
         }
+        // Public https link (App Store fallback when the app isn't installed);
+        // the worker redirects installed devices into deny://invite/<code>.
+        let url = AppConfiguration.inviteWebLink(code: row.code)
         return CreatedInvite(code: row.code, url: url, expiresAt: row.expiresAt)
     }
 
