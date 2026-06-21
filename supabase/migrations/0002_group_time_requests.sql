@@ -41,7 +41,7 @@ end; $$;
 -- distinct members approve, status flips to 'approved'.
 create or replace function public.respond_group_time_request(p_request_id uuid, p_approve boolean)
 returns text language plpgsql security definer set search_path = public, pg_temp as $$
-declare r public.time_requests%rowtype; new_status text; active_recip int; eff int;
+declare r public.time_requests%rowtype; new_status text; eff int;
 begin
   select * into r from public.time_requests where id = p_request_id for update;
   if r.id is null then raise exception 'no such request'; end if;
@@ -59,19 +59,18 @@ begin
   if not (auth.uid() = any(r.approvers)) then
     r.approvers := array_append(r.approvers, auth.uid());
   end if;
-  select count(*) into active_recip
-    from public.group_members
-    where group_id = r.social_group_id
-      and user_id = any(r.recipient_ids)
-      and left_at is null
-      and removed_by is null;
   select count(*) into eff
     from public.group_members
     where group_id = r.social_group_id
       and user_id = any(r.approvers)
       and left_at is null
       and removed_by is null;
-  new_status := case when eff >= greatest(1, least(coalesce(r.approvals_required,1), active_recip))
+  -- Compare against the quorum frozen at send time (already clamped to the
+  -- recipient count then). Do NOT re-clamp by the live recipient count, or an
+  -- owner could lower the bar by removing pending approvers. If too many
+  -- approvers become ineligible the request just never reaches quorum and
+  -- expires — the requester can re-send to re-freeze a smaller quorum.
+  new_status := case when eff >= greatest(1, coalesce(r.approvals_required, 1))
                      then 'approved' else 'pending' end;
   update public.time_requests
     set approvers = r.approvers,
