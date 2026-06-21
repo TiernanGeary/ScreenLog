@@ -520,6 +520,7 @@ final class SupabaseSnapshotStore {
     }
 
     func sendGroupTimeRequest(
+        requestID: String,
         socialGroupID: String,
         blockGroupID: String,
         seconds: Int,
@@ -527,6 +528,7 @@ final class SupabaseSnapshotStore {
         photoPath: String?
     ) async throws -> String {
         struct Params: Encodable {
+            let p_request_id: String
             let p_social_group_id: String
             let p_block_group_id: String
             let p_seconds: Int
@@ -538,6 +540,7 @@ final class SupabaseSnapshotStore {
             .rpc(
                 "send_group_time_request",
                 params: Params(
+                    p_request_id: requestID,
                     p_social_group_id: socialGroupID,
                     p_block_group_id: blockGroupID,
                     p_seconds: seconds,

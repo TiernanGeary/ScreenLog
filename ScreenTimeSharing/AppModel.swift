@@ -322,6 +322,7 @@ final class AppModel: ObservableObject {
         await subscriptionService.loadProducts()
         cloudAvailability = await snapshotStore.cloudAvailability()
         await publishProfileUpdateToCloud()
+        await loadMyGroups()
         await publishSnapshotIfNeeded()
         await reloadFriends()
         await syncFriendRequests()
@@ -769,6 +770,7 @@ final class AppModel: ObservableObject {
         blockingState.requests.removeAll { $0.groupID == group.id }
         blockingState.friendRequests.removeAll { $0.groupID == group.id }
         blockingState.unblockSessions.removeAll { $0.groupID == group.id }
+        blockingState.poolExhaustionOverrides.removeAll { $0.groupID == group.id }
         groupUnlockExpirations[group.id] = nil
         saveBlockingStateWithStatus("Block group deleted.")
         return true
@@ -1005,8 +1007,10 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            let photoPath = try await uploadGroupRequestPhoto(photoJPEGData)
-            let requestID = try await snapshotStore.sendGroupTimeRequest(
+            let requestID = UUID().uuidString.lowercased()
+            let photoPath = try await uploadGroupRequestPhoto(photoJPEGData, requestID: requestID)
+            let createdRequestID = try await snapshotStore.sendGroupTimeRequest(
+                requestID: requestID,
                 socialGroupID: socialGroupID,
                 blockGroupID: "group.\(socialGroupID)",
                 seconds: Int(seconds),
@@ -1016,7 +1020,7 @@ final class AppModel: ObservableObject {
             await syncFriendRequests()
 
             let recipientIDs = await groupRequestRecipientIDs(
-                requestID: requestID,
+                requestID: createdRequestID,
                 socialGroupID: socialGroupID
             )
             let senderName = profile.displayName == "Me" ? "A group member" : profile.displayName
@@ -1026,7 +1030,7 @@ final class AppModel: ObservableObject {
                 toProfileIDs: recipientIDs,
                 title: "New group time request",
                 body: "\(senderName) is asking for \(durationLabel) in \(groupName). Tap to review.",
-                requestID: requestID
+                requestID: createdRequestID
             )
             message = "Group request sent."
             return true
@@ -1176,8 +1180,10 @@ final class AppModel: ObservableObject {
         saveBlockingStateWithStatus("Collected \(BlockingDisplayFormatter.durationLabel(duration)) of approved time.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
-        Task {
-            await publishFriendRequestUpdateToCloud(collectedRequest)
+        if collectedRequest.socialGroupID == nil {
+            Task {
+                await publishFriendRequestUpdateToCloud(collectedRequest)
+            }
         }
         return true
     }
@@ -1471,6 +1477,7 @@ final class AppModel: ObservableObject {
     func deleteGroup(_ groupID: String) async {
         do {
             try await snapshotStore.deleteGroup(groupID: groupID)
+            removeGroupBlock(groupID: groupID)
             await loadMyGroups()
         } catch {
             message = "Could not delete group: \(error.localizedDescription)"
@@ -1501,6 +1508,7 @@ final class AppModel: ObservableObject {
     /// the latest friends + requests so the existing notification logic posts the
     /// approve/deny/new-request alerts even when the app wasn't open.
     func handleRemoteChange() async {
+        await loadMyGroups()
         await reloadFriends()
         await syncFriendRequests()
         await syncGroupPools()
@@ -1538,11 +1546,12 @@ final class AppModel: ObservableObject {
             lastSnapshotPublishAt = now
             let selectedAppSeconds = Int(snapshot.selectedAppDuration ?? 0)
             for group in myGroups where group.mode == .pool {
-                let state = try? await snapshotStore.reportGroupUsage(
+                if let state = try? await snapshotStore.reportGroupUsage(
                     groupID: group.id,
                     selectedAppSeconds: selectedAppSeconds
-                )
-                applyPoolState(group, state)
+                ) {
+                    applyPoolState(group, state)
+                }
             }
         } catch {
             // Non-fatal: retried on the next poll cycle.
@@ -1551,18 +1560,19 @@ final class AppModel: ObservableObject {
 
     func syncGroupPools() async {
         for group in myGroups where group.mode == .pool {
-            let state = try? await snapshotStore.getGroupPoolState(groupID: group.id)
-            applyPoolState(group, state)
+            if let state = try? await snapshotStore.getGroupPoolState(groupID: group.id) {
+                applyPoolState(group, state)
+            }
         }
     }
 
-    private func applyPoolState(_ group: FriendGroupSummary, _ state: GroupPoolState?) {
+    private func applyPoolState(_ group: FriendGroupSummary, _ state: GroupPoolState) {
         let blockGroupID = "group.\(group.id)"
         let now = Date()
         var didChange = false
         var shouldNotifyPoolExhausted = false
 
-        if state?.exhausted == true {
+        if state.exhausted {
             let override = PoolExhaustionOverride(
                 groupID: blockGroupID,
                 exhaustedAt: now,
@@ -1683,15 +1693,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func uploadGroupRequestPhoto(_ photoData: Data?) async throws -> String? {
+    private func uploadGroupRequestPhoto(_ photoData: Data?, requestID: String) async throws -> String? {
         guard let photoData, !photoData.isEmpty else {
             return nil
         }
 
+        _ = try friendRequestPhotoStore.saveJPEGData(photoData, id: requestID)
         let client = SupabaseClientProvider.shared
         let session = try await client.auth.session
         let uid = session.user.id
-        let path = "\(uid.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
+        let path = "\(uid.uuidString.lowercased())/\(requestID.lowercased()).jpg"
         try await client.storage.from("request-photos").upload(
             path,
             data: photoData,
@@ -2049,6 +2060,7 @@ final class AppModel: ObservableObject {
     func reapplyBlockingOnForeground() {
         syncBlockingEnforcement()
         Task {
+            await loadMyGroups()
             await syncGroupPools()
         }
     }
