@@ -16,6 +16,10 @@ create or replace function public.group_owner_day(p_group_id uuid)
 returns text language plpgsql security definer stable set search_path = public, pg_temp as $$
 declare owner_tz text;
 begin
+  if not public.is_group_member(p_group_id) then
+    raise exception 'not a member';
+  end if;
+
   select coalesce(owner_time_zone, 'UTC') into owner_tz
     from public.groups where id = p_group_id;
   owner_tz := coalesce(owner_tz, 'UTC');
