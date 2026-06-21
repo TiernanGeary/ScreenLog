@@ -95,3 +95,10 @@ public enum GroupBlock {
         return String((0..<length).compactMap { _ in chars.randomElement() })
     }
 }
+
+public enum GroupApproval {
+    public static func isApproved(count: Int, required: Int) -> Bool { count >= max(required, 1) }
+    public static func progressLabel(count: Int, required: Int) -> String {
+        "\(count) of \(max(required, 1)) approved"
+    }
+}

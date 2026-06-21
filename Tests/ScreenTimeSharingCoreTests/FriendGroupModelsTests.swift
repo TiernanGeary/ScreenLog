@@ -53,4 +53,12 @@ final class FriendGroupModelsTests: XCTestCase {
         XCTAssertTrue(p.allSatisfy { allowed.contains($0) })
         XCTAssertNotEqual(p, GroupBlock.generatePassword())
     }
+
+    func test_groupApproval_progressAndApproved() {
+        XCTAssertEqual(GroupApproval.progressLabel(count: 2, required: 3), "2 of 3 approved")
+        XCTAssertFalse(GroupApproval.isApproved(count: 2, required: 3))
+        XCTAssertTrue(GroupApproval.isApproved(count: 3, required: 3))
+        XCTAssertTrue(GroupApproval.isApproved(count: 1, required: 1))
+        XCTAssertTrue(GroupApproval.isApproved(count: 4, required: 3))
+    }
 }
