@@ -67,6 +67,15 @@ struct FriendRequestPhotoStore {
         fileManager.fileExists(atPath: url(for: id).path)
     }
 
+    func deleteJPEGData(id: String) throws {
+        let photoURL = url(for: id)
+        guard fileManager.fileExists(atPath: photoURL.path) else {
+            return
+        }
+
+        try fileManager.removeItem(at: photoURL)
+    }
+
     private func url(for id: String) -> URL {
         directoryURL.appendingPathComponent("\(id).jpg", isDirectory: false)
     }
@@ -1068,15 +1077,23 @@ final class AppModel: ObservableObject {
         do {
             let requestID = UUID().uuidString.lowercased()
             let photoPath = try await groupRequestPhotoPath(photoJPEGData, requestID: requestID)
-            let createdRequestID = try await snapshotStore.sendGroupTimeRequest(
-                requestID: requestID,
-                socialGroupID: socialGroupID,
-                blockGroupID: "group.\(socialGroupID)",
-                seconds: Int(seconds),
-                message: requestMessage.trimmingCharacters(in: .whitespacesAndNewlines),
-                photoPath: photoPath
-            )
             try await uploadGroupRequestPhoto(photoJPEGData, requestID: requestID, path: photoPath)
+
+            let createdRequestID: String
+            do {
+                createdRequestID = try await snapshotStore.sendGroupTimeRequest(
+                    requestID: requestID,
+                    socialGroupID: socialGroupID,
+                    blockGroupID: "group.\(socialGroupID)",
+                    seconds: Int(seconds),
+                    message: requestMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+                    photoPath: photoPath
+                )
+            } catch {
+                await deleteGroupRequestPhoto(requestID: requestID, path: photoPath)
+                throw error
+            }
+
             await syncFriendRequests()
 
             let recipientIDs = await groupRequestRecipientIDs(
@@ -1277,12 +1294,22 @@ final class AppModel: ObservableObject {
     }
 
     func openFriendRequestLog(requestID: String) {
+        let resolvedRequestID = canonicalFriendRequestID(matching: requestID)
         friendRequestNotificationService.clearNotification(for: requestID)
-        focusedFriendRequestLogID = requestID
+        if resolvedRequestID != requestID {
+            friendRequestNotificationService.clearNotification(for: resolvedRequestID)
+        }
+        focusedFriendRequestLogID = resolvedRequestID
     }
 
     func clearFocusedFriendRequestLog() {
         focusedFriendRequestLogID = nil
+    }
+
+    private func canonicalFriendRequestID(matching requestID: String) -> String {
+        blockingState.friendRequests.first {
+            $0.id.caseInsensitiveCompare(requestID) == .orderedSame
+        }?.id ?? requestID
     }
 
     func requestScreenTimeAuthorization() async {
@@ -1413,7 +1440,7 @@ final class AppModel: ObservableObject {
     }
 
     private func cleanupDroppedGroupBlocks() {
-        guard isAuthenticated, !myGroups.isEmpty else {
+        guard isAuthenticated else {
             return
         }
 
@@ -1949,17 +1976,32 @@ final class AppModel: ObservableObject {
             return
         }
 
-        _ = try friendRequestPhotoStore.saveJPEGData(photoData, id: requestID)
         let client = SupabaseClientProvider.shared
         try await client.storage.from("request-photos").upload(
             path,
             data: photoData,
             options: FileOptions(contentType: "image/jpeg")
         )
+        do {
+            _ = try friendRequestPhotoStore.saveJPEGData(photoData, id: requestID)
+        } catch {
+            await deleteGroupRequestPhoto(requestID: requestID, path: path)
+            throw error
+        }
+    }
+
+    private func deleteGroupRequestPhoto(requestID: String, path: String?) async {
+        if let path {
+            let client = SupabaseClientProvider.shared
+            _ = try? await client.storage.from("request-photos").remove(paths: [path])
+        }
+        try? friendRequestPhotoStore.deleteJPEGData(id: requestID)
     }
 
     private func groupRequestRecipientIDs(requestID: String, socialGroupID: String) async -> [String] {
-        if let request = blockingState.friendRequests.first(where: { $0.id == requestID }) {
+        if let request = blockingState.friendRequests.first(where: {
+            $0.id.caseInsensitiveCompare(requestID) == .orderedSame
+        }) {
             return request.selectedFriendIDs
         }
 
@@ -1991,7 +2033,9 @@ final class AppModel: ObservableObject {
                 requestID: requestID,
                 approve: approve
             )
-            let existingRequest = blockingState.friendRequests.first { $0.id == requestID }
+            let existingRequest = blockingState.friendRequests.first {
+                $0.id.caseInsensitiveCompare(requestID) == .orderedSame
+            }
             let requesterID = existingRequest?.requesterID
             let priorStatus = existingRequest?.status
             updateLocalGroupFriendRequest(
@@ -2026,7 +2070,9 @@ final class AppModel: ObservableObject {
         approvedByFriendID: String?
     ) {
         guard let status = BlockRequestStatus(rawValue: statusRaw),
-              let index = blockingState.friendRequests.firstIndex(where: { $0.id == requestID }) else {
+              let index = blockingState.friendRequests.firstIndex(where: {
+                  $0.id.caseInsensitiveCompare(requestID) == .orderedSame
+              }) else {
             return
         }
 
