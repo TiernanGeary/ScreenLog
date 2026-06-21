@@ -168,6 +168,7 @@ final class AppModel: ObservableObject {
     @Published var usageHistory: [DailyUsageSnapshot] = []
     @Published var hourlyUsageByDayID: [String: [TimeInterval]] = [:]
     @Published var friendSummaries: [FriendUsageSummary] = []
+    @Published var myGroups: [FriendGroupSummary] = []
     @Published var leaderboardEntries: [LeaderboardEntry] = []
     @Published var leaderboardWindow: LeaderboardWindow = .today
     @Published var cloudAvailability: BackendAvailability = .checking
@@ -182,6 +183,7 @@ final class AppModel: ObservableObject {
     @Published var pendingShieldFriendRequestGroupID: String?
     @Published var focusedFriendRequestLogID: String?
     @Published var pendingIncomingInvite: IncomingInvite?
+    @Published var pendingIncomingGroupInvite: PeekedGroupInvite?
     @Published var isRedeemingInvite = false
     @Published var isDeletingAccount = false
     @Published var isAuthenticated: Bool
@@ -1161,6 +1163,50 @@ final class AppModel: ObservableObject {
         return invite
     }
 
+    func loadMyGroups() async {
+        do {
+            myGroups = try await snapshotStore.getMyGroups()
+        } catch {
+            message = "Could not refresh groups: \(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    func createGroup(
+        name: String,
+        mode: GroupMode,
+        appNames: [String],
+        limitSeconds: Int,
+        approvalsRequired: Int
+    ) async -> CreatedGroup? {
+        let errs = GroupConfigValidation.errors(
+            mode: mode,
+            appNames: appNames,
+            limitSeconds: limitSeconds,
+            approvalsRequired: approvalsRequired
+        )
+        guard errs.isEmpty else {
+            message = errs.joined(separator: " ")
+            return nil
+        }
+
+        do {
+            let g = try await snapshotStore.createGroup(
+                name: name,
+                mode: mode,
+                appNames: GroupAppNames.normalize(appNames),
+                limitSeconds: limitSeconds,
+                approvalsRequired: approvalsRequired,
+                timeZone: TimeZone.current.identifier
+            )
+            await loadMyGroups()
+            return g
+        } catch {
+            message = "Could not create group: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     /// Friends can only read this user's snapshots while the profile is marked
     /// sharing (enforced server-side). Connecting with a friend or uploading
     /// usage is the consent that turns it on.
@@ -1173,6 +1219,44 @@ final class AppModel: ObservableObject {
         profile.updatedAt = Date()
         profileStore.save(profile)
         await publishProfileUpdateToCloud()
+    }
+
+    func presentIncomingGroupInvite(code: String) async {
+        if let invite = try? await snapshotStore.peekGroupInvite(code: code) {
+            pendingIncomingGroupInvite = invite
+        } else {
+            pendingIncomingGroupInvite = PeekedGroupInvite(
+                code: code,
+                groupID: "",
+                groupName: "Group",
+                ownerDisplayName: "Friend",
+                mode: .perMember
+            )
+        }
+    }
+
+    @discardableResult
+    func redeemPendingGroupInvite() async -> Bool {
+        guard let invite = pendingIncomingGroupInvite else {
+            return false
+        }
+
+        do {
+            let redeemed = try await snapshotStore.redeemGroupInvite(code: invite.code)
+            message = "You joined \(redeemed.groupName)."
+            await loadMyGroups()
+            if pendingIncomingGroupInvite?.code == invite.code {
+                pendingIncomingGroupInvite = nil
+            }
+            return true
+        } catch {
+            message = "Could not join group: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func dismissIncomingGroupInvite() {
+        pendingIncomingGroupInvite = nil
     }
 
     /// Shows the accept sheet for an invite code arriving via deep link,
@@ -1232,6 +1316,37 @@ final class AppModel: ObservableObject {
             message = "Could not add friend: \(error.localizedDescription)"
             return false
         }
+    }
+
+    func leaveGroup(_ groupID: String) async {
+        do {
+            try await snapshotStore.leaveGroup(groupID: groupID)
+            await loadMyGroups()
+        } catch {
+            message = "Could not leave group: \(error.localizedDescription)"
+        }
+    }
+
+    func removeGroupMember(groupID: String, userID: String) async {
+        do {
+            try await snapshotStore.removeGroupMember(groupID: groupID, userID: userID)
+            await loadMyGroups()
+        } catch {
+            message = "Could not remove group member: \(error.localizedDescription)"
+        }
+    }
+
+    func deleteGroup(_ groupID: String) async {
+        do {
+            try await snapshotStore.deleteGroup(groupID: groupID)
+            await loadMyGroups()
+        } catch {
+            message = "Could not delete group: \(error.localizedDescription)"
+        }
+    }
+
+    func loadGroupDetail(groupID: String) async -> GroupDetail? {
+        try? await snapshotStore.getGroup(groupID: groupID)
     }
 
     func reloadFriends() async {
