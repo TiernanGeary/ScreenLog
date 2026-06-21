@@ -41,13 +41,17 @@ end; $$;
 -- distinct members approve, status flips to 'approved'.
 create or replace function public.respond_group_time_request(p_request_id uuid, p_approve boolean)
 returns text language plpgsql security definer set search_path = public, pg_temp as $$
-declare r public.time_requests%rowtype; new_status text; active_recip int;
+declare r public.time_requests%rowtype; new_status text; active_recip int; eff int;
 begin
   select * into r from public.time_requests where id = p_request_id for update;
   if r.id is null then raise exception 'no such request'; end if;
   if not (auth.uid() = any(r.recipient_ids)) then raise exception 'not a recipient'; end if;
   if r.social_group_id is not null and not public.is_group_member(r.social_group_id) then raise exception 'not a member'; end if;
   if r.status <> 'pending' then return r.status; end if;
+  if r.expires_at is not null and r.expires_at <= now() then
+    update public.time_requests set status='expired', resolved_at=now() where id=p_request_id and status='pending';
+    return 'expired';
+  end if;
   if not p_approve then
     update public.time_requests set status='denied', resolved_at=now() where id=p_request_id;
     return 'denied';
@@ -61,12 +65,19 @@ begin
       and user_id = any(r.recipient_ids)
       and left_at is null
       and removed_by is null;
-  new_status := case when array_length(r.approvers,1) >= greatest(1, least(coalesce(r.approvals_required,1), active_recip))
+  select count(*) into eff
+    from public.group_members
+    where group_id = r.social_group_id
+      and user_id = any(r.approvers)
+      and left_at is null
+      and removed_by is null;
+  new_status := case when eff >= greatest(1, least(coalesce(r.approvals_required,1), active_recip))
                      then 'approved' else 'pending' end;
   update public.time_requests
     set approvers = r.approvers,
         status = new_status,
-        resolved_at = case when new_status='approved' then now() else resolved_at end
+        resolved_at = case when new_status='approved' then now() else resolved_at end,
+        approved_expires_at = case when new_status='approved' then now() + interval '24 hours' else approved_expires_at end
     where id = p_request_id;
   return new_status;
 end; $$;
@@ -75,6 +86,7 @@ create or replace function public.collect_group_time_request(p_request_id uuid)
 returns text language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   update public.time_requests set status='collected', collected_at=now()
-    where id = p_request_id and requester_id = auth.uid() and status = 'approved';
+    where id = p_request_id and requester_id = auth.uid() and status = 'approved'
+      and (approved_expires_at is null or approved_expires_at > now());
   return 'collected';
 end; $$;
