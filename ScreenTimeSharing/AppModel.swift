@@ -209,9 +209,14 @@ final class AppModel: ObservableObject {
     private let onboardingKey = "HasCompletedOnboarding.v1"
     private static let denyStartedAtKey = "DenyStartedAt.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
+    private static let pendingConfiguredGroupIDsKey = "PendingConfiguredGroupIDs.v1"
     private static let pendingGroupCollectRequestIDsKey = "PendingGroupCollectRequestIDs.v1"
     private var isSyncingFriendRequests = false
-    private var pendingConfiguredGroupIDs: Set<String> = []
+    private var pendingConfiguredGroupIDs: Set<String> = [] {
+        didSet {
+            persistPendingConfiguredGroupIDs()
+        }
+    }
     private var pendingGroupCollectRequestIDs: Set<String> = [] {
         didSet {
             persistPendingGroupCollectRequestIDs()
@@ -251,6 +256,7 @@ final class AppModel: ObservableObject {
         let loadedProfile = profileStore.load()
         self.appGroupDefaults = sharedDefaults
         self.usageHistoryDefaults = sharedDefaults
+        self.pendingConfiguredGroupIDs = Self.loadPendingConfiguredGroupIDs(defaults: sharedDefaults)
         self.pendingGroupCollectRequestIDs = Self.loadPendingGroupCollectRequestIDs(defaults: sharedDefaults)
         self.profile = loadedProfile
         let storedDenyStartedAt = UserDefaults.standard.object(forKey: Self.denyStartedAtKey) as? Date
@@ -1061,7 +1067,7 @@ final class AppModel: ObservableObject {
 
         do {
             let requestID = UUID().uuidString.lowercased()
-            let photoPath = try await uploadGroupRequestPhoto(photoJPEGData, requestID: requestID)
+            let photoPath = try await groupRequestPhotoPath(photoJPEGData, requestID: requestID)
             let createdRequestID = try await snapshotStore.sendGroupTimeRequest(
                 requestID: requestID,
                 socialGroupID: socialGroupID,
@@ -1070,6 +1076,7 @@ final class AppModel: ObservableObject {
                 message: requestMessage.trimmingCharacters(in: .whitespacesAndNewlines),
                 photoPath: photoPath
             )
+            try await uploadGroupRequestPhoto(photoJPEGData, requestID: createdRequestID, path: photoPath)
             await syncFriendRequests()
 
             let recipientIDs = await groupRequestRecipientIDs(
@@ -1406,6 +1413,10 @@ final class AppModel: ObservableObject {
     }
 
     private func cleanupDroppedGroupBlocks() {
+        guard isAuthenticated, !myGroups.isEmpty else {
+            return
+        }
+
         let liveIDs = Set(myGroups.map(\.id))
         let droppedGroupIDs = blockingState.groups.compactMap { group -> String? in
             guard group.id.hasPrefix("group.") else {
@@ -1455,6 +1466,24 @@ final class AppModel: ObservableObject {
             } catch {
                 // Non-fatal: retried after the next group refresh.
             }
+        }
+    }
+
+    private static func loadPendingConfiguredGroupIDs(defaults: UserDefaults?) -> Set<String> {
+        guard let data = defaults?.data(forKey: pendingConfiguredGroupIDsKey),
+              let groupIDs = try? JSONDecoder().decode(Set<String>.self, from: data) else {
+            return []
+        }
+
+        return groupIDs
+    }
+
+    private func persistPendingConfiguredGroupIDs() {
+        do {
+            let data = try JSONEncoder().encode(pendingConfiguredGroupIDs)
+            usageHistoryDefaults?.set(data, forKey: Self.pendingConfiguredGroupIDsKey)
+        } catch {
+            message = "Could not save pending configured group retries: \(error.localizedDescription)"
         }
     }
 
@@ -1904,22 +1933,29 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func uploadGroupRequestPhoto(_ photoData: Data?, requestID: String) async throws -> String? {
+    private func groupRequestPhotoPath(_ photoData: Data?, requestID: String) async throws -> String? {
         guard let photoData, !photoData.isEmpty else {
             return nil
         }
 
-        _ = try friendRequestPhotoStore.saveJPEGData(photoData, id: requestID)
         let client = SupabaseClientProvider.shared
         let session = try await client.auth.session
         let uid = session.user.id
-        let path = "\(uid.uuidString.lowercased())/\(requestID.lowercased()).jpg"
+        return "\(uid.uuidString.lowercased())/\(requestID.lowercased()).jpg"
+    }
+
+    private func uploadGroupRequestPhoto(_ photoData: Data?, requestID: String, path: String?) async throws {
+        guard let photoData, !photoData.isEmpty, let path else {
+            return
+        }
+
+        _ = try friendRequestPhotoStore.saveJPEGData(photoData, id: requestID)
+        let client = SupabaseClientProvider.shared
         try await client.storage.from("request-photos").upload(
             path,
             data: photoData,
             options: FileOptions(contentType: "image/jpeg")
         )
-        return path
     }
 
     private func groupRequestRecipientIDs(requestID: String, socialGroupID: String) async -> [String] {
