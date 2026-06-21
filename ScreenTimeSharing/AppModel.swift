@@ -1076,7 +1076,7 @@ final class AppModel: ObservableObject {
                 message: requestMessage.trimmingCharacters(in: .whitespacesAndNewlines),
                 photoPath: photoPath
             )
-            try await uploadGroupRequestPhoto(photoJPEGData, requestID: createdRequestID, path: photoPath)
+            try await uploadGroupRequestPhoto(photoJPEGData, requestID: requestID, path: photoPath)
             await syncFriendRequests()
 
             let recipientIDs = await groupRequestRecipientIDs(
