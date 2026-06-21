@@ -1019,6 +1019,7 @@ private struct GroupBlockSetupSheet: View {
     @State private var selection = FamilyActivitySelection()
     @State private var isShowingPicker = false
     @State private var isStarting = false
+    @State private var hasLoadedExistingSelection = false
 
     private var selectedCount: Int {
         selection.applicationTokens.count
@@ -1106,6 +1107,22 @@ private struct GroupBlockSetupSheet: View {
                     }
             }
         }
+        .onAppear(perform: loadExistingSelection)
+    }
+
+    private func loadExistingSelection() {
+        guard !hasLoadedExistingSelection else {
+            return
+        }
+
+        hasLoadedExistingSelection = true
+        let blockGroupID = "group.\(groupID)"
+        guard let group = model.blockingState.groups.first(where: { $0.id == blockGroupID }),
+              let existingSelection = try? BlockingSelectionCodec.decode(group.selectionData) else {
+            return
+        }
+
+        selection = existingSelection
     }
 
     private func startBlocking() async {
