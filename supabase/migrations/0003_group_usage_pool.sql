@@ -39,13 +39,17 @@ declare d text; pool int; used int;
 begin
   if not public.is_group_member(p_group_id) then raise exception 'not a member'; end if;
   d := public.group_owner_day(p_group_id);
+  select pool_seconds into pool from public.group_config where group_id = p_group_id;
   insert into public.group_usage(group_id, user_id, day, selected_app_seconds, updated_at)
-    -- Clamp to a day's worth of seconds so a member can't inflate usage to grief the pool.
-    values (p_group_id, auth.uid(), d, least(greatest(coalesce(p_selected_app_seconds,0),0), 86400), now())
+    -- Clamp each member's report to the configured pool (falling back to a day when
+    -- unset). One member can still exhaust a SHARED pool by genuinely using it, but
+    -- this caps an inflated/buggy report to at most a legitimate full-pool use so it
+    -- can't store an absurd value. The per-member local backstop is the real guard.
+    values (p_group_id, auth.uid(), d,
+            least(greatest(coalesce(p_selected_app_seconds,0),0), coalesce(pool, 86400)), now())
     on conflict (group_id, user_id, day) do update
       set selected_app_seconds = greatest(excluded.selected_app_seconds, public.group_usage.selected_app_seconds),
           updated_at = now();
-  select pool_seconds into pool from public.group_config where group_id = p_group_id;
   -- Departed members' consumed seconds still count; leaving/removal does not refund the shared pool.
   select coalesce(sum(selected_app_seconds),0) into used
     from public.group_usage

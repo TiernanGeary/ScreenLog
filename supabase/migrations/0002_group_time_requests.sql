@@ -39,22 +39,27 @@ end; $$;
 
 -- Approve/deny a group time request. Approval is counted; once approvals_required
 -- distinct members approve, status flips to 'approved'.
-create or replace function public.respond_group_time_request(p_request_id uuid, p_approve boolean)
-returns text language plpgsql security definer set search_path = public, pg_temp as $$
+-- Returns (status, transitioned): transitioned is true only when THIS call flipped
+-- the request pending->approved, so exactly one approver pushes the requester.
+-- (drop first: the return type changed from a scalar text.)
+drop function if exists public.respond_group_time_request(uuid, boolean);
+create function public.respond_group_time_request(p_request_id uuid, p_approve boolean)
+returns table(status text, transitioned boolean)
+language plpgsql security definer set search_path = public, pg_temp as $$
 declare r public.time_requests%rowtype; new_status text; eff int;
 begin
   select * into r from public.time_requests where id = p_request_id for update;
   if r.id is null then raise exception 'no such request'; end if;
   if not (auth.uid() = any(r.recipient_ids)) then raise exception 'not a recipient'; end if;
   if r.social_group_id is not null and not public.is_group_member(r.social_group_id) then raise exception 'not a member'; end if;
-  if r.status <> 'pending' then return r.status; end if;
+  if r.status <> 'pending' then return query select r.status, false; return; end if;
   if r.expires_at is not null and r.expires_at <= now() then
     update public.time_requests set status='expired', resolved_at=now() where id=p_request_id and status='pending';
-    return 'expired';
+    return query select 'expired'::text, false; return;
   end if;
   if not p_approve then
     update public.time_requests set status='denied', resolved_at=now() where id=p_request_id;
-    return 'denied';
+    return query select 'denied'::text, false; return;
   end if;
   if not (auth.uid() = any(r.approvers)) then
     r.approvers := array_append(r.approvers, auth.uid());
@@ -74,7 +79,9 @@ begin
         resolved_at = case when new_status='approved' then now() else resolved_at end,
         approved_expires_at = case when new_status='approved' then now() + interval '24 hours' else approved_expires_at end
     where id = p_request_id;
-  return new_status;
+  -- We only reach here from status='pending', so a now-'approved' result means
+  -- THIS call caused the transition.
+  return query select new_status, (new_status = 'approved'); return;
 end; $$;
 
 create or replace function public.collect_group_time_request(p_request_id uuid)

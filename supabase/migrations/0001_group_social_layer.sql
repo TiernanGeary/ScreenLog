@@ -83,6 +83,9 @@ language plpgsql security definer set search_path = public, pg_temp as $$
 declare g_id uuid; inv_code text; owner_tz text;
 begin
   if auth.uid() is null then raise exception 'auth required'; end if;
+  -- Require a positive limit so a group can never land with a null/0 pool or
+  -- per-member limit that the client would silently clamp up to the 5-min minimum.
+  if coalesce(p_limit_seconds, 0) <= 0 then raise exception 'limit required'; end if;
   owner_tz := coalesce(p_owner_time_zone, 'UTC');
   begin
     perform now() at time zone owner_tz;
