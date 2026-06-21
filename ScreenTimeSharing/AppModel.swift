@@ -773,6 +773,51 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    @MainActor
+    @discardableResult
+    func adoptGroupBlock(
+        groupID: String,
+        limitSeconds: Int,
+        selection: FamilyActivitySelection
+    ) async -> Bool {
+        if !hasScreenTimeAuthorization {
+            await requestScreenTimeAuthorization()
+            guard hasScreenTimeAuthorization else {
+                return false
+            }
+        }
+
+        guard let data = try? BlockingSelectionCodec.encode(selection) else {
+            message = "Could not save your app selection."
+            return false
+        }
+
+        let password = GroupBlock.generatePassword()
+        let group = GroupBlock.makeBlockGroup(
+            id: "group.\(groupID)",
+            name: "Group limit",
+            selectionData: data,
+            limitSeconds: TimeInterval(limitSeconds)
+        )
+        guard upsertBlockGroup(group, password: password) else {
+            return false
+        }
+
+        GroupBlockPasswordStore.save(password, groupID: groupID)
+        do {
+            try await snapshotStore.setMemberConfigured(groupID: groupID, configured: true)
+        } catch { }
+        return true
+    }
+
+    func removeGroupBlock(groupID: String) {
+        let blockGroupID = "group.\(groupID)"
+        if let group = blockingState.groups.first(where: { $0.id == blockGroupID }) {
+            _ = deleteBlockGroup(group, password: GroupBlockPasswordStore.load(groupID: groupID))
+        }
+        GroupBlockPasswordStore.delete(groupID: groupID)
+    }
+
     @discardableResult
     func verifyPassword(for group: BlockGroup, password: String) -> Bool {
         guard let storedPassword = group.password,
@@ -1321,6 +1366,7 @@ final class AppModel: ObservableObject {
     func leaveGroup(_ groupID: String) async {
         do {
             try await snapshotStore.leaveGroup(groupID: groupID)
+            removeGroupBlock(groupID: groupID)
             await loadMyGroups()
         } catch {
             message = "Could not leave group: \(error.localizedDescription)"
