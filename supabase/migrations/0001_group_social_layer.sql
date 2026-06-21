@@ -92,9 +92,16 @@ begin
       case when p_mode='per_member' then p_limit_seconds end,
       case when p_mode='pool' then p_limit_seconds end,
       greatest(coalesce(p_approvals_required,1),1));
-  inv_code := public.gen_group_code();
-  insert into public.group_invites(code, group_id, created_by, expires_at)
-    values (inv_code, g_id, auth.uid(), now() + interval '30 days');
+  loop
+    begin
+      inv_code := public.gen_group_code();
+      insert into public.group_invites(code, group_id, created_by, expires_at)
+        values (inv_code, g_id, auth.uid(), now() + interval '30 days');
+      exit;
+    exception when unique_violation then
+      continue;
+    end;
+  end loop;
   return query select g_id, inv_code;
 end; $$;
 
@@ -105,9 +112,17 @@ declare inv_code text; exp timestamptz;
 begin
   if not exists (select 1 from public.groups where id=p_group_id and owner_id=auth.uid())
     then raise exception 'owner only'; end if;
-  inv_code := public.gen_group_code(); exp := now() + interval '30 days';
-  insert into public.group_invites(code, group_id, created_by, expires_at)
-    values (inv_code, p_group_id, auth.uid(), exp);
+  exp := now() + interval '30 days';
+  loop
+    begin
+      inv_code := public.gen_group_code();
+      insert into public.group_invites(code, group_id, created_by, expires_at)
+        values (inv_code, p_group_id, auth.uid(), exp);
+      exit;
+    exception when unique_violation then
+      continue;
+    end;
+  end loop;
   return query select inv_code, exp;
 end; $$;
 

@@ -21,6 +21,7 @@ begin
   select approvals_required into reqd from public.group_config where group_id = p_social_group_id;
   select array_agg(user_id) into recips from public.group_members
     where group_id = p_social_group_id and left_at is null and user_id <> auth.uid();
+  if coalesce(array_length(recips,1),0) = 0 then raise exception 'no recipients to approve'; end if;
   select app_names into names from public.group_config where group_id = p_social_group_id;
   insert into public.time_requests(
     id, group_id, social_group_id, requester_id, recipient_ids, requested_seconds,
@@ -28,7 +29,8 @@ begin
     created_at, expires_at)
   values (
     p_request_id, p_block_group_id, p_social_group_id, auth.uid(), coalesce(recips,'{}'),
-    p_seconds, p_message, p_photo_path, 'pending', greatest(coalesce(reqd,1),1), '{}',
+    p_seconds, p_message, p_photo_path, 'pending',
+    greatest(1, least(coalesce(reqd,1), array_length(recips,1))), '{}',
     names, now(), now() + interval '8 hours');
   return p_request_id;
 end; $$;
