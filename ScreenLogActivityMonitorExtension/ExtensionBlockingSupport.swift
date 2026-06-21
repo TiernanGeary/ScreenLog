@@ -224,14 +224,15 @@ enum ExtensionBlockingSupport {
         let categories = selections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
             partial.formUnion(selection.categoryTokens)
         }.subtracting(exemptCategories)
+        let nonForcedCategories = categories.subtracting(forcedCategories)
         let webDomains = selections.reduce(into: Set<WebDomainToken>()) { partial, selection in
             partial.formUnion(selection.webDomainTokens)
         }.subtracting(exemptWebDomains)
 
         managedStore.shield.applications = applications.isEmpty ? nil : applications
-        managedStore.shield.applicationCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptApplications) : .specific(categories)
+        managedStore.shield.applicationCategories = categories.isEmpty ? nil : nonForcedCategories.isEmpty ? .specific(categories) : .specific(categories, except: exemptApplications)
         managedStore.shield.webDomains = webDomains.isEmpty ? nil : webDomains
-        managedStore.shield.webDomainCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptWebDomains) : .specific(categories)
+        managedStore.shield.webDomainCategories = categories.isEmpty ? nil : nonForcedCategories.isEmpty ? .specific(categories) : .specific(categories, except: exemptWebDomains)
     }
 
     private static func forcedPoolExhaustionGroupIDs(in state: BlockingState, now: Date = Date()) -> Set<String> {
