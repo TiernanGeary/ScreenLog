@@ -948,7 +948,14 @@ public struct BlockingShieldIndex: Codable, Equatable, Sendable {
     }
 
     public init(state: BlockingState, activeGroupIDs: Set<String>, now: Date = Date()) {
+        let groupIDs = Set(state.groups.map(\.id))
+        let forcedOverrideGroupIDs = Set(
+            state.poolExhaustionOverrides
+                .filter { $0.isActive(now: now) && groupIDs.contains($0.groupID) }
+                .map(\.groupID)
+        )
         let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state, now: now)
+            .subtracting(forcedOverrideGroupIDs)
         let enabledGroupIDs = Set(BlockingStateResolver.enabledGroups(in: state).map(\.id))
         self.activeGroupIDs = Array(activeGroupIDs.subtracting(suppressedGroupIDs).intersection(enabledGroupIDs)).sorted()
         self.groups = state.groups.map { group in
