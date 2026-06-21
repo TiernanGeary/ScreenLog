@@ -224,15 +224,16 @@ enum ExtensionBlockingSupport {
         let categories = selections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
             partial.formUnion(selection.categoryTokens)
         }.subtracting(exemptCategories)
-        let nonForcedCategories = categories.subtracting(forcedCategories)
         let webDomains = selections.reduce(into: Set<WebDomainToken>()) { partial, selection in
             partial.formUnion(selection.webDomainTokens)
         }.subtracting(exemptWebDomains)
 
         managedStore.shield.applications = applications.isEmpty ? nil : applications
-        managedStore.shield.applicationCategories = categories.isEmpty ? nil : nonForcedCategories.isEmpty ? .specific(categories) : .specific(categories, except: exemptApplications)
+        // ManagedSettings exposes one opaque category policy, so fail closed: over-shield mixed
+        // forced/non-forced categories rather than under-shield an exhausted pool.
+        managedStore.shield.applicationCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptApplications) : .specific(categories)
         managedStore.shield.webDomains = webDomains.isEmpty ? nil : webDomains
-        managedStore.shield.webDomainCategories = categories.isEmpty ? nil : nonForcedCategories.isEmpty ? .specific(categories) : .specific(categories, except: exemptWebDomains)
+        managedStore.shield.webDomainCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptWebDomains) : .specific(categories)
     }
 
     private static func forcedPoolExhaustionGroupIDs(in state: BlockingState, now: Date = Date()) -> Set<String> {
