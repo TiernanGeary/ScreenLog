@@ -1413,7 +1413,10 @@ final class AppModel: ObservableObject {
     }
 
     private func assignPoolGroupSlots() {
-        let poolGroups = myGroups.filter { $0.mode == .pool }
+        // Sort by id so each pool group keeps a stable slot across calls regardless
+        // of get_my_groups() row order; the report extension tags usage by slot, so
+        // a slot that shifts under a group would transiently read 0 usage for it.
+        let poolGroups = myGroups.filter { $0.mode == .pool }.sorted { $0.id < $1.id }
         let assignedGroups = Array(poolGroups.prefix(5))
 
         poolGroupSlots = Dictionary(
