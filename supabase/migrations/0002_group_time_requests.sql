@@ -18,7 +18,7 @@ returns uuid language plpgsql security definer set search_path = public, pg_temp
   declare reqd int; recips uuid[]; names text[]; reqname text;
 begin
   if not public.is_group_member(p_social_group_id) then raise exception 'not a member'; end if;
-  if p_block_group_id is distinct from 'group.' || p_social_group_id::text then raise exception 'block group id mismatch'; end if;
+  if lower(p_block_group_id) is distinct from 'group.' || p_social_group_id::text then raise exception 'block group id mismatch'; end if;
   select approvals_required into reqd from public.group_config where group_id = p_social_group_id;
   select array_agg(user_id) into recips from public.group_members
     where group_id = p_social_group_id and left_at is null and user_id <> auth.uid();
