@@ -102,3 +102,14 @@ public enum GroupApproval {
         "\(count) of \(max(required, 1)) approved"
     }
 }
+
+public enum GroupPool {
+    public static func remaining(poolSeconds: Int, usedSeconds: Int) -> Int { max(poolSeconds - usedSeconds, 0) }
+    public static func exhausted(poolSeconds: Int, usedSeconds: Int) -> Bool { poolSeconds > 0 && usedSeconds >= poolSeconds }
+    public static func dayKey(now: Date, timeZoneIdentifier: String) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? .gmt
+        let c = cal.dateComponents([.year, .month, .day], from: now)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+}

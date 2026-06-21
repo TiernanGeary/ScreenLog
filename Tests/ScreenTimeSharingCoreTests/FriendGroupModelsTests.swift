@@ -61,4 +61,18 @@ final class FriendGroupModelsTests: XCTestCase {
         XCTAssertTrue(GroupApproval.isApproved(count: 1, required: 1))
         XCTAssertTrue(GroupApproval.isApproved(count: 4, required: 3))
     }
+
+    func test_groupPool_remainingAndExhausted() {
+        XCTAssertEqual(GroupPool.remaining(poolSeconds: 3600, usedSeconds: 1000), 2600)
+        XCTAssertEqual(GroupPool.remaining(poolSeconds: 3600, usedSeconds: 5000), 0)
+        XCTAssertFalse(GroupPool.exhausted(poolSeconds: 3600, usedSeconds: 3599))
+        XCTAssertTrue(GroupPool.exhausted(poolSeconds: 3600, usedSeconds: 3600))
+        XCTAssertFalse(GroupPool.exhausted(poolSeconds: 0, usedSeconds: 10))
+    }
+
+    func test_groupPool_dayKey_usesTimeZone() {
+        let d = ISO8601DateFormatter().date(from: "2026-06-21T00:30:00Z")!
+        XCTAssertEqual(GroupPool.dayKey(now: d, timeZoneIdentifier: "America/Los_Angeles"), "2026-06-20")
+        XCTAssertEqual(GroupPool.dayKey(now: d, timeZoneIdentifier: "UTC"), "2026-06-21")
+    }
 }
