@@ -716,7 +716,7 @@ struct GroupDetailView: View {
     }
 
     private func minutesText(_ seconds: Int) -> String {
-        "\(max(1, seconds / 60)) min"
+        "\(max(0, seconds / 60)) min"
     }
 
     private func viewerIsConfigured(in detail: GroupDetail) -> Bool {
