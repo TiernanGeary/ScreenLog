@@ -32,4 +32,25 @@ final class FriendGroupModelsTests: XCTestCase {
         XCTAssertEqual(GroupInviteCode.formatted("ABCD1234"), "ABCD-1234")
         XCTAssertEqual(GroupInviteCode.formatted("SHORT"), "SHORT")
     }
+
+    func test_groupBlock_makeBlockGroup_perMemberDefaults() {
+        let g = GroupBlock.makeBlockGroup(id: "g1", name: "Study group",
+                                          selectionData: Data([0x01, 0x02]), limitSeconds: 1800)
+        XCTAssertEqual(g.id, "g1")
+        XCTAssertEqual(g.name, "Study group")
+        XCTAssertEqual(g.selectionData, Data([0x01, 0x02]))
+        XCTAssertTrue(g.isEnabled)
+        if case let .timeLimit(secs, days) = g.mode {
+            XCTAssertEqual(secs, 1800)
+            XCTAssertEqual(days, BlockWeekday.everyDay)
+        } else { XCTFail("must be .timeLimit everyday") }
+    }
+
+    func test_groupBlock_generatePassword_lengthAndCharset() {
+        let p = GroupBlock.generatePassword()
+        XCTAssertEqual(p.count, 16)
+        let allowed = Set("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789")
+        XCTAssertTrue(p.allSatisfy { allowed.contains($0) })
+        XCTAssertNotEqual(p, GroupBlock.generatePassword())
+    }
 }

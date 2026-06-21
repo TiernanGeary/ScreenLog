@@ -71,3 +71,27 @@ public enum GroupInviteCode {
         return "\(code.prefix(4))-\(code.suffix(4))"
     }
 }
+
+public enum GroupBlock {
+    /// Builds the local per-member block: a daily time-limit over the picked apps.
+    public static func makeBlockGroup(id: String, name: String,
+                                      selectionData: Data, limitSeconds: TimeInterval) -> BlockGroup {
+        let now = Date()
+        return BlockGroup(
+            id: id,
+            name: name,
+            colorHex: "#6A4C93",
+            selectionData: selectionData,
+            isEnabled: true,
+            mode: .timeLimit(limitSeconds: limitSeconds, days: BlockWeekday.everyDay),
+            createdAt: now,
+            updatedAt: now
+        )
+    }
+
+    /// Random, member-hidden password for the auto-locked group block.
+    public static func generatePassword(length: Int = 16) -> String {
+        let chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+        return String((0..<length).compactMap { _ in chars.randomElement() })
+    }
+}
