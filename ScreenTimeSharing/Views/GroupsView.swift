@@ -743,6 +743,10 @@ struct GroupShareInviteView: View {
     let onAccept: () -> Void
     let onCancel: () -> Void
 
+    private var isValidInvite: Bool {
+        !invite.groupID.isEmpty
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
@@ -759,7 +763,7 @@ struct GroupShareInviteView: View {
                         .font(.title2.weight(.bold))
                         .multilineTextAlignment(.center)
 
-                    Text("\(invite.ownerDisplayName) invited you to join a \(modeText(invite.mode)) group.")
+                    Text(isValidInvite ? "\(invite.ownerDisplayName) invited you to join a \(modeText(invite.mode)) group." : "This group invite is no longer valid.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -767,20 +771,27 @@ struct GroupShareInviteView: View {
 
                 Spacer(minLength: 18)
 
-                Button(action: onAccept) {
-                    HStack(spacing: 10) {
-                        if isAccepting {
-                            ProgressView()
-                                .tint(.white)
-                        }
+                if isValidInvite {
+                    Button(action: onAccept) {
+                        HStack(spacing: 10) {
+                            if isAccepting {
+                                ProgressView()
+                                    .tint(.white)
+                            }
 
-                        Text(isAccepting ? "Joining" : "Join")
+                            Text(isAccepting ? "Joining" : "Join")
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(isAccepting)
+                } else {
+                    Button("Close", action: onCancel)
+                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(isAccepting)
             }
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)

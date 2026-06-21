@@ -1924,12 +1924,22 @@ final class AppModel: ObservableObject {
                 requestID: requestID,
                 approve: approve
             )
+            let requesterID = blockingState.friendRequests.first { $0.id == requestID }?.requesterID
             updateLocalGroupFriendRequest(
                 requestID: requestID,
                 statusRaw: statusRaw,
                 approve: approve,
                 approvedByFriendID: approvedByFriendID
             )
+            if BlockRequestStatus(rawValue: statusRaw) == .approved {
+                let approverName = profile.displayName == "Me" ? "Your friend" : profile.displayName
+                sendPushNotification(
+                    toProfileIDs: [requesterID].compactMap { $0 },
+                    title: "Request approved",
+                    body: "\(approverName) approved your time request. Tap to collect.",
+                    requestID: requestID
+                )
+            }
             await syncFriendRequests()
             return true
         } catch {
