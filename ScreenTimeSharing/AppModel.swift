@@ -760,10 +760,16 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func deleteBlockGroup(_ group: BlockGroup, password: String? = nil) -> Bool {
-        guard canVerifyGroupPassword(group, password: password) else {
-            message = "Enter this group password before deleting it."
-            return false
+    func deleteBlockGroup(
+        _ group: BlockGroup,
+        password: String? = nil,
+        forceForGroupBlock: Bool = false
+    ) -> Bool {
+        if !(forceForGroupBlock && group.id.hasPrefix("group.")) {
+            guard canVerifyGroupPassword(group, password: password) else {
+                message = "Enter this group password before deleting it."
+                return false
+            }
         }
 
         blockingState.groups.removeAll { $0.id == group.id }
@@ -834,7 +840,7 @@ final class AppModel: ObservableObject {
         let blockGroupID = "group.\(groupID)"
         let hadOverride = blockingState.poolExhaustionOverrides.contains { $0.groupID == blockGroupID }
         if let group = blockingState.groups.first(where: { $0.id == blockGroupID }) {
-            _ = deleteBlockGroup(group, password: GroupBlockPasswordStore.load(groupID: groupID))
+            _ = deleteBlockGroup(group, forceForGroupBlock: true)
         }
         blockingState.poolExhaustionOverrides.removeAll { $0.groupID == blockGroupID }
         GroupBlockPasswordStore.delete(groupID: groupID)
@@ -1077,7 +1083,7 @@ final class AppModel: ObservableObject {
                     friendRequestNotificationService.clearNotification(for: id)
                 }
             }
-            return false
+            return true
         }
 
         let now = Date()
@@ -1129,7 +1135,7 @@ final class AppModel: ObservableObject {
                     friendRequestNotificationService.clearNotification(for: id)
                 }
             }
-            return false
+            return true
         }
 
         let resolvedRequest = request.resolving(as: .denied, at: Date())
@@ -1604,8 +1610,8 @@ final class AppModel: ObservableObject {
         do {
             try await snapshotStore.publish(profile: profile, snapshot: snapshot)
             lastSnapshotPublishAt = now
-            let selectedAppSeconds = Int(snapshot.selectedAppDuration ?? 0)
             for group in myGroups where group.mode == .pool {
+                let selectedAppSeconds = await selectedAppSecondsForPoolGroup(group)
                 if let state = try? await snapshotStore.reportGroupUsage(
                     groupID: group.id,
                     selectedAppSeconds: selectedAppSeconds
@@ -1616,6 +1622,17 @@ final class AppModel: ObservableObject {
         } catch {
             // Non-fatal: retried on the next poll cycle.
         }
+    }
+
+    private func selectedAppSecondsForPoolGroup(_ group: FriendGroupSummary) async -> Int {
+        guard let blockGroup = blockingState.groups.first(where: { $0.id == "group.\(group.id)" }),
+              let groupSelection = try? BlockingSelectionCodec.decode(blockGroup.selectionData),
+              !groupSelection.isEmpty else {
+            return 0
+        }
+
+        let groupSnapshot = await screenTimeProvider.loadTodayUsage(selection: groupSelection, profile: profile)
+        return Int(groupSnapshot.selectedAppDuration ?? 0)
     }
 
     func syncGroupPools() async {
@@ -1641,21 +1658,22 @@ final class AppModel: ObservableObject {
         let hadActiveOverride = existing?.isActive(now: now) == true
 
         if state.exhausted {
-            let override = PoolExhaustionOverride(
-                groupID: blockGroupID,
-                exhaustedAt: now,
-                resetsAt: nextOwnerTimeZoneMidnight(
-                    after: now,
-                    timeZoneIdentifier: group.ownerTimeZone
-                )
+            let resetsAt = nextOwnerTimeZoneMidnight(
+                after: now,
+                timeZoneIdentifier: group.ownerTimeZone
             )
 
             if let index = blockingState.poolExhaustionOverrides.firstIndex(where: { $0.groupID == blockGroupID }) {
-                if blockingState.poolExhaustionOverrides[index] != override {
-                    blockingState.poolExhaustionOverrides[index] = override
+                if blockingState.poolExhaustionOverrides[index].resetsAt != resetsAt {
+                    blockingState.poolExhaustionOverrides[index].resetsAt = resetsAt
                     didChange = true
                 }
             } else {
+                let override = PoolExhaustionOverride(
+                    groupID: blockGroupID,
+                    exhaustedAt: now,
+                    resetsAt: resetsAt
+                )
                 blockingState.poolExhaustionOverrides.append(override)
                 didChange = true
             }
