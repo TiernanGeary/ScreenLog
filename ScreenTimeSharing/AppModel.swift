@@ -1389,12 +1389,11 @@ final class AppModel: ObservableObject {
         )
 
         for slot in 0..<5 {
-            let groupBlockID = assignedGroups.indices.contains(slot)
-                ? "group.\(assignedGroups[slot].id)"
-                : nil
+            let assigned = assignedGroups.indices.contains(slot) ? assignedGroups[slot] : nil
             ScreenTimeReportStorage.setPoolSlotAssignment(
                 slot,
-                groupBlockID: groupBlockID,
+                groupBlockID: assigned.map { "group.\($0.id)" },
+                ownerTimeZone: assigned?.ownerTimeZone,
                 defaults: appGroupDefaults
             )
         }
@@ -1736,7 +1735,9 @@ final class AppModel: ObservableObject {
         }
 
         if let slot = poolGroupSlots[group.id] {
-            let dayKey = UsageDateBoundary.localDayKey(date: Date(), calendar: .current)
+            var ownerCalendar = Calendar(identifier: .gregorian)
+            ownerCalendar.timeZone = TimeZone(identifier: group.ownerTimeZone) ?? .gmt
+            let dayKey = UsageDateBoundary.localDayKey(date: Date(), calendar: ownerCalendar)
             return ScreenTimeReportStorage.groupUsageSlot(
                 slot,
                 groupBlockID: blockGroupID,

@@ -141,20 +141,31 @@ public enum ScreenTimeReportStorage {
     // The app owns the slot -> group-block assignment and writes it here so the
     // report extension scene (which only sees filtered results, not which group
     // it is rendering) can tag the seconds it writes with the right group block.
-    public static func setPoolSlotAssignment(_ slot: Int, groupBlockID: String?, defaults: UserDefaults?) {
+    public static func setPoolSlotAssignment(_ slot: Int, groupBlockID: String?, ownerTimeZone: String?, defaults: UserDefaults?) {
         let key = poolSlotAssignmentKey(slot)
+        let tzKey = poolSlotAssignmentTimeZoneKey(slot)
         if let groupBlockID {
             defaults?.set(groupBlockID, forKey: key)
+            defaults?.set(ownerTimeZone ?? "UTC", forKey: tzKey)
         } else {
             defaults?.removeObject(forKey: key)
+            defaults?.removeObject(forKey: tzKey)
         }
     }
 
-    public static func poolSlotAssignment(_ slot: Int, defaults: UserDefaults?) -> String? {
-        defaults?.string(forKey: poolSlotAssignmentKey(slot))
+    public static func poolSlotAssignment(_ slot: Int, defaults: UserDefaults?) -> (groupBlockID: String, ownerTimeZone: String)? {
+        guard let groupBlockID = defaults?.string(forKey: poolSlotAssignmentKey(slot)) else {
+            return nil
+        }
+        let ownerTimeZone = defaults?.string(forKey: poolSlotAssignmentTimeZoneKey(slot)) ?? "UTC"
+        return (groupBlockID, ownerTimeZone)
     }
 
     private static func poolSlotAssignmentKey(_ slot: Int) -> String {
         "ScreenLogGroupUsage.assignment.\(slot).v1"
+    }
+
+    private static func poolSlotAssignmentTimeZoneKey(_ slot: Int) -> String {
+        "ScreenLogGroupUsage.assignmentTZ.\(slot).v1"
     }
 }

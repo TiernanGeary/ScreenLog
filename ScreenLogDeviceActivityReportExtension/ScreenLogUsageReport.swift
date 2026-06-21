@@ -159,14 +159,16 @@ struct ScreenLogGroupUsageReport4: DeviceActivityReportScene {
 private enum ScreenLogGroupUsageReportWriter {
     static func persist(slot: Int, seconds: Int) {
         let defaults = UserDefaults(suiteName: ScreenTimeReportStorage.appGroupSuiteName)
-        guard let groupBlockID = ScreenTimeReportStorage.poolSlotAssignment(slot, defaults: defaults) else {
+        guard let assignment = ScreenTimeReportStorage.poolSlotAssignment(slot, defaults: defaults) else {
             return
         }
 
+        var ownerCalendar = Calendar(identifier: .gregorian)
+        ownerCalendar.timeZone = TimeZone(identifier: assignment.ownerTimeZone) ?? .gmt
         ScreenTimeReportStorage.setGroupUsageSlot(
             slot,
-            groupBlockID: groupBlockID,
-            dayKey: UsageDateBoundary.localDayKey(date: Date(), calendar: .current),
+            groupBlockID: assignment.groupBlockID,
+            dayKey: UsageDateBoundary.localDayKey(date: Date(), calendar: ownerCalendar),
             seconds: seconds,
             defaults: defaults
         )
