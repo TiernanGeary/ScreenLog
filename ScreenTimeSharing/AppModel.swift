@@ -209,9 +209,14 @@ final class AppModel: ObservableObject {
     private let onboardingKey = "HasCompletedOnboarding.v1"
     private static let denyStartedAtKey = "DenyStartedAt.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
+    private static let pendingGroupCollectRequestIDsKey = "PendingGroupCollectRequestIDs.v1"
     private var isSyncingFriendRequests = false
     private var pendingConfiguredGroupIDs: Set<String> = []
-    private var pendingGroupCollectRequestIDs: Set<String> = []
+    private var pendingGroupCollectRequestIDs: Set<String> = [] {
+        didSet {
+            persistPendingGroupCollectRequestIDs()
+        }
+    }
     private var poolGroupSlots: [String: Int] = [:]
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
@@ -246,6 +251,7 @@ final class AppModel: ObservableObject {
         let loadedProfile = profileStore.load()
         self.appGroupDefaults = sharedDefaults
         self.usageHistoryDefaults = sharedDefaults
+        self.pendingGroupCollectRequestIDs = Self.loadPendingGroupCollectRequestIDs(defaults: sharedDefaults)
         self.profile = loadedProfile
         let storedDenyStartedAt = UserDefaults.standard.object(forKey: Self.denyStartedAtKey) as? Date
         let denyStartedAt = storedDenyStartedAt ?? Date()
@@ -315,8 +321,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    var poolGroupSlotAssignments: [(slot: Int, groupID: String, selection: FamilyActivitySelection)] {
-        myGroups.compactMap { group -> (slot: Int, groupID: String, selection: FamilyActivitySelection)? in
+    var poolGroupSlotAssignments: [(slot: Int, groupID: String, selection: FamilyActivitySelection, ownerTimeZone: String)] {
+        myGroups.compactMap { group -> (slot: Int, groupID: String, selection: FamilyActivitySelection, ownerTimeZone: String)? in
             let blockGroupID = "group.\(group.id)"
             guard let slot = poolGroupSlots[group.id],
                   let blockGroup = blockingState.groups.first(where: { $0.id == blockGroupID }),
@@ -325,7 +331,7 @@ final class AppModel: ObservableObject {
                 return nil
             }
 
-            return (slot: slot, groupID: group.id, selection: selection)
+            return (slot: slot, groupID: group.id, selection: selection, ownerTimeZone: group.ownerTimeZone)
         }
         .sorted { $0.slot < $1.slot }
     }
@@ -712,7 +718,11 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func upsertBlockGroup(_ group: BlockGroup, password: String?) -> Bool {
+    func upsertBlockGroup(
+        _ group: BlockGroup,
+        password: String?,
+        forceForGroupBlock: Bool = false
+    ) -> Bool {
         guard group.mode.isValid else {
             message = "Pick a valid blocking schedule or time limit."
             return false
@@ -736,9 +746,11 @@ final class AppModel: ObservableObject {
 
         if let index = blockingState.groups.firstIndex(where: { $0.id == group.id }) {
             let existing = blockingState.groups[index]
-            guard canEditGroup(existing, password: password) else {
-                message = "Enter this group password before editing it."
-                return false
+            if !(forceForGroupBlock && existing.id.hasPrefix("group.")) {
+                guard canEditGroup(existing, password: password) else {
+                    message = "Enter this group password before editing it."
+                    return false
+                }
             }
 
             copy.createdAt = existing.createdAt
@@ -828,7 +840,7 @@ final class AppModel: ObservableObject {
             selectionData: data,
             limitSeconds: BlockingTimeLimitRange.snappedSeconds(TimeInterval(limitSeconds))
         )
-        guard upsertBlockGroup(group, password: password) else {
+        guard upsertBlockGroup(group, password: password, forceForGroupBlock: true) else {
             return false
         }
 
@@ -1389,7 +1401,7 @@ final class AppModel: ObservableObject {
 
         if poolGroups.count > assignedGroups.count {
             print(
-                "ScreenLog: \(poolGroups.count - assignedGroups.count) pool group(s) exceed the 5-slot usage-report cap and will use whole-device fallback."
+                "ScreenLog: \(poolGroups.count - assignedGroups.count) pool group(s) exceed the 5-slot usage-report cap and will use the pool-sized backstop block."
             )
         }
     }
@@ -1444,6 +1456,24 @@ final class AppModel: ObservableObject {
             } catch {
                 // Non-fatal: retried after the next group refresh.
             }
+        }
+    }
+
+    private static func loadPendingGroupCollectRequestIDs(defaults: UserDefaults?) -> Set<String> {
+        guard let data = defaults?.data(forKey: pendingGroupCollectRequestIDsKey),
+              let requestIDs = try? JSONDecoder().decode(Set<String>.self, from: data) else {
+            return []
+        }
+
+        return requestIDs
+    }
+
+    private func persistPendingGroupCollectRequestIDs() {
+        do {
+            let data = try JSONEncoder().encode(pendingGroupCollectRequestIDs)
+            usageHistoryDefaults?.set(data, forKey: Self.pendingGroupCollectRequestIDsKey)
+        } catch {
+            message = "Could not save pending group collect retries: \(error.localizedDescription)"
         }
     }
 
@@ -1715,8 +1745,8 @@ final class AppModel: ObservableObject {
             )
         }
 
-        let groupSnapshot = await screenTimeProvider.loadTodayUsage(selection: groupSelection, profile: profile)
-        return Int(groupSnapshot.selectedAppDuration ?? 0)
+        // More than five pool groups are not precisely measured; overflow groups rely on the backstop block.
+        return 0
     }
 
     func syncGroupPools() async {
@@ -2253,6 +2283,7 @@ final class AppModel: ObservableObject {
         syncBlockingEnforcement()
         Task {
             await loadMyGroups()
+            await retryPendingGroupCollects()
             await syncGroupPools()
         }
     }
