@@ -209,6 +209,7 @@ final class AppModel: ObservableObject {
     private static let denyStartedAtKey = "DenyStartedAt.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
     private var isSyncingFriendRequests = false
+    private var pendingConfiguredGroupIDs: Set<String> = []
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
@@ -800,7 +801,7 @@ final class AppModel: ObservableObject {
             id: "group.\(groupID)",
             name: "Group limit",
             selectionData: data,
-            limitSeconds: TimeInterval(limitSeconds)
+            limitSeconds: BlockingTimeLimitRange.snappedSeconds(TimeInterval(limitSeconds))
         )
         guard upsertBlockGroup(group, password: password) else {
             return false
@@ -809,7 +810,9 @@ final class AppModel: ObservableObject {
         GroupBlockPasswordStore.save(password, groupID: groupID)
         do {
             try await snapshotStore.setMemberConfigured(groupID: groupID, configured: true)
-        } catch { }
+        } catch {
+            pendingConfiguredGroupIDs.insert(groupID)
+        }
         return true
     }
 
@@ -829,10 +832,19 @@ final class AppModel: ObservableObject {
 
     func removeGroupBlock(groupID: String) {
         let blockGroupID = "group.\(groupID)"
+        let hadOverride = blockingState.poolExhaustionOverrides.contains { $0.groupID == blockGroupID }
         if let group = blockingState.groups.first(where: { $0.id == blockGroupID }) {
             _ = deleteBlockGroup(group, password: GroupBlockPasswordStore.load(groupID: groupID))
         }
+        blockingState.poolExhaustionOverrides.removeAll { $0.groupID == blockGroupID }
         GroupBlockPasswordStore.delete(groupID: groupID)
+        if hadOverride {
+            do {
+                try persistBlockingState()
+            } catch {
+                message = "Could not save blocking settings: \(error.localizedDescription)"
+            }
+        }
     }
 
     @discardableResult
@@ -1055,15 +1067,17 @@ final class AppModel: ObservableObject {
         }
 
         if request.socialGroupID != nil {
-            friendRequestNotificationService.clearNotification(for: id)
             Task {
-                await respondGroupFriendRequest(
+                let didRespond = await respondGroupFriendRequest(
                     requestID: id,
                     approve: true,
                     approvedByFriendID: profile.id
                 )
+                if didRespond {
+                    friendRequestNotificationService.clearNotification(for: id)
+                }
             }
-            return true
+            return false
         }
 
         let now = Date()
@@ -1105,15 +1119,17 @@ final class AppModel: ObservableObject {
         }
 
         if request.socialGroupID != nil {
-            friendRequestNotificationService.clearNotification(for: id)
             Task {
-                await respondGroupFriendRequest(
+                let didRespond = await respondGroupFriendRequest(
                     requestID: id,
                     approve: false,
                     approvedByFriendID: nil
                 )
+                if didRespond {
+                    friendRequestNotificationService.clearNotification(for: id)
+                }
             }
-            return true
+            return false
         }
 
         let resolvedRequest = request.resolving(as: .denied, at: Date())
@@ -1303,8 +1319,52 @@ final class AppModel: ObservableObject {
     func loadMyGroups() async {
         do {
             myGroups = try await snapshotStore.getMyGroups()
+            cleanupDroppedGroupBlocks()
         } catch {
             message = "Could not refresh groups: \(error.localizedDescription)"
+        }
+        await retryPendingConfiguredGroups()
+    }
+
+    private func cleanupDroppedGroupBlocks() {
+        let liveIDs = Set(myGroups.map(\.id))
+        let droppedGroupIDs = blockingState.groups.compactMap { group -> String? in
+            guard group.id.hasPrefix("group.") else {
+                return nil
+            }
+            let socialGroupID = String(group.id.dropFirst(6))
+            return liveIDs.contains(socialGroupID) ? nil : socialGroupID
+        }
+
+        for groupID in droppedGroupIDs {
+            removeGroupBlock(groupID: groupID)
+        }
+
+        let originalCount = blockingState.poolExhaustionOverrides.count
+        blockingState.poolExhaustionOverrides.removeAll { override in
+            override.groupID.hasPrefix("group.")
+                && !liveIDs.contains(String(override.groupID.dropFirst(6)))
+        }
+        guard blockingState.poolExhaustionOverrides.count != originalCount else {
+            return
+        }
+
+        do {
+            try persistBlockingState()
+        } catch {
+            message = "Could not save blocking settings: \(error.localizedDescription)"
+        }
+    }
+
+    private func retryPendingConfiguredGroups() async {
+        let liveIDs = Set(myGroups.map(\.id))
+        for groupID in Array(pendingConfiguredGroupIDs) where liveIDs.contains(groupID) {
+            do {
+                try await snapshotStore.setMemberConfigured(groupID: groupID, configured: true)
+                pendingConfiguredGroupIDs.remove(groupID)
+            } catch {
+                // Non-fatal: retried after the next group refresh.
+            }
         }
     }
 
@@ -1572,6 +1632,14 @@ final class AppModel: ObservableObject {
         var didChange = false
         var shouldNotifyPoolExhausted = false
 
+        let expiredCount = blockingState.poolExhaustionOverrides.count
+        blockingState.poolExhaustionOverrides.removeAll {
+            $0.groupID == blockGroupID && now >= $0.resetsAt
+        }
+        didChange = blockingState.poolExhaustionOverrides.count != expiredCount
+        let existing = blockingState.poolExhaustionOverrides.first { $0.groupID == blockGroupID }
+        let hadActiveOverride = existing?.isActive(now: now) == true
+
         if state.exhausted {
             let override = PoolExhaustionOverride(
                 groupID: blockGroupID,
@@ -1590,12 +1658,22 @@ final class AppModel: ObservableObject {
             } else {
                 blockingState.poolExhaustionOverrides.append(override)
                 didChange = true
-                shouldNotifyPoolExhausted = true
             }
+            shouldNotifyPoolExhausted = !hadActiveOverride
         } else {
+            if let existing, now.timeIntervalSince(existing.exhaustedAt) < 30 {
+                if didChange {
+                    do {
+                        try persistBlockingState()
+                    } catch {
+                        message = "Could not save blocking settings: \(error.localizedDescription)"
+                    }
+                }
+                return
+            }
             let originalCount = blockingState.poolExhaustionOverrides.count
             blockingState.poolExhaustionOverrides.removeAll { $0.groupID == blockGroupID }
-            didChange = blockingState.poolExhaustionOverrides.count != originalCount
+            didChange = didChange || blockingState.poolExhaustionOverrides.count != originalCount
         }
 
         guard didChange else {
@@ -1731,12 +1809,12 @@ final class AppModel: ObservableObject {
         requestID: String,
         approve: Bool,
         approvedByFriendID: String?
-    ) async {
+    ) async -> Bool {
         let availability = await snapshotStore.cloudAvailability()
         cloudAvailability = availability
         guard availability.allowsCloudWrites else {
             message = "\(availability.label). Request was not updated."
-            return
+            return false
         }
 
         do {
@@ -1751,8 +1829,10 @@ final class AppModel: ObservableObject {
                 approvedByFriendID: approvedByFriendID
             )
             await syncFriendRequests()
+            return true
         } catch {
             message = "Could not update group request: \(error.localizedDescription)"
+            return false
         }
     }
 
