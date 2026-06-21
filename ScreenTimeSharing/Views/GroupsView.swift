@@ -80,6 +80,14 @@ struct CreateGroupSheet: View {
         minutes * 60
     }
 
+    private var limitMinuteRange: ClosedRange<Int> {
+        Int(BlockingTimeLimitRange.minimumSeconds / 60)...Int(BlockingTimeLimitRange.maximumSeconds / 60)
+    }
+
+    private var limitMinuteStep: Int {
+        Int(BlockingTimeLimitRange.stepSeconds / 60)
+    }
+
     private var validationErrors: [String] {
         GroupConfigValidation.errors(
             mode: mode,
@@ -166,7 +174,7 @@ struct CreateGroupSheet: View {
 
     private var limitSection: some View {
         Section {
-            Stepper(value: $minutes, in: 1...1_440, step: 5) {
+            Stepper(value: $minutes, in: limitMinuteRange, step: limitMinuteStep) {
                 Text("\(minutes) \(limitLabel)")
             }
 

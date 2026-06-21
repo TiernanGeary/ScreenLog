@@ -14,6 +14,10 @@ final class FriendGroupModelsTests: XCTestCase {
     func test_validation_approvalsAtLeastOne() {
         XCTAssertFalse(GroupConfigValidation.errors(mode: .pool, appNames: ["IG"], limitSeconds: 3600, approvalsRequired: 0).isEmpty)
     }
+    func test_validation_limitMustFitBlockingRange() {
+        XCTAssertFalse(GroupConfigValidation.errors(mode: .perMember, appNames: ["IG"], limitSeconds: 600 * 60, approvalsRequired: 1).isEmpty)
+        XCTAssertTrue(GroupConfigValidation.errors(mode: .perMember, appNames: ["IG"], limitSeconds: 60 * 60, approvalsRequired: 1).isEmpty)
+    }
     func test_groupMode_rawValueMatchesBackend() {
         XCTAssertEqual(GroupMode.perMember.rawValue, "per_member")
         XCTAssertEqual(GroupMode.pool.rawValue, "pool")

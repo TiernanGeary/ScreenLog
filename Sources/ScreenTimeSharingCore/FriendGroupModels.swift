@@ -42,6 +42,13 @@ public enum GroupConfigValidation {
         if (limitSeconds ?? 0) <= 0 {
             errs.append(mode == .pool ? "Set a positive pool limit." : "Set a positive daily limit.")
         }
+        if let limitSeconds, limitSeconds > 0, !BlockingTimeLimitRange.isValid(TimeInterval(limitSeconds)) {
+            let limitName = mode == .pool ? "Pool limit" : "Daily limit"
+            let minimum = BlockingDisplayFormatter.fullDurationLabel(BlockingTimeLimitRange.minimumSeconds)
+            let maximum = BlockingDisplayFormatter.fullDurationLabel(BlockingTimeLimitRange.maximumSeconds)
+            let step = BlockingDisplayFormatter.fullDurationLabel(BlockingTimeLimitRange.stepSeconds)
+            errs.append("\(limitName) must be between \(minimum) and \(maximum), in \(step) increments.")
+        }
         if approvalsRequired < 1 { errs.append("Approvals required must be at least 1.") }
         return errs
     }
