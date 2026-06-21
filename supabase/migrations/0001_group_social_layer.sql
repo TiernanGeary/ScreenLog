@@ -18,6 +18,7 @@ create table if not exists public.group_members (
   joined_at timestamptz not null default now(),
   configured_at timestamptz,
   left_at timestamptz,
+  removed_by uuid,
   primary key (group_id, user_id)
 );
 
@@ -46,7 +47,7 @@ alter table public.group_invites enable row level security;
 
 -- Helper: is the current user an active member of a group?
 create or replace function public.is_group_member(p_group_id uuid)
-returns boolean language sql security definer stable as $$
+returns boolean language sql security definer stable set search_path = public, pg_temp as $$
   select exists (
     select 1 from public.group_members m
     where m.group_id = p_group_id and m.user_id = auth.uid() and m.left_at is null
@@ -71,12 +72,18 @@ create or replace function public.create_group(
   p_name text, p_mode text, p_app_names text[],
   p_limit_seconds int, p_approvals_required int, p_owner_time_zone text)
 returns table(group_id uuid, code text)
-language plpgsql security definer as $$
-declare g_id uuid; inv_code text;
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare g_id uuid; inv_code text; owner_tz text;
 begin
   if auth.uid() is null then raise exception 'auth required'; end if;
+  owner_tz := coalesce(p_owner_time_zone, 'UTC');
+  begin
+    perform now() at time zone owner_tz;
+  exception when others then
+    owner_tz := 'UTC';
+  end;
   insert into public.groups(owner_id, name, mode, owner_time_zone)
-    values (auth.uid(), p_name, p_mode, coalesce(p_owner_time_zone,'UTC'))
+    values (auth.uid(), p_name, p_mode, owner_tz)
     returning id into g_id;
   insert into public.group_members(group_id, user_id, role) values (g_id, auth.uid(), 'owner');
   insert into public.group_config(group_id, app_names,
@@ -93,7 +100,7 @@ end; $$;
 
 create or replace function public.create_group_invite(p_group_id uuid)
 returns table(code text, expires_at timestamptz)
-language plpgsql security definer as $$
+language plpgsql security definer set search_path = public, pg_temp as $$
 declare inv_code text; exp timestamptz;
 begin
   if not exists (select 1 from public.groups where id=p_group_id and owner_id=auth.uid())
@@ -106,7 +113,7 @@ end; $$;
 
 create or replace function public.peek_group_invite(p_code text)
 returns table(group_id uuid, group_name text, owner_display_name text, mode text)
-language plpgsql security definer as $$
+language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   return query
   select g.id, g.name, p.display_name, g.mode
@@ -118,14 +125,18 @@ end; $$;
 
 create or replace function public.redeem_group_invite(p_code text)
 returns table(group_id uuid, group_name text)
-language plpgsql security definer as $$
-declare g_id uuid; g_name text;
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare g_id uuid; g_name text; existing_removed_by uuid;
 begin
   if auth.uid() is null then raise exception 'auth required'; end if;
   select i.group_id, g.name into g_id, g_name
     from public.group_invites i join public.groups g on g.id=i.group_id
     where i.code = upper(p_code) and i.expires_at > now();
   if g_id is null then raise exception 'invalid or expired code'; end if;
+  select m.removed_by into existing_removed_by
+    from public.group_members m
+    where m.group_id = g_id and m.user_id = auth.uid();
+  if existing_removed_by is not null then raise exception 'removed from group'; end if;
   insert into public.group_members(group_id, user_id, role)
     values (g_id, auth.uid(), 'member')
     on conflict (group_id, user_id) do update set left_at = null;  -- idempotent / rejoin
@@ -137,7 +148,7 @@ returns table(id uuid, name text, mode text, owner_id uuid, owner_time_zone text
   role text, configured_at timestamptz, member_count int,
   app_names text[], per_member_limit_seconds int, pool_seconds int,
   approvals_required int, updated_at timestamptz)
-language sql security definer stable as $$
+language sql security definer stable set search_path = public, pg_temp as $$
   select g.id, g.name, g.mode, g.owner_id, g.owner_time_zone,
     m.role, m.configured_at,
     (select count(*) from public.group_members mm where mm.group_id=g.id and mm.left_at is null)::int,
@@ -149,7 +160,7 @@ language sql security definer stable as $$
 $$;
 
 create or replace function public.get_group(p_group_id uuid)
-returns jsonb language sql security definer stable as $$
+returns jsonb language sql security definer stable set search_path = public, pg_temp as $$
   select case when public.is_group_member(p_group_id) then jsonb_build_object(
     'group', (select to_jsonb(g) from public.groups g where g.id=p_group_id),
     'config', (select to_jsonb(c) from public.group_config c where c.group_id=p_group_id),
@@ -163,14 +174,14 @@ returns jsonb language sql security definer stable as $$
 $$;
 
 create or replace function public.set_member_configured(p_group_id uuid, p_configured boolean)
-returns void language plpgsql security definer as $$
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   update public.group_members set configured_at = case when p_configured then now() else null end
     where group_id=p_group_id and user_id=auth.uid();
 end; $$;
 
 create or replace function public.leave_group(p_group_id uuid)
-returns void language plpgsql security definer as $$
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   if exists (select 1 from public.groups where id=p_group_id and owner_id=auth.uid())
     then raise exception 'owner cannot leave; delete the group instead'; end if;
@@ -179,16 +190,17 @@ begin
 end; $$;
 
 create or replace function public.remove_group_member(p_group_id uuid, p_user_id uuid)
-returns void language plpgsql security definer as $$
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   if not exists (select 1 from public.groups where id=p_group_id and owner_id=auth.uid())
     then raise exception 'owner only'; end if;
   if p_user_id = auth.uid() then raise exception 'use delete_group'; end if;
-  update public.group_members set left_at = now() where group_id=p_group_id and user_id=p_user_id;
+  update public.group_members set left_at = now(), removed_by = auth.uid()
+    where group_id=p_group_id and user_id=p_user_id;
 end; $$;
 
 create or replace function public.delete_group(p_group_id uuid)
-returns void language plpgsql security definer as $$
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   if not exists (select 1 from public.groups where id=p_group_id and owner_id=auth.uid())
     then raise exception 'owner only'; end if;

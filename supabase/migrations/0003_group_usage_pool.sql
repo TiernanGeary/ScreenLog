@@ -13,15 +13,24 @@ create policy group_usage_select on public.group_usage for select
 
 -- Owner-TZ day key for a group.
 create or replace function public.group_owner_day(p_group_id uuid)
-returns text language sql security definer stable as $$
-  select to_char((now() at time zone coalesce(
-    (select owner_time_zone from public.groups where id = p_group_id), 'UTC')), 'YYYY-MM-DD');
+returns text language plpgsql security definer stable set search_path = public, pg_temp as $$
+declare owner_tz text;
+begin
+  select coalesce(owner_time_zone, 'UTC') into owner_tz
+    from public.groups where id = p_group_id;
+  owner_tz := coalesce(owner_tz, 'UTC');
+  begin
+    return to_char((now() at time zone owner_tz), 'YYYY-MM-DD');
+  exception when others then
+    return to_char((now() at time zone 'UTC'), 'YYYY-MM-DD');
+  end;
+end;
 $$;
 
 -- Report a member's cumulative selected-app seconds for today; return pool state.
 create or replace function public.report_group_usage(p_group_id uuid, p_selected_app_seconds int)
 returns table(pool_seconds int, used_seconds int, remaining_seconds int, exhausted boolean)
-language plpgsql security definer as $$
+language plpgsql security definer set search_path = public, pg_temp as $$
 declare d text; pool int; used int;
 begin
   if not public.is_group_member(p_group_id) then raise exception 'not a member'; end if;
@@ -40,7 +49,7 @@ end; $$;
 
 create or replace function public.get_group_pool_state(p_group_id uuid)
 returns table(pool_seconds int, used_seconds int, remaining_seconds int, exhausted boolean)
-language plpgsql security definer stable as $$
+language plpgsql security definer stable set search_path = public, pg_temp as $$
 declare d text; pool int; used int;
 begin
   if not public.is_group_member(p_group_id) then raise exception 'not a member'; end if;

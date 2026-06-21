@@ -13,37 +13,36 @@ alter table public.time_requests
 -- required = the group's configured count. p_block_group_id is the requester's
 -- LOCAL block group id ("group.<social_group_id>") used later for the unblock.
 create or replace function public.send_group_time_request(
-  p_social_group_id uuid, p_block_group_id text, p_seconds int,
-  p_message text, p_photo_path text)
-returns uuid language plpgsql security definer as $$
-declare req_id uuid; reqd int; recips uuid[]; names text[];
+  p_request_id uuid, p_social_group_id uuid, p_block_group_id text, p_seconds int, p_message text, p_photo_path text)
+returns uuid language plpgsql security definer set search_path = public, pg_temp as $$
+declare reqd int; recips uuid[]; names text[];
 begin
   if not public.is_group_member(p_social_group_id) then raise exception 'not a member'; end if;
   select approvals_required into reqd from public.group_config where group_id = p_social_group_id;
   select array_agg(user_id) into recips from public.group_members
     where group_id = p_social_group_id and left_at is null and user_id <> auth.uid();
   select app_names into names from public.group_config where group_id = p_social_group_id;
-  req_id := gen_random_uuid();
   insert into public.time_requests(
     id, group_id, social_group_id, requester_id, recipient_ids, requested_seconds,
     message, photo_path, status, approvals_required, approvers, group_app_names,
     created_at, expires_at)
   values (
-    req_id, p_block_group_id, p_social_group_id, auth.uid(), coalesce(recips,'{}'),
+    p_request_id, p_block_group_id, p_social_group_id, auth.uid(), coalesce(recips,'{}'),
     p_seconds, p_message, p_photo_path, 'pending', greatest(coalesce(reqd,1),1), '{}',
     names, now(), now() + interval '8 hours');
-  return req_id;
+  return p_request_id;
 end; $$;
 
 -- Approve/deny a group time request. Approval is counted; once approvals_required
 -- distinct members approve, status flips to 'approved'.
 create or replace function public.respond_group_time_request(p_request_id uuid, p_approve boolean)
-returns text language plpgsql security definer as $$
+returns text language plpgsql security definer set search_path = public, pg_temp as $$
 declare r public.time_requests%rowtype; new_status text;
 begin
   select * into r from public.time_requests where id = p_request_id for update;
   if r.id is null then raise exception 'no such request'; end if;
   if not (auth.uid() = any(r.recipient_ids)) then raise exception 'not a recipient'; end if;
+  if r.social_group_id is not null and not public.is_group_member(r.social_group_id) then raise exception 'not a member'; end if;
   if r.status <> 'pending' then return r.status; end if;
   if not p_approve then
     update public.time_requests set status='denied', resolved_at=now() where id=p_request_id;
