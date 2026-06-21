@@ -1642,7 +1642,7 @@ final class AppModel: ObservableObject {
                     groupID: group.id,
                     selectedAppSeconds: selectedAppSeconds
                 ) {
-                    applyPoolState(group, state)
+                    applyPoolState(group, state, allowBroadcast: true)
                 }
             }
         } catch {
@@ -1664,12 +1664,12 @@ final class AppModel: ObservableObject {
     func syncGroupPools() async {
         for group in myGroups where group.mode == .pool {
             if let state = try? await snapshotStore.getGroupPoolState(groupID: group.id) {
-                applyPoolState(group, state)
+                applyPoolState(group, state, allowBroadcast: false)
             }
         }
     }
 
-    private func applyPoolState(_ group: FriendGroupSummary, _ state: GroupPoolState) {
+    private func applyPoolState(_ group: FriendGroupSummary, _ state: GroupPoolState, allowBroadcast: Bool) {
         let blockGroupID = "group.\(group.id)"
         let now = Date()
         var didChange = false
@@ -1730,7 +1730,7 @@ final class AppModel: ObservableObject {
             message = "Could not save blocking settings: \(error.localizedDescription)"
         }
 
-        if shouldNotifyPoolExhausted {
+        if allowBroadcast && shouldNotifyPoolExhausted {
             notifyGroupMembersPoolExhausted(groupID: group.id)
         }
     }
