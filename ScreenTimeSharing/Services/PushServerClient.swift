@@ -54,6 +54,24 @@ struct PushServerClient {
         await post(path: "/notify", payload: payload)
     }
 
+    /// Asks the server to send a silent background push when a shared pool is
+    /// exhausted, so other group members can resync shields sooner.
+    func notifyPoolExhausted(toProfileID: String, groupID: String) async {
+        guard AppConfiguration.isPushServerConfigured,
+              !toProfileID.isEmpty,
+              !groupID.isEmpty else {
+            return
+        }
+
+        await post(
+            path: "/group-pool-exhausted",
+            payload: [
+                "toProfileID": toProfileID,
+                "groupID": groupID
+            ]
+        )
+    }
+
     private func post(path: String, payload: [String: String]) async {
         guard let url = URL(string: AppConfiguration.pushServerBaseURL + path) else {
             return

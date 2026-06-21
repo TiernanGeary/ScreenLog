@@ -6,6 +6,7 @@
 // Endpoints (all expect header `x-deny-secret: <APP_SHARED_SECRET>`):
 //   POST /register  { profileID, token, environment? }  -> stores token
 //   POST /notify    { toProfileID, title, body, requestID? } -> sends alert push
+//   POST /group-pool-exhausted { toProfileID/profileIDs, groupID } -> sends silent push
 //
 // Secrets (via `wrangler secret put`):
 //   APNS_AUTH_KEY      contents of the AuthKey_XXXX.p8 (PEM)
@@ -52,6 +53,9 @@ export default {
       if (url.pathname === "/notify") {
         return await handleNotify(request, env);
       }
+      if (url.pathname === "/group-pool-exhausted") {
+        return await handleGroupPoolExhausted(request, env);
+      }
       return json({ error: "not found" }, 404);
     } catch (err) {
       return json({ error: String(err && err.message ? err.message : err) }, 500);
@@ -85,17 +89,6 @@ async function handleNotify(request, env) {
     return json({ error: "toProfileID required" }, 400);
   }
 
-  const raw = await env.TOKENS.get(`profile:${toProfileID}`);
-  if (!raw) {
-    return json({ ok: false, reason: "no token for recipient" });
-  }
-  const record = JSON.parse(raw);
-
-  const jwt = await makeAPNsJWT(env);
-  const host = (record.environment === "sandbox" || env.APNS_ENVIRONMENT === "sandbox")
-    ? "https://api.sandbox.push.apple.com"
-    : "https://api.push.apple.com";
-
   const payload = {
     aps: {
       alert: { title, body: message },
@@ -113,27 +106,86 @@ async function handleNotify(request, env) {
     payload.friendRequestID = String(body.requestID);
   }
 
+  const result = await sendAPNsToProfile(env, toProfileID, payload, {
+    "apns-push-type": "alert",
+    "apns-priority": "10",
+  });
+  if (result.ok) {
+    return json({ ok: true });
+  }
+  if (result.reason === "no token for recipient") {
+    return json(result);
+  }
+  return json(result, 502);
+}
+
+async function handleGroupPoolExhausted(request, env) {
+  const body = await request.json();
+  const groupID = String(body.groupID || "").trim();
+  const profileIDs = Array.isArray(body.profileIDs)
+    ? body.profileIDs
+    : [body.toProfileID];
+  const recipients = [...new Set(profileIDs.map((id) => String(id || "").trim()).filter(Boolean))];
+
+  if (!groupID) {
+    return json({ error: "groupID required" }, 400);
+  }
+  if (recipients.length === 0) {
+    return json({ error: "toProfileID or profileIDs required" }, 400);
+  }
+
+  const payload = {
+    aps: {
+      "content-available": 1,
+    },
+    poolExhaustedGroupID: groupID,
+  };
+
+  const results = [];
+  for (const profileID of recipients) {
+    const result = await sendAPNsToProfile(env, profileID, payload, {
+      "apns-push-type": "background",
+      "apns-priority": "5",
+    });
+    results.push({ profileID, ...result });
+  }
+
+  const hasAPNsFailure = results.some((result) => !result.ok && result.reason !== "no token for recipient");
+  return json({ ok: results.every((result) => result.ok), results }, hasAPNsFailure ? 502 : 200);
+}
+
+async function sendAPNsToProfile(env, profileID, payload, apnsHeaders) {
+  const raw = await env.TOKENS.get(`profile:${profileID}`);
+  if (!raw) {
+    return { ok: false, reason: "no token for recipient" };
+  }
+  const record = JSON.parse(raw);
+
+  const jwt = await makeAPNsJWT(env);
+  const host = (record.environment === "sandbox" || env.APNS_ENVIRONMENT === "sandbox")
+    ? "https://api.sandbox.push.apple.com"
+    : "https://api.push.apple.com";
+
   const res = await fetch(`${host}/3/device/${record.token}`, {
     method: "POST",
     headers: {
       authorization: `bearer ${jwt}`,
       "apns-topic": env.APNS_BUNDLE_ID,
-      "apns-push-type": "alert",
-      "apns-priority": "10",
+      ...apnsHeaders,
     },
     body: JSON.stringify(payload),
   });
 
   if (res.status === 200) {
-    return json({ ok: true });
+    return { ok: true };
   }
 
   // 410 = token no longer valid; drop it so we stop trying.
   if (res.status === 410 || res.status === 400) {
-    await env.TOKENS.delete(`profile:${toProfileID}`);
+    await env.TOKENS.delete(`profile:${profileID}`);
   }
   const text = await res.text();
-  return json({ ok: false, status: res.status, apns: text }, 502);
+  return { ok: false, status: res.status, apns: text };
 }
 
 // --- APNs token-based auth (ES256 JWT signed with the .p8 key) ---

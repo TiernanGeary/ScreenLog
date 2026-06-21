@@ -1560,6 +1560,7 @@ final class AppModel: ObservableObject {
         let blockGroupID = "group.\(group.id)"
         let now = Date()
         var didChange = false
+        var shouldNotifyPoolExhausted = false
 
         if state?.exhausted == true {
             let override = PoolExhaustionOverride(
@@ -1579,6 +1580,7 @@ final class AppModel: ObservableObject {
             } else {
                 blockingState.poolExhaustionOverrides.append(override)
                 didChange = true
+                shouldNotifyPoolExhausted = true
             }
         } else {
             let originalCount = blockingState.poolExhaustionOverrides.count
@@ -1594,6 +1596,27 @@ final class AppModel: ObservableObject {
             try persistBlockingState()
         } catch {
             message = "Could not save blocking settings: \(error.localizedDescription)"
+        }
+
+        if shouldNotifyPoolExhausted {
+            notifyGroupMembersPoolExhausted(groupID: group.id)
+        }
+    }
+
+    private func notifyGroupMembersPoolExhausted(groupID: String) {
+        let currentUserID = profile.id
+        Task { @MainActor [weak self] in
+            guard let self, let detail = await self.loadGroupDetail(groupID: groupID) else {
+                return
+            }
+            let recipients = Set(
+                detail.members
+                    .map(\.userID)
+                    .filter { !$0.isEmpty && $0.caseInsensitiveCompare(currentUserID) != .orderedSame }
+            )
+            for recipient in recipients {
+                await self.pushServerClient.notifyPoolExhausted(toProfileID: recipient, groupID: groupID)
+            }
         }
     }
 
