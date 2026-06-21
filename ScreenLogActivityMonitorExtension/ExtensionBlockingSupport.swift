@@ -176,29 +176,48 @@ enum ExtensionBlockingSupport {
         state: BlockingState,
         excludingUnblockSessionID excludedID: String? = nil
     ) {
+        let now = Date()
+        let forcedGroupIDs = forcedPoolExhaustionGroupIDs(in: state, now: now)
         // A group with an active unblock session is suppressed (not shielded).
         // When ending a specific unblock, that session must also be dropped from
         // suppression — otherwise the group stays suppressed because the warning
         // fires just before the session's stored expiry, and nothing re-shields.
         let suppressedGroupIDs = Set(
-            BlockingStateResolver.activeUnblockSessions(in: state)
+            BlockingStateResolver.activeUnblockSessions(in: state, now: now)
                 .filter { $0.id != excludedID }
                 .map(\.groupID)
-        )
+        ).subtracting(forcedGroupIDs)
+        let shieldedGroupIDs = groupIDs.union(forcedGroupIDs)
         let selections = state.groups
-            .filter { groupIDs.contains($0.id) && $0.isEnabled && !suppressedGroupIDs.contains($0.id) }
+            .filter { shieldedGroupIDs.contains($0.id) && $0.isEnabled && !suppressedGroupIDs.contains($0.id) }
+            .compactMap { decodeSelection($0.selectionData) }
+        let forcedSelections = state.groups
+            .filter { forcedGroupIDs.contains($0.id) && $0.isEnabled }
             .compactMap { decodeSelection($0.selectionData) }
 
-        let exemptSelections = activeUnblockSelections(in: state, excluding: excludedID)
-        let exemptApplications = exemptSelections.reduce(into: Set<ApplicationToken>()) { partial, selection in
+        let exemptSelections = activeUnblockSelections(in: state, now: now, excluding: excludedID)
+        var exemptApplications = exemptSelections.reduce(into: Set<ApplicationToken>()) { partial, selection in
             partial.formUnion(selection.applicationTokens)
         }
-        let exemptCategories = exemptSelections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
+        var exemptCategories = exemptSelections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
             partial.formUnion(selection.categoryTokens)
         }
-        let exemptWebDomains = exemptSelections.reduce(into: Set<WebDomainToken>()) { partial, selection in
+        var exemptWebDomains = exemptSelections.reduce(into: Set<WebDomainToken>()) { partial, selection in
             partial.formUnion(selection.webDomainTokens)
         }
+        let forcedApplications = forcedSelections.reduce(into: Set<ApplicationToken>()) { partial, selection in
+            partial.formUnion(selection.applicationTokens)
+        }
+        let forcedCategories = forcedSelections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
+            partial.formUnion(selection.categoryTokens)
+        }
+        let forcedWebDomains = forcedSelections.reduce(into: Set<WebDomainToken>()) { partial, selection in
+            partial.formUnion(selection.webDomainTokens)
+        }
+        exemptApplications.subtract(forcedApplications)
+        exemptCategories.subtract(forcedCategories)
+        exemptWebDomains.subtract(forcedWebDomains)
+
         let applications = selections.reduce(into: Set<ApplicationToken>()) { partial, selection in
             partial.formUnion(selection.applicationTokens)
         }.subtracting(exemptApplications)
@@ -213,6 +232,15 @@ enum ExtensionBlockingSupport {
         managedStore.shield.applicationCategories = categories.isEmpty ? nil : .specific(categories, except: exemptApplications)
         managedStore.shield.webDomains = webDomains.isEmpty ? nil : webDomains
         managedStore.shield.webDomainCategories = categories.isEmpty ? nil : .specific(categories, except: exemptWebDomains)
+    }
+
+    private static func forcedPoolExhaustionGroupIDs(in state: BlockingState, now: Date = Date()) -> Set<String> {
+        let groupIDs = Set(state.groups.map(\.id))
+        return Set(
+            state.poolExhaustionOverrides
+                .filter { $0.isActive(now: now) && groupIDs.contains($0.groupID) }
+                .map(\.groupID)
+        )
     }
 
     private static func activeUnblockSelections(
