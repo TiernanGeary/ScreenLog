@@ -15,20 +15,22 @@ alter table public.time_requests
 create or replace function public.send_group_time_request(
   p_request_id uuid, p_social_group_id uuid, p_block_group_id text, p_seconds int, p_message text, p_photo_path text)
 returns uuid language plpgsql security definer set search_path = public, pg_temp as $$
-declare reqd int; recips uuid[]; names text[];
+  declare reqd int; recips uuid[]; names text[]; reqname text;
 begin
   if not public.is_group_member(p_social_group_id) then raise exception 'not a member'; end if;
+  if p_block_group_id is distinct from 'group.' || p_social_group_id::text then raise exception 'block group id mismatch'; end if;
   select approvals_required into reqd from public.group_config where group_id = p_social_group_id;
   select array_agg(user_id) into recips from public.group_members
     where group_id = p_social_group_id and left_at is null and user_id <> auth.uid();
   if coalesce(array_length(recips,1),0) = 0 then raise exception 'no recipients to approve'; end if;
   select app_names into names from public.group_config where group_id = p_social_group_id;
+  select display_name into reqname from public.profiles where id = auth.uid();
   insert into public.time_requests(
-    id, group_id, social_group_id, requester_id, recipient_ids, requested_seconds,
+    id, group_id, social_group_id, requester_id, requester_display_name, recipient_ids, requested_seconds,
     message, photo_path, status, approvals_required, approvers, group_app_names,
     created_at, expires_at)
   values (
-    p_request_id, p_block_group_id, p_social_group_id, auth.uid(), coalesce(recips,'{}'),
+    p_request_id, p_block_group_id, p_social_group_id, auth.uid(), reqname, coalesce(recips,'{}'),
     p_seconds, p_message, p_photo_path, 'pending',
     greatest(1, least(coalesce(reqd,1), array_length(recips,1))), '{}',
     names, now(), now() + interval '8 hours');

@@ -214,6 +214,15 @@ begin
     where group_id=p_group_id and user_id=p_user_id;
 end; $$;
 
+create or replace function public.reinstate_group_member(p_group_id uuid, p_user_id uuid)
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  if not exists (select 1 from public.groups where id=p_group_id and owner_id=auth.uid())
+    then raise exception 'only the owner can reinstate members'; end if;
+  update public.group_members set removed_by = null
+    where group_id=p_group_id and user_id=p_user_id;
+end; $$;
+
 create or replace function public.delete_group(p_group_id uuid)
 returns void language plpgsql security definer set search_path = public, pg_temp as $$
 begin
