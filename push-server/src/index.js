@@ -122,9 +122,9 @@ async function handleNotify(request, env) {
 async function handleGroupPoolExhausted(request, env) {
   const body = await request.json();
   const groupID = String(body.groupID || "").trim();
-  const profileIDs = body.profileIDs;
-  if (!Array.isArray(profileIDs) || profileIDs.length > 32) {
-    return json({ error: "profileIDs array with at most 32 entries required" }, 400);
+  const profileIDs = Array.isArray(body.profileIDs) ? body.profileIDs : body.toProfileID ? [body.toProfileID] : [];
+  if (profileIDs.length < 1 || profileIDs.length > 32) {
+    return json({ error: "toProfileID or profileIDs required" }, 400);
   }
   const recipients = [...new Set(profileIDs.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 32);
 
