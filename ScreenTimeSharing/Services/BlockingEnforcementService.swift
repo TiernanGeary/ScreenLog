@@ -74,14 +74,22 @@ struct BlockingEnforcementService {
     }
 
     func applyShields(for groupIDs: Set<String>, in state: BlockingState) {
-        let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state)
+        let now = Date()
+        let forcedGroupIDs = forcedPoolExhaustionGroupIDs(in: state, now: now)
+        let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state, now: now)
+            .subtracting(forcedGroupIDs)
+        let shieldedGroupIDs = groupIDs.union(forcedGroupIDs)
         let selections = state.groups
-            .filter { groupIDs.contains($0.id) && $0.isEnabled && !suppressedGroupIDs.contains($0.id) }
+            .filter { shieldedGroupIDs.contains($0.id) && $0.isEnabled && !suppressedGroupIDs.contains($0.id) }
+            .compactMap { try? BlockingSelectionCodec.decode($0.selectionData) }
+        let forcedSelections = state.groups
+            .filter { forcedGroupIDs.contains($0.id) && $0.isEnabled }
             .compactMap { try? BlockingSelectionCodec.decode($0.selectionData) }
 
         applyShields(
             for: selections,
-            exempting: activeUnblockSelections(in: state)
+            exempting: activeUnblockSelections(in: state, excluding: forcedGroupIDs, now: now),
+            forcing: forcedSelections
         )
     }
 
@@ -193,17 +201,31 @@ struct BlockingEnforcementService {
 
     private func applyShields(
         for selections: [FamilyActivitySelection],
-        exempting exemptSelections: [FamilyActivitySelection]
+        exempting exemptSelections: [FamilyActivitySelection],
+        forcing forcedSelections: [FamilyActivitySelection] = []
     ) {
-        let exemptApplications = exemptSelections.reduce(into: Set<ApplicationToken>()) { partial, selection in
+        var exemptApplications = exemptSelections.reduce(into: Set<ApplicationToken>()) { partial, selection in
             partial.formUnion(selection.applicationTokens)
         }
-        let exemptCategories = exemptSelections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
+        var exemptCategories = exemptSelections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
             partial.formUnion(selection.categoryTokens)
         }
-        let exemptWebDomains = exemptSelections.reduce(into: Set<WebDomainToken>()) { partial, selection in
+        var exemptWebDomains = exemptSelections.reduce(into: Set<WebDomainToken>()) { partial, selection in
             partial.formUnion(selection.webDomainTokens)
         }
+        let forcedApplications = forcedSelections.reduce(into: Set<ApplicationToken>()) { partial, selection in
+            partial.formUnion(selection.applicationTokens)
+        }
+        let forcedCategories = forcedSelections.reduce(into: Set<ActivityCategoryToken>()) { partial, selection in
+            partial.formUnion(selection.categoryTokens)
+        }
+        let forcedWebDomains = forcedSelections.reduce(into: Set<WebDomainToken>()) { partial, selection in
+            partial.formUnion(selection.webDomainTokens)
+        }
+        exemptApplications.subtract(forcedApplications)
+        exemptCategories.subtract(forcedCategories)
+        exemptWebDomains.subtract(forcedWebDomains)
+
         let applications = selections.reduce(into: Set<ApplicationToken>()) { partial, selection in
             partial.formUnion(selection.applicationTokens)
         }.subtracting(exemptApplications)
@@ -222,9 +244,14 @@ struct BlockingEnforcementService {
 
     private func activeUnblockSelections(
         in state: BlockingState,
+        excluding excludedGroupIDs: Set<String> = [],
         now: Date = Date()
     ) -> [FamilyActivitySelection] {
         BlockingStateResolver.activeUnblockSessions(in: state, now: now).compactMap { session in
+            guard !excludedGroupIDs.contains(session.groupID) else {
+                return nil
+            }
+
             if let selectionData = session.selectionData,
                let selection = try? BlockingSelectionCodec.decode(selectionData) {
                 return selection
@@ -247,8 +274,22 @@ struct BlockingEnforcementService {
     private func currentActiveGroupIDs(for state: BlockingState, now: Date) -> Set<String> {
         let enabledGroupIDs = Set(BlockingStateResolver.enabledGroups(in: state).map(\.id))
         let activeGroupIDs = Set(defaults?.stringArray(forKey: BlockingStoreCodec.activeShieldedGroupIDsKey) ?? [])
+        let forcedGroupIDs = forcedPoolExhaustionGroupIDs(in: state, now: now)
         let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state, now: now)
-        return activeGroupIDs.intersection(enabledGroupIDs).subtracting(suppressedGroupIDs)
+            .subtracting(forcedGroupIDs)
+        return activeGroupIDs
+            .union(forcedGroupIDs)
+            .intersection(enabledGroupIDs)
+            .subtracting(suppressedGroupIDs)
+    }
+
+    private func forcedPoolExhaustionGroupIDs(in state: BlockingState, now: Date = Date()) -> Set<String> {
+        let groupIDs = Set(state.groups.map(\.id))
+        return Set(
+            state.poolExhaustionOverrides
+                .filter { $0.isActive(now: now) && groupIDs.contains($0.groupID) }
+                .map(\.groupID)
+        )
     }
 
     private func blockSignature(for state: BlockingState) -> String {
@@ -266,7 +307,7 @@ struct BlockingEnforcementService {
     }
 
     private func unblockSignature(for state: BlockingState, now: Date) -> String {
-        state.unblockSessions
+        let sessionSignature = state.unblockSessions
             .filter { $0.isActive(now: now) }
             .sorted { $0.id < $1.id }
             .map { session in
@@ -279,6 +320,19 @@ struct BlockingEnforcementService {
                 ].joined(separator: ":")
             }
             .joined(separator: "|")
+        let overrideSignature = state.poolExhaustionOverrides
+            .filter { $0.isActive(now: now) }
+            .sorted { $0.groupID < $1.groupID }
+            .map { override in
+                [
+                    override.groupID,
+                    String(format: "%.3f", override.exhaustedAt.timeIntervalSinceReferenceDate),
+                    String(format: "%.3f", override.resetsAt.timeIntervalSinceReferenceDate)
+                ].joined(separator: ":")
+            }
+            .joined(separator: "|")
+
+        return [sessionSignature, overrideSignature].joined(separator: "#")
     }
 
     private func modeSignature(_ mode: BlockGroupMode) -> String {

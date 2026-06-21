@@ -775,12 +775,29 @@ public struct BlockUnblockSession: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct PoolExhaustionOverride: Codable, Equatable, Sendable {
+    public var groupID: String
+    public var exhaustedAt: Date
+    public var resetsAt: Date
+
+    public init(groupID: String, exhaustedAt: Date, resetsAt: Date) {
+        self.groupID = groupID
+        self.exhaustedAt = exhaustedAt
+        self.resetsAt = resetsAt
+    }
+
+    public func isActive(now: Date = Date()) -> Bool {
+        exhaustedAt <= now && now < resetsAt
+    }
+}
+
 public struct BlockingState: Codable, Equatable, Sendable {
     public var groups: [BlockGroup]
     public var rules: [BlockRule]
     public var requests: [BlockRequest]
     public var friendRequests: [BlockFriendRequest]
     public var unblockSessions: [BlockUnblockSession]
+    public var poolExhaustionOverrides: [PoolExhaustionOverride]
     public var lastUpdated: Date
 
     private enum CodingKeys: String, CodingKey {
@@ -789,6 +806,7 @@ public struct BlockingState: Codable, Equatable, Sendable {
         case requests
         case friendRequests
         case unblockSessions
+        case poolExhaustionOverrides
         case lastUpdated
     }
 
@@ -798,6 +816,7 @@ public struct BlockingState: Codable, Equatable, Sendable {
         requests: [BlockRequest] = [],
         friendRequests: [BlockFriendRequest] = [],
         unblockSessions: [BlockUnblockSession] = [],
+        poolExhaustionOverrides: [PoolExhaustionOverride] = [],
         lastUpdated: Date = Date()
     ) {
         self.groups = groups
@@ -805,6 +824,7 @@ public struct BlockingState: Codable, Equatable, Sendable {
         self.requests = requests
         self.friendRequests = friendRequests
         self.unblockSessions = unblockSessions
+        self.poolExhaustionOverrides = poolExhaustionOverrides
         self.lastUpdated = lastUpdated
     }
 
@@ -815,6 +835,10 @@ public struct BlockingState: Codable, Equatable, Sendable {
         requests = try container.decodeIfPresent([BlockRequest].self, forKey: .requests) ?? []
         friendRequests = try container.decodeIfPresent([BlockFriendRequest].self, forKey: .friendRequests) ?? []
         unblockSessions = try container.decodeIfPresent([BlockUnblockSession].self, forKey: .unblockSessions) ?? []
+        poolExhaustionOverrides = try container.decodeIfPresent(
+            [PoolExhaustionOverride].self,
+            forKey: .poolExhaustionOverrides
+        ) ?? []
         lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated) ?? Date()
     }
 
@@ -825,6 +849,7 @@ public struct BlockingState: Codable, Equatable, Sendable {
         try container.encode(requests, forKey: .requests)
         try container.encode(friendRequests, forKey: .friendRequests)
         try container.encode(unblockSessions, forKey: .unblockSessions)
+        try container.encode(poolExhaustionOverrides, forKey: .poolExhaustionOverrides)
         try container.encode(lastUpdated, forKey: .lastUpdated)
     }
 }
