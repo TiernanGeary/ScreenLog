@@ -575,6 +575,13 @@ struct GroupDetail: Equatable, Sendable {
     let members: [GroupMemberInfo]
 }
 
+struct GroupPoolState: Equatable, Sendable {
+    let poolSeconds: Int
+    let usedSeconds: Int
+    let remainingSeconds: Int
+    let exhausted: Bool
+}
+
 enum InviteDeepLink {
     /// Extracts an invite code from `deny://invite/<code>` (and tolerates a
     /// future `https://<host>/invite/<code>` universal link).

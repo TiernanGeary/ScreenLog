@@ -401,6 +401,56 @@ final class SupabaseSnapshotStore {
         return row.toDetail(currentUserID: uid)
     }
 
+    private struct GroupPoolStateRow: Decodable {
+        let pool_seconds: Int
+        let used_seconds: Int
+        let remaining_seconds: Int
+        let exhausted: Bool
+    }
+
+    func reportGroupUsage(groupID: String, selectedAppSeconds: Int) async throws -> GroupPoolState {
+        struct Params: Encodable {
+            let p_group_id: String
+            let p_selected_app_seconds: Int
+        }
+
+        let rows: [GroupPoolStateRow] = try await client
+            .rpc(
+                "report_group_usage",
+                params: Params(
+                    p_group_id: groupID,
+                    p_selected_app_seconds: selectedAppSeconds
+                )
+            )
+            .execute()
+            .value
+        let row = rows.first
+        return GroupPoolState(
+            poolSeconds: row?.pool_seconds ?? 0,
+            usedSeconds: row?.used_seconds ?? 0,
+            remainingSeconds: row?.remaining_seconds ?? 0,
+            exhausted: row?.exhausted ?? false
+        )
+    }
+
+    func getGroupPoolState(groupID: String) async throws -> GroupPoolState {
+        struct Params: Encodable {
+            let p_group_id: String
+        }
+
+        let rows: [GroupPoolStateRow] = try await client
+            .rpc("get_group_pool_state", params: Params(p_group_id: groupID))
+            .execute()
+            .value
+        let row = rows.first
+        return GroupPoolState(
+            poolSeconds: row?.pool_seconds ?? 0,
+            usedSeconds: row?.used_seconds ?? 0,
+            remainingSeconds: row?.remaining_seconds ?? 0,
+            exhausted: row?.exhausted ?? false
+        )
+    }
+
     func setMemberConfigured(groupID: String, configured: Bool) async throws {
         guard let groupUUID = UUID(uuidString: groupID) else {
             throw SupabaseSnapshotStoreError.invalidInvite
