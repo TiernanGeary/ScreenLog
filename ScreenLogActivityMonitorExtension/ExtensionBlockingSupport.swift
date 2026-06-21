@@ -229,9 +229,9 @@ enum ExtensionBlockingSupport {
         }.subtracting(exemptWebDomains)
 
         managedStore.shield.applications = applications.isEmpty ? nil : applications
-        managedStore.shield.applicationCategories = categories.isEmpty ? nil : .specific(categories, except: exemptApplications)
+        managedStore.shield.applicationCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptApplications) : .specific(categories)
         managedStore.shield.webDomains = webDomains.isEmpty ? nil : webDomains
-        managedStore.shield.webDomainCategories = categories.isEmpty ? nil : .specific(categories, except: exemptWebDomains)
+        managedStore.shield.webDomainCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptWebDomains) : .specific(categories)
     }
 
     private static func forcedPoolExhaustionGroupIDs(in state: BlockingState, now: Date = Date()) -> Set<String> {

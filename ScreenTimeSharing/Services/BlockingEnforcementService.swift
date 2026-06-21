@@ -237,9 +237,9 @@ struct BlockingEnforcementService {
         }.subtracting(exemptWebDomains)
 
         store.shield.applications = applications.isEmpty ? nil : applications
-        store.shield.applicationCategories = categories.isEmpty ? nil : .specific(categories, except: exemptApplications)
+        store.shield.applicationCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptApplications) : .specific(categories)
         store.shield.webDomains = webDomains.isEmpty ? nil : webDomains
-        store.shield.webDomainCategories = categories.isEmpty ? nil : .specific(categories, except: exemptWebDomains)
+        store.shield.webDomainCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptWebDomains) : .specific(categories)
     }
 
     private func activeUnblockSelections(
