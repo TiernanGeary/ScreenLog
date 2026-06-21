@@ -31,6 +31,7 @@ private enum SupabaseSnapshotStoreError: LocalizedError {
     case notSignedIn
     case notConfigured
     case invalidInvite
+    case unexpectedResponse
 
     var errorDescription: String? {
         switch self {
@@ -40,6 +41,8 @@ private enum SupabaseSnapshotStoreError: LocalizedError {
             return "Backend is not configured."
         case .invalidInvite:
             return "That invite code is not valid."
+        case .unexpectedResponse:
+            return "The server returned an unexpected response."
         }
     }
 }
@@ -553,20 +556,28 @@ final class SupabaseSnapshotStore {
         return id
     }
 
-    func respondGroupTimeRequest(requestID: String, approve: Bool) async throws -> String {
+    func respondGroupTimeRequest(requestID: String, approve: Bool) async throws -> (status: String, transitioned: Bool) {
         struct Params: Encodable {
             let p_request_id: String
             let p_approve: Bool
         }
+        struct Row: Decodable {
+            let status: String
+            let transitioned: Bool
+        }
 
-        let status: String = try await client
+        // The RPC returns a single (status, transitioned) row as a one-element table.
+        let rows: [Row] = try await client
             .rpc(
                 "respond_group_time_request",
                 params: Params(p_request_id: requestID, p_approve: approve)
             )
             .execute()
             .value
-        return status
+        guard let row = rows.first else {
+            throw SupabaseSnapshotStoreError.unexpectedResponse
+        }
+        return (row.status, row.transitioned)
     }
 
     func collectGroupTimeRequest(requestID: String) async throws {

@@ -836,6 +836,14 @@ final class AppModel: ObservableObject {
         limitSeconds: Int,
         selection: FamilyActivitySelection
     ) async -> Bool {
+        // Refuse a missing/<=0 limit (e.g. a misconfigured group whose pool or
+        // per-member seconds came back nil) instead of silently clamping up to the
+        // 5-minute minimum and enforcing a limit the owner never set.
+        guard limitSeconds > 0 else {
+            message = "This group's limit isn't set yet — ask the owner to reconfigure it."
+            return false
+        }
+
         if !hasScreenTimeAuthorization {
             await requestScreenTimeAuthorization()
             guard hasScreenTimeAuthorization else {
@@ -1824,6 +1832,11 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Pool groups (`group.<id>`) whose exhaustion the broadcast path has already
+    /// announced this episode, so a concurrent read-only sync can't re-suppress or
+    /// re-fire the member notification. In-memory; a best-effort push only.
+    private var broadcastedPoolExhaustionGroupIDs: Set<String> = []
+
     private func applyPoolState(_ group: FriendGroupSummary, _ state: GroupPoolState, allowBroadcast: Bool) {
         let blockGroupID = "group.\(group.id)"
         let now = Date()
@@ -1836,7 +1849,6 @@ final class AppModel: ObservableObject {
         }
         didChange = blockingState.poolExhaustionOverrides.count != expiredCount
         let existing = blockingState.poolExhaustionOverrides.first { $0.groupID == blockGroupID }
-        let hadActiveOverride = existing?.isActive(now: now) == true
 
         if state.exhausted {
             let resetsAt = nextOwnerTimeZoneMidnight(
@@ -1858,7 +1870,14 @@ final class AppModel: ObservableObject {
                 blockingState.poolExhaustionOverrides.append(override)
                 didChange = true
             }
-            shouldNotifyPoolExhausted = !hadActiveOverride
+            // Decouple "I just exhausted the pool, notify others" from whether a
+            // local override already exists: the read-only sync path can install the
+            // override first and would otherwise suppress this broadcast. Track per
+            // group whether the broadcast path already announced THIS episode.
+            if allowBroadcast && !broadcastedPoolExhaustionGroupIDs.contains(blockGroupID) {
+                shouldNotifyPoolExhausted = true
+                broadcastedPoolExhaustionGroupIDs.insert(blockGroupID)
+            }
         } else {
             if let existing, now.timeIntervalSince(existing.exhaustedAt) < 30 {
                 if didChange {
@@ -1872,6 +1891,8 @@ final class AppModel: ObservableObject {
             }
             let originalCount = blockingState.poolExhaustionOverrides.count
             blockingState.poolExhaustionOverrides.removeAll { $0.groupID == blockGroupID }
+            // Episode over: re-arm so a future exhaustion broadcasts again.
+            broadcastedPoolExhaustionGroupIDs.remove(blockGroupID)
             didChange = didChange || blockingState.poolExhaustionOverrides.count != originalCount
         }
 
@@ -2037,24 +2058,25 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            let statusRaw = try await snapshotStore.respondGroupTimeRequest(
+            let response = try await snapshotStore.respondGroupTimeRequest(
                 requestID: requestID,
                 approve: approve
             )
+            let statusRaw = response.status
             let existingRequest = blockingState.friendRequests.first {
                 $0.id.caseInsensitiveCompare(requestID) == .orderedSame
             }
             let requesterID = existingRequest?.requesterID
-            let priorStatus = existingRequest?.status
             updateLocalGroupFriendRequest(
                 requestID: requestID,
                 statusRaw: statusRaw,
                 approve: approve,
                 approvedByFriendID: approvedByFriendID
             )
-            // Only the approval that freshly reaches quorum pushes the requester,
-            // so late approvers don't re-send a duplicate "tap to collect".
-            if priorStatus != .approved, BlockRequestStatus(rawValue: statusRaw) == .approved {
+            // Push the requester only on the server-confirmed pending->approved
+            // transition, so a late re-approve (whose local status may be stale)
+            // can't re-send a duplicate "tap to collect".
+            if response.transitioned {
                 let approverName = profile.displayName == "Me" ? "Your friend" : profile.displayName
                 sendPushNotification(
                     toProfileIDs: [requesterID].compactMap { $0 },
