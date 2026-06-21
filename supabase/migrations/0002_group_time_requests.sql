@@ -59,17 +59,13 @@ begin
   if not (auth.uid() = any(r.approvers)) then
     r.approvers := array_append(r.approvers, auth.uid());
   end if;
-  select count(*) into eff
-    from public.group_members
-    where group_id = r.social_group_id
-      and user_id = any(r.approvers)
-      and left_at is null
-      and removed_by is null;
-  -- Compare against the quorum frozen at send time (already clamped to the
-  -- recipient count then). Do NOT re-clamp by the live recipient count, or an
-  -- owner could lower the bar by removing pending approvers. If too many
-  -- approvers become ineligible the request just never reaches quorum and
-  -- expires — the requester can re-send to re-freeze a smaller quorum.
+  -- Count the distinct members who have approved (r.approvers is maintained
+  -- dedup'd above) and compare against the quorum frozen at send time. An
+  -- approval is a point-in-time consent: it keeps counting even if that member
+  -- later leaves, so a legitimately-met quorum is never silently dropped. And
+  -- because removing a pending NON-approver changes neither the array nor the
+  -- frozen bar, an owner still cannot lower the quorum by pruning recipients.
+  eff := coalesce(array_length(r.approvers, 1), 0);
   new_status := case when eff >= greatest(1, coalesce(r.approvals_required, 1))
                      then 'approved' else 'pending' end;
   update public.time_requests
@@ -84,8 +80,11 @@ end; $$;
 create or replace function public.collect_group_time_request(p_request_id uuid)
 returns text language plpgsql security definer set search_path = public, pg_temp as $$
 begin
+  -- Gate on membership too (parity with send/respond) so a member who left or was
+  -- removed cannot flip their own approved group request to collected.
   update public.time_requests set status='collected', collected_at=now()
     where id = p_request_id and requester_id = auth.uid() and status = 'approved'
-      and (approved_expires_at is null or approved_expires_at > now());
+      and (approved_expires_at is null or approved_expires_at > now())
+      and (social_group_id is null or public.is_group_member(social_group_id));
   return 'collected';
 end; $$;
