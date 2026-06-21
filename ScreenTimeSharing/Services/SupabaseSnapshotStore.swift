@@ -469,6 +469,53 @@ final class SupabaseSnapshotStore {
             .execute()
     }
 
+    func sendGroupTimeRequest(
+        socialGroupID: String,
+        blockGroupID: String,
+        seconds: Int,
+        message: String,
+        photoPath: String?
+    ) async throws -> String {
+        struct Params: Encodable {
+            let p_social_group_id: String
+            let p_block_group_id: String
+            let p_seconds: Int
+            let p_message: String
+            let p_photo_path: String?
+        }
+
+        let id: String = try await client
+            .rpc(
+                "send_group_time_request",
+                params: Params(
+                    p_social_group_id: socialGroupID,
+                    p_block_group_id: blockGroupID,
+                    p_seconds: seconds,
+                    p_message: message,
+                    p_photo_path: photoPath
+                )
+            )
+            .execute()
+            .value
+        return id
+    }
+
+    func respondGroupTimeRequest(requestID: String, approve: Bool) async throws -> String {
+        struct Params: Encodable {
+            let p_request_id: String
+            let p_approve: Bool
+        }
+
+        let status: String = try await client
+            .rpc(
+                "respond_group_time_request",
+                params: Params(p_request_id: requestID, p_approve: approve)
+            )
+            .execute()
+            .value
+        return status
+    }
+
     // MARK: - Friend time requests
 
     struct FriendRequestDeliveryReport {
