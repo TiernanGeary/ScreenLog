@@ -236,10 +236,12 @@ returns void language plpgsql security definer set search_path = public, pg_temp
 begin
   if not exists (select 1 from public.groups where id=p_group_id and owner_id=auth.uid())
     then raise exception 'only the owner can reinstate members'; end if;
-  -- Clear left_at as well, otherwise every active-membership gate (which keys on
-  -- left_at is null) still excludes the "reinstated" member, making this a no-op.
+  -- Only reinstate an owner-REMOVED member (removed_by is not null). A member who
+  -- chose to leave (left_at set, removed_by null) must redeem an invite again
+  -- rather than be force-rejoined without their consent. Clear left_at too, else
+  -- every active-membership gate (keyed on left_at is null) still excludes them.
   update public.group_members set removed_by = null, left_at = null
-    where group_id=p_group_id and user_id=p_user_id;
+    where group_id=p_group_id and user_id=p_user_id and removed_by is not null;
 end; $$;
 
 create or replace function public.delete_group(p_group_id uuid)

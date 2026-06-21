@@ -19,6 +19,13 @@ returns uuid language plpgsql security definer set search_path = public, pg_temp
 begin
   if not public.is_group_member(p_social_group_id) then raise exception 'not a member'; end if;
   if lower(p_block_group_id) is distinct from 'group.' || p_social_group_id::text then raise exception 'block group id mismatch'; end if;
+  -- Time requests extend a per-member daily limit. Pool groups reset daily and their
+  -- exhaustion override deliberately takes precedence over unblock sessions, so a
+  -- collected request would be silently swallowed — refuse them at the source (the
+  -- UI already only offers "Ask the group" in per-member mode).
+  if (select mode from public.groups where id = p_social_group_id) <> 'per_member' then
+    raise exception 'time requests are only for per-member groups';
+  end if;
   select approvals_required into reqd from public.group_config where group_id = p_social_group_id;
   select array_agg(user_id) into recips from public.group_members
     where group_id = p_social_group_id and left_at is null and user_id <> auth.uid();
@@ -50,8 +57,11 @@ declare r public.time_requests%rowtype; new_status text; eff int;
 begin
   select * into r from public.time_requests where id = p_request_id for update;
   if r.id is null then raise exception 'no such request'; end if;
+  -- Group RPC: refuse friend rows so a friend request can only be resolved by
+  -- respond_to_time_request (and never picks up group approval semantics).
+  if r.social_group_id is null then raise exception 'not a group request'; end if;
   if not (auth.uid() = any(r.recipient_ids)) then raise exception 'not a recipient'; end if;
-  if r.social_group_id is not null and not public.is_group_member(r.social_group_id) then raise exception 'not a member'; end if;
+  if not public.is_group_member(r.social_group_id) then raise exception 'not a member'; end if;
   if r.status <> 'pending' then return query select r.status, false; return; end if;
   if r.expires_at is not null and r.expires_at <= now() then
     update public.time_requests set status='expired', resolved_at=now() where id=p_request_id and status='pending';
@@ -87,11 +97,11 @@ end; $$;
 create or replace function public.collect_group_time_request(p_request_id uuid)
 returns text language plpgsql security definer set search_path = public, pg_temp as $$
 begin
-  -- Gate on membership too (parity with send/respond) so a member who left or was
-  -- removed cannot flip their own approved group request to collected.
+  -- Group-only and gated on membership (parity with send/respond): refuse friend
+  -- rows, and stop a member who left or was removed from collecting their request.
   update public.time_requests set status='collected', collected_at=now()
     where id = p_request_id and requester_id = auth.uid() and status = 'approved'
       and (approved_expires_at is null or approved_expires_at > now())
-      and (social_group_id is null or public.is_group_member(social_group_id));
+      and social_group_id is not null and public.is_group_member(social_group_id);
   return 'collected';
 end; $$;
