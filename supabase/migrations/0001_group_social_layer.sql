@@ -63,9 +63,16 @@ create policy group_config_select on public.group_config for select
 -- All writes go through SECURITY DEFINER RPCs below; no direct write policies.
 
 -- 8-char A–Z2–9 code (no ambiguous chars).
-create or replace function public.gen_group_code() returns text language sql as $$
-  select string_agg(substr('ABCDEFGHJKLMNPQRSTUVWXYZ23456789',
-    (floor(random()*32)+1)::int, 1), '') from generate_series(1,8);
+-- pgcrypto's gen_random_bytes lives in the `extensions` schema on Supabase; the
+-- definer callers pin search_path to public, pg_temp, so widen it here (a missing
+-- `extensions` schema is silently ignored, so this is safe everywhere).
+create or replace function public.gen_group_code() returns text language sql
+  set search_path = public, extensions, pg_temp as $$
+  with alphabet(chars) as (values ('ABCDEFGHJKLMNPQRSTUVWXYZ23456789'::text)),
+       bytes(data) as (select gen_random_bytes(8))
+  select string_agg(substr(alphabet.chars,
+      (get_byte(bytes.data, gs.i) % length(alphabet.chars)) + 1, 1), '' order by gs.i)
+  from alphabet, bytes, generate_series(0,7) as gs(i);
 $$;
 
 create or replace function public.create_group(
@@ -163,7 +170,13 @@ returns table(id uuid, name text, mode text, owner_id uuid, owner_time_zone text
   role text, configured_at timestamptz, member_count int,
   app_names text[], per_member_limit_seconds int, pool_seconds int,
   approvals_required int, updated_at timestamptz)
-language sql security definer stable set search_path = public, pg_temp as $$
+language plpgsql security definer stable set search_path = public, pg_temp as $$
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  return query
   select g.id, g.name, g.mode, g.owner_id, g.owner_time_zone,
     m.role, m.configured_at,
     (select count(*) from public.group_members mm where mm.group_id=g.id and mm.left_at is null)::int,
@@ -172,7 +185,7 @@ language sql security definer stable set search_path = public, pg_temp as $$
   join public.groups g on g.id=m.group_id
   join public.group_config c on c.group_id=g.id
   where m.user_id = auth.uid() and m.left_at is null;
-$$;
+end; $$;
 
 create or replace function public.get_group(p_group_id uuid)
 returns jsonb language sql security definer stable set search_path = public, pg_temp as $$
