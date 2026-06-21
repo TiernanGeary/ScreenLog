@@ -1896,6 +1896,14 @@ final class AppModel: ObservableObject {
             didChange = didChange || blockingState.poolExhaustionOverrides.count != originalCount
         }
 
+        // Broadcast independently of didChange: a read-only sync may have installed
+        // an identical override first (didChange == false on this broadcast call),
+        // but shouldNotifyPoolExhausted is only set on the broadcast path for an
+        // un-announced episode, so the member notification must still fire here.
+        if allowBroadcast && shouldNotifyPoolExhausted {
+            notifyGroupMembersPoolExhausted(groupID: group.id)
+        }
+
         guard didChange else {
             return
         }
@@ -1904,10 +1912,6 @@ final class AppModel: ObservableObject {
             try persistBlockingState()
         } catch {
             message = "Could not save blocking settings: \(error.localizedDescription)"
-        }
-
-        if allowBroadcast && shouldNotifyPoolExhausted {
-            notifyGroupMembersPoolExhausted(groupID: group.id)
         }
     }
 
