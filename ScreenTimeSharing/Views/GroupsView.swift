@@ -655,9 +655,10 @@ struct GroupDetailView: View {
     private func reload() async {
         isLoading = true
         defer { isLoading = false }
-        let loadedDetail = await model.loadGroupDetail(groupID: groupID)
-        detail = loadedDetail
-        await reloadPoolState(for: loadedDetail)
+        if let loadedDetail = await model.loadGroupDetail(groupID: groupID) {
+            detail = loadedDetail
+            await reloadPoolState(for: loadedDetail)
+        }
     }
 
     private func reloadPoolState(for detail: GroupDetail?) async {
