@@ -154,7 +154,7 @@ begin
   if existing_removed_by is not null then raise exception 'removed from group'; end if;
   insert into public.group_members(group_id, user_id, role)
     values (g_id, auth.uid(), 'member')
-    on conflict (group_id, user_id) do update set left_at = null;  -- idempotent / rejoin
+    on conflict (group_id, user_id) do update set left_at = null, configured_at = null;  -- idempotent / rejoin
   return query select g_id, g_name;
 end; $$;
 
