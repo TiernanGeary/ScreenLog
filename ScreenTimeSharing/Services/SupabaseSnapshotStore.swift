@@ -265,6 +265,210 @@ final class SupabaseSnapshotStore {
         )
     }
 
+    // MARK: - Friend groups
+
+    func createGroup(
+        name: String,
+        mode: GroupMode,
+        appNames: [String],
+        limitSeconds: Int,
+        approvalsRequired: Int,
+        timeZone: String
+    ) async throws -> CreatedGroup {
+        struct Params: Encodable {
+            let pName: String
+            let pMode: String
+            let pAppNames: [String]
+            let pLimitSeconds: Int
+            let pApprovalsRequired: Int
+            let pOwnerTimeZone: String
+
+            enum CodingKeys: String, CodingKey {
+                case pName = "p_name"
+                case pMode = "p_mode"
+                case pAppNames = "p_app_names"
+                case pLimitSeconds = "p_limit_seconds"
+                case pApprovalsRequired = "p_approvals_required"
+                case pOwnerTimeZone = "p_owner_time_zone"
+            }
+        }
+
+        let rows: [CreatedGroupRow] = try await client
+            .rpc(
+                "create_group",
+                params: Params(
+                    pName: name,
+                    pMode: mode.rawValue,
+                    pAppNames: appNames,
+                    pLimitSeconds: limitSeconds,
+                    pApprovalsRequired: approvalsRequired,
+                    pOwnerTimeZone: timeZone
+                )
+            )
+            .execute()
+            .value
+        guard let row = rows.first else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        return CreatedGroup(groupID: row.groupId.uuidString, code: row.code)
+    }
+
+    func createGroupInvite(groupID: String) async throws -> (code: String, url: URL) {
+        guard let groupUUID = UUID(uuidString: groupID) else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        struct Params: Encodable {
+            let pGroupId: UUID
+            enum CodingKeys: String, CodingKey { case pGroupId = "p_group_id" }
+        }
+
+        let rows: [CreatedGroupInviteRow] = try await client
+            .rpc("create_group_invite", params: Params(pGroupId: groupUUID))
+            .execute()
+            .value
+        guard let row = rows.first else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        return (code: row.code, url: AppConfiguration.groupInviteWebLink(row.code))
+    }
+
+    func peekGroupInvite(code: String) async throws -> PeekedGroupInvite {
+        struct Params: Encodable {
+            let pCode: String
+            enum CodingKeys: String, CodingKey { case pCode = "p_code" }
+        }
+
+        let rows: [PeekedGroupInviteRow] = try await client
+            .rpc("peek_group_invite", params: Params(pCode: code))
+            .execute()
+            .value
+        guard let row = rows.first else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        return PeekedGroupInvite(
+            code: code,
+            groupID: row.groupId.uuidString,
+            groupName: row.groupName,
+            ownerDisplayName: row.ownerDisplayName.isEmpty ? "Friend" : row.ownerDisplayName,
+            mode: row.mode
+        )
+    }
+
+    func redeemGroupInvite(code: String) async throws -> RedeemedGroupInvite {
+        struct Params: Encodable {
+            let pCode: String
+            enum CodingKeys: String, CodingKey { case pCode = "p_code" }
+        }
+
+        let rows: [RedeemedGroupInviteRow] = try await client
+            .rpc("redeem_group_invite", params: Params(pCode: code))
+            .execute()
+            .value
+        guard let row = rows.first else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        return RedeemedGroupInvite(
+            groupID: row.groupId.uuidString,
+            groupName: row.groupName
+        )
+    }
+
+    func getMyGroups() async throws -> [FriendGroupSummary] {
+        let rows: [FriendGroupSummaryRow] = try await client
+            .rpc("get_my_groups")
+            .execute()
+            .value
+        return rows.map { $0.toSummary() }
+    }
+
+    func getGroup(groupID: String) async throws -> GroupDetail {
+        let uid = try await currentUserID()
+        guard let groupUUID = UUID(uuidString: groupID) else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        struct Params: Encodable {
+            let pGroupId: UUID
+            enum CodingKeys: String, CodingKey { case pGroupId = "p_group_id" }
+        }
+
+        let row: GroupDetailRow? = try await client
+            .rpc("get_group", params: Params(pGroupId: groupUUID))
+            .execute()
+            .value
+        guard let row else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        return row.toDetail(currentUserID: uid)
+    }
+
+    func setMemberConfigured(groupID: String, configured: Bool) async throws {
+        guard let groupUUID = UUID(uuidString: groupID) else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        struct Params: Encodable {
+            let pGroupId: UUID
+            let pConfigured: Bool
+
+            enum CodingKeys: String, CodingKey {
+                case pGroupId = "p_group_id"
+                case pConfigured = "p_configured"
+            }
+        }
+
+        try await client
+            .rpc("set_member_configured", params: Params(pGroupId: groupUUID, pConfigured: configured))
+            .execute()
+    }
+
+    func leaveGroup(groupID: String) async throws {
+        guard let groupUUID = UUID(uuidString: groupID) else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        struct Params: Encodable {
+            let pGroupId: UUID
+            enum CodingKeys: String, CodingKey { case pGroupId = "p_group_id" }
+        }
+
+        try await client
+            .rpc("leave_group", params: Params(pGroupId: groupUUID))
+            .execute()
+    }
+
+    func removeGroupMember(groupID: String, userID: String) async throws {
+        guard let groupUUID = UUID(uuidString: groupID),
+              let userUUID = UUID(uuidString: userID)
+        else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        struct Params: Encodable {
+            let pGroupId: UUID
+            let pUserId: UUID
+
+            enum CodingKeys: String, CodingKey {
+                case pGroupId = "p_group_id"
+                case pUserId = "p_user_id"
+            }
+        }
+
+        try await client
+            .rpc("remove_group_member", params: Params(pGroupId: groupUUID, pUserId: userUUID))
+            .execute()
+    }
+
+    func deleteGroup(groupID: String) async throws {
+        guard let groupUUID = UUID(uuidString: groupID) else {
+            throw SupabaseSnapshotStoreError.invalidInvite
+        }
+        struct Params: Encodable {
+            let pGroupId: UUID
+            enum CodingKeys: String, CodingKey { case pGroupId = "p_group_id" }
+        }
+
+        try await client
+            .rpc("delete_group", params: Params(pGroupId: groupUUID))
+            .execute()
+    }
+
     // MARK: - Friend time requests
 
     struct FriendRequestDeliveryReport {
