@@ -811,6 +811,20 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    @MainActor
+    @discardableResult
+    func adoptGroupPoolBlock(
+        groupID: String,
+        poolSeconds: Int,
+        selection: FamilyActivitySelection
+    ) async -> Bool {
+        await adoptGroupBlock(
+            groupID: groupID,
+            limitSeconds: poolSeconds,
+            selection: selection
+        )
+    }
+
     func removeGroupBlock(groupID: String) {
         let blockGroupID = "group.\(groupID)"
         if let group = blockingState.groups.first(where: { $0.id == blockGroupID }) {
@@ -1489,6 +1503,7 @@ final class AppModel: ObservableObject {
     func handleRemoteChange() async {
         await reloadFriends()
         await syncFriendRequests()
+        await syncGroupPools()
     }
 
     private var lastSnapshotPublishAt: Date?
@@ -1521,9 +1536,98 @@ final class AppModel: ObservableObject {
         do {
             try await snapshotStore.publish(profile: profile, snapshot: snapshot)
             lastSnapshotPublishAt = now
+            let selectedAppSeconds = Int(snapshot.selectedAppDuration ?? 0)
+            for group in myGroups where group.mode == .pool {
+                let state = try? await snapshotStore.reportGroupUsage(
+                    groupID: group.id,
+                    selectedAppSeconds: selectedAppSeconds
+                )
+                applyPoolState(group, state)
+            }
         } catch {
             // Non-fatal: retried on the next poll cycle.
         }
+    }
+
+    func syncGroupPools() async {
+        for group in myGroups where group.mode == .pool {
+            let state = try? await snapshotStore.getGroupPoolState(groupID: group.id)
+            applyPoolState(group, state)
+        }
+    }
+
+    private func applyPoolState(_ group: FriendGroupSummary, _ state: GroupPoolState?) {
+        let blockGroupID = "group.\(group.id)"
+        let now = Date()
+        var didChange = false
+
+        if state?.exhausted == true {
+            let override = PoolExhaustionOverride(
+                groupID: blockGroupID,
+                exhaustedAt: now,
+                resetsAt: nextOwnerTimeZoneMidnight(
+                    after: now,
+                    timeZoneIdentifier: group.ownerTimeZone
+                )
+            )
+
+            if let index = blockingState.poolExhaustionOverrides.firstIndex(where: { $0.groupID == blockGroupID }) {
+                if blockingState.poolExhaustionOverrides[index] != override {
+                    blockingState.poolExhaustionOverrides[index] = override
+                    didChange = true
+                }
+            } else {
+                blockingState.poolExhaustionOverrides.append(override)
+                didChange = true
+            }
+        } else {
+            let originalCount = blockingState.poolExhaustionOverrides.count
+            blockingState.poolExhaustionOverrides.removeAll { $0.groupID == blockGroupID }
+            didChange = blockingState.poolExhaustionOverrides.count != originalCount
+        }
+
+        guard didChange else {
+            return
+        }
+
+        do {
+            try persistBlockingState()
+        } catch {
+            message = "Could not save blocking settings: \(error.localizedDescription)"
+        }
+    }
+
+    private func nextOwnerTimeZoneMidnight(after now: Date, timeZoneIdentifier: String) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? .gmt
+        let dayKey = GroupPool.dayKey(now: now, timeZoneIdentifier: timeZoneIdentifier)
+        let parts = dayKey.split(separator: "-").compactMap { Int($0) }
+
+        guard parts.count == 3 else {
+            return calendar.nextDate(
+                after: now,
+                matching: DateComponents(hour: 0, minute: 0, second: 0),
+                matchingPolicy: .nextTime
+            ) ?? now.addingTimeInterval(24 * 60 * 60)
+        }
+
+        var components = DateComponents()
+        components.calendar = calendar
+        components.timeZone = calendar.timeZone
+        components.year = parts[0]
+        components.month = parts[1]
+        components.day = parts[2]
+
+        guard let todayStart = calendar.date(from: components),
+              let nextStart = calendar.date(byAdding: .day, value: 1, to: todayStart) else {
+            return calendar.nextDate(
+                after: now,
+                matching: DateComponents(hour: 0, minute: 0, second: 0),
+                matchingPolicy: .nextTime
+            ) ?? now.addingTimeInterval(24 * 60 * 60)
+        }
+
+        return nextStart
     }
 
     /// Stores the APNs device token and registers it with the push server against
@@ -1921,6 +2025,9 @@ final class AppModel: ObservableObject {
     /// reset that counter.
     func reapplyBlockingOnForeground() {
         syncBlockingEnforcement()
+        Task {
+            await syncGroupPools()
+        }
     }
 
     private func loadUsageHistory() {
