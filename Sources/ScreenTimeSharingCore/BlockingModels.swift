@@ -779,11 +779,29 @@ public struct PoolExhaustionOverride: Codable, Equatable, Sendable {
     public var groupID: String
     public var exhaustedAt: Date
     public var resetsAt: Date
+    /// Whether THIS device has already broadcast the member notification for this
+    /// exhaustion episode. Persisted with the override so a cold launch (in-memory
+    /// state lost) doesn't re-spam every member while the pool stays exhausted.
+    public var hasBroadcast: Bool
 
-    public init(groupID: String, exhaustedAt: Date, resetsAt: Date) {
+    public init(groupID: String, exhaustedAt: Date, resetsAt: Date, hasBroadcast: Bool = false) {
         self.groupID = groupID
         self.exhaustedAt = exhaustedAt
         self.resetsAt = resetsAt
+        self.hasBroadcast = hasBroadcast
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case groupID, exhaustedAt, resetsAt, hasBroadcast
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        groupID = try c.decode(String.self, forKey: .groupID)
+        exhaustedAt = try c.decode(Date.self, forKey: .exhaustedAt)
+        resetsAt = try c.decode(Date.self, forKey: .resetsAt)
+        // Back-compat: overrides persisted before this field default to false.
+        hasBroadcast = try c.decodeIfPresent(Bool.self, forKey: .hasBroadcast) ?? false
     }
 
     public func isActive(now: Date = Date()) -> Bool {

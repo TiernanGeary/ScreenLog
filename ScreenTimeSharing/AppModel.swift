@@ -1457,9 +1457,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// True when the previous getMyGroups() load came back empty while local group
+    /// blocks still existed — used to require two consecutive empties before tearing
+    /// down (see cleanupDroppedGroupBlocks).
+    private var sawEmptyMyGroupsLastLoad = false
+
     private func cleanupDroppedGroupBlocks() {
         guard isAuthenticated else {
             return
+        }
+
+        // OSCILLATION HOTSPOT (deliberate): distinguish "removed from every group"
+        // (tear down) from a transient empty get_my_groups() (a stale/anon session
+        // returns no rows WITHOUT throwing, since the RPC only raises on a null
+        // auth.uid()). A blanket `!myGroups.isEmpty` guard would leak a permanent
+        // block when a member really is removed from all groups, so instead require
+        // the empty result to repeat: a genuine removal persists across loads, a
+        // transient blip does not. A non-empty load re-arms.
+        let hasLocalGroupBlocks = blockingState.groups.contains { $0.id.hasPrefix("group.") }
+            || blockingState.poolExhaustionOverrides.contains { $0.groupID.hasPrefix("group.") }
+        if myGroups.isEmpty && hasLocalGroupBlocks {
+            if !sawEmptyMyGroupsLastLoad {
+                sawEmptyMyGroupsLastLoad = true
+                return
+            }
+        } else {
+            sawEmptyMyGroupsLastLoad = false
         }
 
         let liveIDs = Set(myGroups.map(\.id))
@@ -1770,6 +1793,26 @@ final class AppModel: ObservableObject {
             return
         }
 
+        guard await snapshotStore.cloudAvailability().allowsCloudWrites else {
+            return
+        }
+        lastSnapshotPublishAt = now
+
+        // Report pool usage regardless of whether the personal snapshot is
+        // uploadable: pool seconds come from the per-group report slot, not from the
+        // personal snapshot, so gating this on snapshot.capability.allowsUpload (a
+        // Screen Time capability that the pool does not need) would silently stop
+        // every pool from ever exhausting on devices that can't upload a snapshot.
+        for group in myGroups where group.mode == .pool {
+            let selectedAppSeconds = await selectedAppSecondsForPoolGroup(group)
+            if let state = try? await snapshotStore.reportGroupUsage(
+                groupID: group.id,
+                selectedAppSeconds: selectedAppSeconds
+            ) {
+                applyPoolState(group, state, allowBroadcast: true)
+            }
+        }
+
         var snapshot = localSnapshot
         #if DEBUG && targetEnvironment(simulator)
         if snapshot?.capability.allowsUpload != true {
@@ -1779,22 +1822,9 @@ final class AppModel: ObservableObject {
         guard let snapshot, snapshot.capability.allowsUpload else {
             return
         }
-        guard await snapshotStore.cloudAvailability().allowsCloudWrites else {
-            return
-        }
 
         do {
             try await snapshotStore.publish(profile: profile, snapshot: snapshot)
-            lastSnapshotPublishAt = now
-            for group in myGroups where group.mode == .pool {
-                let selectedAppSeconds = await selectedAppSecondsForPoolGroup(group)
-                if let state = try? await snapshotStore.reportGroupUsage(
-                    groupID: group.id,
-                    selectedAppSeconds: selectedAppSeconds
-                ) {
-                    applyPoolState(group, state, allowBroadcast: true)
-                }
-            }
         } catch {
             // Non-fatal: retried on the next poll cycle.
         }
@@ -1832,11 +1862,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Pool groups (`group.<id>`) whose exhaustion the broadcast path has already
-    /// announced this episode, so a concurrent read-only sync can't re-suppress or
-    /// re-fire the member notification. In-memory; a best-effort push only.
-    private var broadcastedPoolExhaustionGroupIDs: Set<String> = []
-
     private func applyPoolState(_ group: FriendGroupSummary, _ state: GroupPoolState, allowBroadcast: Bool) {
         let blockGroupID = "group.\(group.id)"
         let now = Date()
@@ -1858,7 +1883,10 @@ final class AppModel: ObservableObject {
 
             if let index = blockingState.poolExhaustionOverrides.firstIndex(where: { $0.groupID == blockGroupID }) {
                 if blockingState.poolExhaustionOverrides[index].resetsAt != resetsAt {
+                    // A different resetsAt means a new episode (day rolled): re-arm
+                    // the broadcast so the new exhaustion notifies again.
                     blockingState.poolExhaustionOverrides[index].resetsAt = resetsAt
+                    blockingState.poolExhaustionOverrides[index].hasBroadcast = false
                     didChange = true
                 }
             } else {
@@ -1870,13 +1898,16 @@ final class AppModel: ObservableObject {
                 blockingState.poolExhaustionOverrides.append(override)
                 didChange = true
             }
-            // Decouple "I just exhausted the pool, notify others" from whether a
-            // local override already exists: the read-only sync path can install the
-            // override first and would otherwise suppress this broadcast. Track per
-            // group whether the broadcast path already announced THIS episode.
-            if allowBroadcast && !broadcastedPoolExhaustionGroupIDs.contains(blockGroupID) {
+            // Notify other members once per episode from the broadcast (reporting)
+            // path. hasBroadcast is persisted on the override, so a read-only sync
+            // installing it first doesn't suppress this, and a cold launch (with the
+            // override already broadcast) doesn't re-spam.
+            if allowBroadcast,
+               let index = blockingState.poolExhaustionOverrides.firstIndex(where: { $0.groupID == blockGroupID }),
+               !blockingState.poolExhaustionOverrides[index].hasBroadcast {
+                blockingState.poolExhaustionOverrides[index].hasBroadcast = true
                 shouldNotifyPoolExhausted = true
-                broadcastedPoolExhaustionGroupIDs.insert(blockGroupID)
+                didChange = true
             }
         } else {
             if let existing, now.timeIntervalSince(existing.exhaustedAt) < 30 {
@@ -1891,8 +1922,6 @@ final class AppModel: ObservableObject {
             }
             let originalCount = blockingState.poolExhaustionOverrides.count
             blockingState.poolExhaustionOverrides.removeAll { $0.groupID == blockGroupID }
-            // Episode over: re-arm so a future exhaustion broadcasts again.
-            broadcastedPoolExhaustionGroupIDs.remove(blockGroupID)
             didChange = didChange || blockingState.poolExhaustionOverrides.count != originalCount
         }
 
