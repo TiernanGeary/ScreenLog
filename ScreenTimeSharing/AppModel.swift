@@ -813,7 +813,11 @@ final class AppModel: ObservableObject {
             return false
         }
 
-        GroupBlockPasswordStore.save(password, groupID: groupID)
+        guard GroupBlockPasswordStore.save(password, groupID: groupID) else {
+            _ = deleteBlockGroup(group, forceForGroupBlock: true)
+            message = "Could not save your group block password."
+            return false
+        }
         do {
             try await snapshotStore.setMemberConfigured(groupID: groupID, configured: true)
         } catch {
@@ -1205,6 +1209,10 @@ final class AppModel: ObservableObject {
         if collectedRequest.socialGroupID == nil {
             Task {
                 await publishFriendRequestUpdateToCloud(collectedRequest)
+            }
+        } else {
+            Task {
+                try? await snapshotStore.collectGroupTimeRequest(requestID: collectedRequest.id)
             }
         }
         return true

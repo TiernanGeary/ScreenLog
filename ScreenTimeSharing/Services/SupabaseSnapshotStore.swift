@@ -569,6 +569,19 @@ final class SupabaseSnapshotStore {
         return status
     }
 
+    func collectGroupTimeRequest(requestID: String) async throws {
+        struct Params: Encodable {
+            let p_request_id: String
+        }
+
+        try await client
+            .rpc(
+                "collect_group_time_request",
+                params: Params(p_request_id: requestID)
+            )
+            .execute()
+    }
+
     // MARK: - Friend time requests
 
     struct FriendRequestDeliveryReport {

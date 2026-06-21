@@ -62,3 +62,11 @@ begin
     where id = p_request_id;
   return new_status;
 end; $$;
+
+create or replace function public.collect_group_time_request(p_request_id uuid)
+returns text language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  update public.time_requests set status='collected', collected_at=now()
+    where id = p_request_id and requester_id = auth.uid() and status = 'approved';
+  return 'collected';
+end; $$;
