@@ -1955,14 +1955,18 @@ final class AppModel: ObservableObject {
                 requestID: requestID,
                 approve: approve
             )
-            let requesterID = blockingState.friendRequests.first { $0.id == requestID }?.requesterID
+            let existingRequest = blockingState.friendRequests.first { $0.id == requestID }
+            let requesterID = existingRequest?.requesterID
+            let priorStatus = existingRequest?.status
             updateLocalGroupFriendRequest(
                 requestID: requestID,
                 statusRaw: statusRaw,
                 approve: approve,
                 approvedByFriendID: approvedByFriendID
             )
-            if BlockRequestStatus(rawValue: statusRaw) == .approved {
+            // Only the approval that freshly reaches quorum pushes the requester,
+            // so late approvers don't re-send a duplicate "tap to collect".
+            if priorStatus != .approved, BlockRequestStatus(rawValue: statusRaw) == .approved {
                 let approverName = profile.displayName == "Me" ? "Your friend" : profile.displayName
                 sendPushNotification(
                     toProfileIDs: [requesterID].compactMap { $0 },
