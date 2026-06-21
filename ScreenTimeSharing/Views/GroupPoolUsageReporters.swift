@@ -16,7 +16,10 @@ struct GroupPoolUsageReporters: View {
                 ForEach(model.poolGroupSlotAssignments, id: \.slot) { assignment in
                     DeviceActivityReport(
                         Self.context(forSlot: assignment.slot),
-                        filter: Self.filter(for: assignment.selection)
+                        filter: Self.filter(
+                            for: assignment.selection,
+                            ownerTimeZone: assignment.ownerTimeZone
+                        )
                     )
                     .frame(width: 0, height: 0)
                     .clipped()
@@ -39,9 +42,18 @@ struct GroupPoolUsageReporters: View {
         }
     }
 
-    private static func filter(for selection: FamilyActivitySelection) -> DeviceActivityFilter {
-        DeviceActivityFilter(
-            segment: .hourly(during: UsageDateBoundary.dayInterval(containing: Date())),
+    private static func filter(
+        for selection: FamilyActivitySelection,
+        ownerTimeZone: String
+    ) -> DeviceActivityFilter {
+        let now = Date()
+        var ownerCalendar = Calendar(identifier: .gregorian)
+        ownerCalendar.timeZone = TimeZone(identifier: ownerTimeZone) ?? .current
+        let ownerDayInterval = ownerCalendar.dateInterval(of: .day, for: now)
+            ?? UsageDateBoundary.dayInterval(containing: now)
+
+        return DeviceActivityFilter(
+            segment: .hourly(during: ownerDayInterval),
             devices: .init([.iPhone]),
             applications: selection.applicationTokens,
             categories: selection.categoryTokens,
