@@ -306,6 +306,8 @@ struct GroupDetailView: View {
     @State private var isShowingBlockSetup = false
     @State private var isShowingAskGroupTime = false
     @State private var didSendGroupTimeRequest = false
+    @State private var poolState: GroupPoolState?
+    @State private var isLoadingPoolState = false
     @State private var memberToRemove: GroupMemberInfo?
 
     var body: some View {
@@ -391,7 +393,8 @@ struct GroupDetailView: View {
                 GroupBlockSetupSheet(
                     groupID: groupID,
                     appNames: detail.config.appNames,
-                    limitSeconds: detail.config.perMemberLimitSeconds ?? 0,
+                    limitSeconds: blockSetupLimitSeconds(for: detail),
+                    mode: detail.group.mode,
                     onDone: {
                         isShowingBlockSetup = false
                         Task {
@@ -534,6 +537,77 @@ struct GroupDetailView: View {
                     .appCardRow()
                 }
             }
+        } else {
+            let poolSeconds = detail.config.poolSeconds ?? 0
+            let isConfigured = viewerIsConfigured(in: detail)
+
+            AppSection("Your Block") {
+                AppCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if isConfigured {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Shared pool: \(minutesText(poolSeconds))/day")
+                                    .font(.subheadline.weight(.semibold))
+
+                                if let poolState {
+                                    if poolState.exhausted {
+                                        Text("Pool used up — blocked until reset")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(.red)
+                                    } else {
+                                        Text("\(minutesText(poolState.remainingSeconds)) left today")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                } else {
+                                    Text("Shared daily pool: \(minutesText(poolSeconds))")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                if isLoadingPoolState {
+                                    HStack(spacing: 8) {
+                                        ProgressView()
+                                        Text("Updating pool status...")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+
+                            Text("Your device keeps a local backstop for the selected apps so the shared budget still has a limit when you're offline.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                AppHaptics.buttonTap()
+                                isShowingBlockSetup = true
+                            } label: {
+                                Text("Update apps")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                        } else {
+                            Text("This group shares one daily budget across everyone. Choose the matching apps on this device; your device will keep a local backstop limit for the shared pool.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                AppHaptics.buttonTap()
+                                isShowingBlockSetup = true
+                            } label: {
+                                Text("Set up your block")
+                                    .fontWeight(.semibold)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                        }
+                    }
+                    .appCardRow()
+                }
+            }
         }
     }
 
@@ -573,7 +647,20 @@ struct GroupDetailView: View {
     private func reload() async {
         isLoading = true
         defer { isLoading = false }
-        detail = await model.loadGroupDetail(groupID: groupID)
+        let loadedDetail = await model.loadGroupDetail(groupID: groupID)
+        detail = loadedDetail
+        await reloadPoolState(for: loadedDetail)
+    }
+
+    private func reloadPoolState(for detail: GroupDetail?) async {
+        guard let detail, detail.group.mode == .pool else {
+            poolState = nil
+            return
+        }
+
+        isLoadingPoolState = true
+        defer { isLoadingPoolState = false }
+        poolState = try? await model.snapshotStore.getGroupPoolState(groupID: groupID)
     }
 
     private func removeMember(_ member: GroupMemberInfo) async {
@@ -617,6 +704,19 @@ struct GroupDetailView: View {
         }
 
         return "\(max(1, seconds / 60)) min / day"
+    }
+
+    private func blockSetupLimitSeconds(for detail: GroupDetail) -> Int {
+        switch detail.group.mode {
+        case .perMember:
+            return detail.config.perMemberLimitSeconds ?? 0
+        case .pool:
+            return detail.config.poolSeconds ?? 0
+        }
+    }
+
+    private func minutesText(_ seconds: Int) -> String {
+        "\(max(1, seconds / 60)) min"
     }
 
     private func viewerIsConfigured(in detail: GroupDetail) -> Bool {
@@ -912,6 +1012,7 @@ private struct GroupBlockSetupSheet: View {
     let groupID: String
     let appNames: [String]
     let limitSeconds: Int
+    var mode: GroupMode = .perMember
     var onDone: () -> Void
 
     @EnvironmentObject private var model: AppModel
@@ -945,6 +1046,12 @@ private struct GroupBlockSetupSheet: View {
                             Text("Your group restricts: \(appNames.joined(separator: ", "))")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+
+                            if mode == .pool {
+                                Text("This is a shared daily budget for the whole group. Your device also keeps a local backstop limit for the apps you choose.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
 
                             Button {
                                 AppHaptics.buttonTap()
@@ -1007,7 +1114,22 @@ private struct GroupBlockSetupSheet: View {
         }
 
         isStarting = true
-        if await model.adoptGroupBlock(groupID: groupID, limitSeconds: limitSeconds, selection: selection) {
+        let didStart: Bool
+        switch mode {
+        case .perMember:
+            didStart = await model.adoptGroupBlock(
+                groupID: groupID,
+                limitSeconds: limitSeconds,
+                selection: selection
+            )
+        case .pool:
+            didStart = await model.adoptGroupPoolBlock(
+                groupID: groupID,
+                poolSeconds: limitSeconds,
+                selection: selection
+            )
+        }
+        if didStart {
             onDone()
         }
         isStarting = false
