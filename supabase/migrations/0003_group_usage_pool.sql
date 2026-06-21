@@ -41,8 +41,12 @@ begin
       set selected_app_seconds = greatest(excluded.selected_app_seconds, public.group_usage.selected_app_seconds),
           updated_at = now();
   select pool_seconds into pool from public.group_config where group_id = p_group_id;
-  select coalesce(sum(selected_app_seconds),0) into used
-    from public.group_usage where group_id = p_group_id and day = d;
+  select coalesce(sum(u.selected_app_seconds),0) into used
+    from public.group_usage u
+    join public.group_members m
+      on m.group_id = u.group_id and m.user_id = u.user_id
+    where u.group_id = p_group_id and u.day = d
+      and m.left_at is null and m.removed_by is null;
   return query select coalesce(pool,0), used, greatest(coalesce(pool,0)-used,0),
                       (used >= coalesce(pool,0) and coalesce(pool,0) > 0);
 end; $$;
@@ -55,8 +59,12 @@ begin
   if not public.is_group_member(p_group_id) then raise exception 'not a member'; end if;
   d := public.group_owner_day(p_group_id);
   select pool_seconds into pool from public.group_config where group_id = p_group_id;
-  select coalesce(sum(selected_app_seconds),0) into used
-    from public.group_usage where group_id = p_group_id and day = d;
+  select coalesce(sum(u.selected_app_seconds),0) into used
+    from public.group_usage u
+    join public.group_members m
+      on m.group_id = u.group_id and m.user_id = u.user_id
+    where u.group_id = p_group_id and u.day = d
+      and m.left_at is null and m.removed_by is null;
   return query select coalesce(pool,0), used, greatest(coalesce(pool,0)-used,0),
                       (used >= coalesce(pool,0) and coalesce(pool,0) > 0);
 end; $$;

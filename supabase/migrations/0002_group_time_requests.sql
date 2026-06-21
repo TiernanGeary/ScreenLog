@@ -41,7 +41,7 @@ end; $$;
 -- distinct members approve, status flips to 'approved'.
 create or replace function public.respond_group_time_request(p_request_id uuid, p_approve boolean)
 returns text language plpgsql security definer set search_path = public, pg_temp as $$
-declare r public.time_requests%rowtype; new_status text;
+declare r public.time_requests%rowtype; new_status text; active_recip int;
 begin
   select * into r from public.time_requests where id = p_request_id for update;
   if r.id is null then raise exception 'no such request'; end if;
@@ -55,7 +55,13 @@ begin
   if not (auth.uid() = any(r.approvers)) then
     r.approvers := array_append(r.approvers, auth.uid());
   end if;
-  new_status := case when array_length(r.approvers,1) >= coalesce(r.approvals_required,1)
+  select count(*) into active_recip
+    from public.group_members
+    where group_id = r.social_group_id
+      and user_id = any(r.recipient_ids)
+      and left_at is null
+      and removed_by is null;
+  new_status := case when array_length(r.approvers,1) >= greatest(1, least(coalesce(r.approvals_required,1), active_recip))
                      then 'approved' else 'pending' end;
   update public.time_requests
     set approvers = r.approvers,
