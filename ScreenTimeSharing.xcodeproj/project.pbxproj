@@ -30,6 +30,7 @@
 		B10000000000000000000033 /* AppleSignInService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000027 /* AppleSignInService.swift */; };
 		B10000000000000000000034 /* SubscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000028 /* SubscriptionService.swift */; };
 		B10000000000000000000035 /* PushServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000029 /* PushServerClient.swift */; };
+		B10000000000000000000039 /* GroupBlockPasswordStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000031 /* GroupBlockPasswordStore.swift */; };
 		B10000000000000000000017 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000014 /* AppDelegate.swift */; };
 		B10000000000000000000018 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000015 /* RootView.swift */; };
 		B10000000000000000000019 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000016 /* OnboardingView.swift */; };
@@ -153,6 +154,7 @@
 		D00000000000000000000027 /* AppleSignInService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSignInService.swift; sourceTree = "<group>"; };
 		D00000000000000000000028 /* SubscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionService.swift; sourceTree = "<group>"; };
 		D00000000000000000000029 /* PushServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushServerClient.swift; sourceTree = "<group>"; };
+		D00000000000000000000031 /* GroupBlockPasswordStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupBlockPasswordStore.swift; sourceTree = "<group>"; };
 		E00000000000000000000011 /* SupabaseClientProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseClientProvider.swift; sourceTree = "<group>"; };
 		E00000000000000000000012 /* SupabaseSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseSnapshotStore.swift; sourceTree = "<group>"; };
 		E00000000000000000000013 /* SupabaseRowMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseRowMapping.swift; sourceTree = "<group>"; };
@@ -306,6 +308,7 @@
 				D00000000000000000000027 /* AppleSignInService.swift */,
 				D00000000000000000000028 /* SubscriptionService.swift */,
 				D00000000000000000000029 /* PushServerClient.swift */,
+				D00000000000000000000031 /* GroupBlockPasswordStore.swift */,
 				E00000000000000000000011 /* SupabaseClientProvider.swift */,
 				E00000000000000000000012 /* SupabaseSnapshotStore.swift */,
 				E00000000000000000000013 /* SupabaseRowMapping.swift */,
@@ -589,6 +592,7 @@
 				B10000000000000000000033 /* AppleSignInService.swift in Sources */,
 				B10000000000000000000034 /* SubscriptionService.swift in Sources */,
 				B10000000000000000000035 /* PushServerClient.swift in Sources */,
+				B10000000000000000000039 /* GroupBlockPasswordStore.swift in Sources */,
 				E00000000000000000000021 /* SupabaseClientProvider.swift in Sources */,
 				E00000000000000000000022 /* SupabaseSnapshotStore.swift in Sources */,
 				E00000000000000000000023 /* SupabaseRowMapping.swift in Sources */,
