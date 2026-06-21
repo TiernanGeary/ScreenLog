@@ -1,5 +1,6 @@
 import FamilyControls
 import Foundation
+import Supabase
 import SwiftUI
 @preconcurrency import UserNotifications
 #if canImport(UIKit)
@@ -975,6 +976,53 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
+    @MainActor
+    func requestGroupTime(
+        socialGroupID: String,
+        seconds: TimeInterval,
+        message requestMessage: String,
+        photoJPEGData: Data?
+    ) async -> Bool {
+        let availability = await snapshotStore.cloudAvailability()
+        cloudAvailability = availability
+        guard availability.allowsCloudWrites else {
+            message = "\(availability.label). Group request was not sent."
+            return false
+        }
+
+        do {
+            let photoPath = try await uploadGroupRequestPhoto(photoJPEGData)
+            let requestID = try await snapshotStore.sendGroupTimeRequest(
+                socialGroupID: socialGroupID,
+                blockGroupID: "group.\(socialGroupID)",
+                seconds: Int(seconds),
+                message: requestMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+                photoPath: photoPath
+            )
+            await syncFriendRequests()
+
+            let recipientIDs = await groupRequestRecipientIDs(
+                requestID: requestID,
+                socialGroupID: socialGroupID
+            )
+            let senderName = profile.displayName == "Me" ? "A group member" : profile.displayName
+            let durationLabel = BlockingDisplayFormatter.durationLabel(TimeInterval(Int(seconds)))
+            let groupName = friendGroupName(socialGroupID: socialGroupID)
+            sendPushNotification(
+                toProfileIDs: recipientIDs,
+                title: "New group time request",
+                body: "\(senderName) is asking for \(durationLabel) in \(groupName). Tap to review.",
+                requestID: requestID
+            )
+            message = "Group request sent."
+            return true
+        } catch {
+            message = "Could not send group request: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    @discardableResult
     func approveFriendRequest(id: String) -> Bool {
         expireStaleFriendRequests()
         guard let index = blockingState.friendRequests.firstIndex(where: { $0.id == id }) else {
@@ -986,6 +1034,18 @@ final class AppModel: ObservableObject {
         guard request.isReceived(byAny: currentFriendIdentityIDs), request.status == .pending else {
             message = "Only pending received requests can be approved."
             return false
+        }
+
+        if request.socialGroupID != nil {
+            friendRequestNotificationService.clearNotification(for: id)
+            Task {
+                await respondGroupFriendRequest(
+                    requestID: id,
+                    approve: true,
+                    approvedByFriendID: profile.id
+                )
+            }
+            return true
         }
 
         let now = Date()
@@ -1024,6 +1084,18 @@ final class AppModel: ObservableObject {
         guard request.isReceived(byAny: currentFriendIdentityIDs), request.status == .pending else {
             message = "Only pending received requests can be denied."
             return false
+        }
+
+        if request.socialGroupID != nil {
+            friendRequestNotificationService.clearNotification(for: id)
+            Task {
+                await respondGroupFriendRequest(
+                    requestID: id,
+                    approve: false,
+                    approvedByFriendID: nil
+                )
+            }
+            return true
         }
 
         let resolvedRequest = request.resolving(as: .denied, at: Date())
@@ -1481,6 +1553,106 @@ final class AppModel: ObservableObject {
                     requestID: requestID
                 )
             }
+        }
+    }
+
+    private func uploadGroupRequestPhoto(_ photoData: Data?) async throws -> String? {
+        guard let photoData, !photoData.isEmpty else {
+            return nil
+        }
+
+        let client = SupabaseClientProvider.shared
+        let session = try await client.auth.session
+        let uid = session.user.id
+        let path = "\(uid.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
+        try await client.storage.from("request-photos").upload(
+            path,
+            data: photoData,
+            options: FileOptions(contentType: "image/jpeg")
+        )
+        return path
+    }
+
+    private func groupRequestRecipientIDs(requestID: String, socialGroupID: String) async -> [String] {
+        if let request = blockingState.friendRequests.first(where: { $0.id == requestID }) {
+            return request.selectedFriendIDs
+        }
+
+        guard let detail = try? await snapshotStore.getGroup(groupID: socialGroupID) else {
+            return []
+        }
+
+        return detail.members.map(\.userID)
+    }
+
+    private func friendGroupName(socialGroupID: String) -> String {
+        myGroups.first { $0.id == socialGroupID }?.name ?? "your group"
+    }
+
+    private func respondGroupFriendRequest(
+        requestID: String,
+        approve: Bool,
+        approvedByFriendID: String?
+    ) async {
+        let availability = await snapshotStore.cloudAvailability()
+        cloudAvailability = availability
+        guard availability.allowsCloudWrites else {
+            message = "\(availability.label). Request was not updated."
+            return
+        }
+
+        do {
+            let statusRaw = try await snapshotStore.respondGroupTimeRequest(
+                requestID: requestID,
+                approve: approve
+            )
+            updateLocalGroupFriendRequest(
+                requestID: requestID,
+                statusRaw: statusRaw,
+                approve: approve,
+                approvedByFriendID: approvedByFriendID
+            )
+            await syncFriendRequests()
+        } catch {
+            message = "Could not update group request: \(error.localizedDescription)"
+        }
+    }
+
+    private func updateLocalGroupFriendRequest(
+        requestID: String,
+        statusRaw: String,
+        approve: Bool,
+        approvedByFriendID: String?
+    ) {
+        guard let status = BlockRequestStatus(rawValue: statusRaw),
+              let index = blockingState.friendRequests.firstIndex(where: { $0.id == requestID }) else {
+            return
+        }
+
+        var request = blockingState.friendRequests[index]
+        request.status = status
+        if status == .approved {
+            request.approvedByFriendID = approvedByFriendID ?? request.approvedByFriendID
+        } else if status == .denied {
+            request.approvedByFriendID = nil
+        }
+        blockingState.friendRequests[index] = request
+        saveBlockingStateWithStatus(groupResponseStatusMessage(status: status, approve: approve))
+        refreshLocalAccountabilityStats()
+        syncFriendRequestNotifications()
+        writeWidgetCacheSnapshot()
+    }
+
+    private func groupResponseStatusMessage(status: BlockRequestStatus, approve: Bool) -> String {
+        switch status {
+        case .approved:
+            return "Request approved."
+        case .denied:
+            return "Request denied."
+        case .pending:
+            return approve ? "Approval recorded." : "Request updated."
+        case .expired, .collected:
+            return "Request updated."
         }
     }
 

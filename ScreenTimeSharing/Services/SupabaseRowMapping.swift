@@ -152,6 +152,7 @@ struct TimeRequestRow: Codable {
     var resolvedAt: Date?
     var approvedExpiresAt: Date?
     var collectedAt: Date?
+    var socialGroupId: String?
     var groupAppNames: [String]?
 
     enum CodingKeys: String, CodingKey {
@@ -170,6 +171,7 @@ struct TimeRequestRow: Codable {
         case resolvedAt = "resolved_at"
         case approvedExpiresAt = "approved_expires_at"
         case collectedAt = "collected_at"
+        case socialGroupId = "social_group_id"
         case groupAppNames = "group_app_names"
     }
 
@@ -201,6 +203,7 @@ struct TimeRequestRow: Codable {
         self.resolvedAt = nil
         self.approvedExpiresAt = nil
         self.collectedAt = nil
+        self.socialGroupId = request.socialGroupID
         self.groupAppNames = request.groupAppNames.map { Array($0.prefix(5)) }
     }
 
@@ -221,6 +224,7 @@ struct TimeRequestRow: Codable {
             expiresAt: expiresAt,
             approvedExpiresAt: approvedExpiresAt,
             photoReference: photoReference,
+            socialGroupID: socialGroupId,
             groupAppNames: groupAppNames
         )
     }
