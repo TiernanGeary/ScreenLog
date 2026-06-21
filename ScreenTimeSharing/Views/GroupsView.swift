@@ -1,3 +1,4 @@
+import FamilyControls
 import SwiftUI
 
 struct GroupsView: View {
@@ -302,6 +303,7 @@ struct GroupDetailView: View {
     @State private var isMutating = false
     @State private var isConfirmingDelete = false
     @State private var isConfirmingLeave = false
+    @State private var isShowingBlockSetup = false
     @State private var memberToRemove: GroupMemberInfo?
 
     var body: some View {
@@ -317,6 +319,7 @@ struct GroupDetailView: View {
                 }
             } else if let detail {
                 summarySection(detail)
+                blockSetupSection(detail)
                 membersSection(detail)
                 actionsSection(detail)
             } else {
@@ -375,6 +378,21 @@ struct GroupDetailView: View {
             }
         } message: {
             Text(memberToRemove.map { "Remove \($0.displayName) from this group?" } ?? "Remove this member from the group?")
+        }
+        .sheet(isPresented: $isShowingBlockSetup) {
+            if let detail {
+                GroupBlockSetupSheet(
+                    groupID: groupID,
+                    appNames: detail.config.appNames,
+                    limitSeconds: detail.config.perMemberLimitSeconds ?? 0,
+                    onDone: {
+                        isShowingBlockSetup = false
+                        Task {
+                            await reload()
+                        }
+                    }
+                )
+            }
         }
     }
 
@@ -437,6 +455,52 @@ struct GroupDetailView: View {
                     if index < detail.members.count - 1 {
                         AppCardDivider()
                     }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func blockSetupSection(_ detail: GroupDetail) -> some View {
+        if detail.group.mode == .perMember {
+            let limitSeconds = detail.config.perMemberLimitSeconds ?? 0
+            let isConfigured = viewerIsConfigured(in: detail)
+
+            AppSection("Your Block") {
+                AppCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if isConfigured {
+                            Text("✓ You're set up — \(detail.config.appNames.count) apps · \(limitSeconds / 60) min/day")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                AppHaptics.buttonTap()
+                                isShowingBlockSetup = true
+                            } label: {
+                                Text("Update apps")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                        } else {
+                            Text("Choose the apps on this device that match your group's agreed block list.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                AppHaptics.buttonTap()
+                                isShowingBlockSetup = true
+                            } label: {
+                                Text("Set up your block")
+                                    .fontWeight(.semibold)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                        }
+                    }
+                    .appCardRow()
                 }
             }
         }
@@ -522,6 +586,14 @@ struct GroupDetailView: View {
         }
 
         return "\(max(1, seconds / 60)) min / day"
+    }
+
+    private func viewerIsConfigured(in detail: GroupDetail) -> Bool {
+        if let currentMember = detail.members.first(where: { $0.userID.caseInsensitiveCompare(model.profile.id) == .orderedSame }) {
+            return currentMember.configured
+        }
+
+        return detail.group.configuredAt != nil
     }
 }
 
@@ -721,5 +793,111 @@ private struct GroupInfoLine: View {
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+private struct GroupBlockSetupSheet: View {
+    let groupID: String
+    let appNames: [String]
+    let limitSeconds: Int
+    var onDone: () -> Void
+
+    @EnvironmentObject private var model: AppModel
+    @State private var selection = FamilyActivitySelection()
+    @State private var isShowingPicker = false
+    @State private var isStarting = false
+
+    private var selectedCount: Int {
+        selection.applicationTokens.count
+            + selection.categoryTokens.count
+            + selection.webDomainTokens.count
+    }
+
+    private var canStart: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        return !isStarting // FamilyActivityPicker has no apps to select in the simulator
+        #else
+        return selectedCount >= 1 && !isStarting
+        #endif
+    }
+
+    var body: some View {
+        NavigationStack {
+            AppScreenScroll {
+                AppSection("Block Setup") {
+                    AppCard {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Set up your block")
+                                .font(.title2.weight(.bold))
+
+                            Text("Your group restricts: \(appNames.joined(separator: ", "))")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                AppHaptics.buttonTap()
+                                isShowingPicker = true
+                            } label: {
+                                Text("Choose apps to block")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+
+                            Text("\(selectedCount) selected")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Button {
+                                AppHaptics.buttonTap()
+                                Task {
+                                    await startBlocking()
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if isStarting {
+                                        ProgressView()
+                                            .tint(.white)
+                                    }
+
+                                    Text(isStarting ? "Starting" : "Start blocking")
+                                }
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .disabled(!canStart)
+                        }
+                        .appCardRow()
+                    }
+                }
+            }
+            .navigationTitle("Set up your block")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .sheet(isPresented: $isShowingPicker) {
+            NavigationStack {
+                FamilyActivityPicker(selection: $selection)
+                    .navigationTitle("Blocked Apps")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { isShowingPicker = false }
+                        }
+                    }
+            }
+        }
+    }
+
+    private func startBlocking() async {
+        guard canStart else {
+            return
+        }
+
+        isStarting = true
+        if await model.adoptGroupBlock(groupID: groupID, limitSeconds: limitSeconds, selection: selection) {
+            onDone()
+        }
+        isStarting = false
     }
 }
