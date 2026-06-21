@@ -237,8 +237,16 @@ struct BlockingEnforcementService {
         }.subtracting(exemptWebDomains)
 
         store.shield.applications = applications.isEmpty ? nil : applications
-        // ManagedSettings exposes one opaque category policy, so fail closed: over-shield mixed
-        // forced/non-forced categories rather than under-shield an exhausted pool.
+        // ManagedSettings exposes ONE opaque applicationCategories policy and no API to map an
+        // ApplicationToken to its category, so we cannot express "force-shield category X with
+        // no exceptions but keep category Y's per-app exemptions" in a single policy. When any
+        // pool is exhausted (forcedCategories non-empty) we therefore fail CLOSED and drop the
+        // `except:` for the whole policy. KNOWN/ACCEPTED collateral: an unrelated, non-forced
+        // group's earned per-app unblock that happens to fall under some shielded category is
+        // also re-shielded until the override clears. We accept that over the alternative
+        // (keeping `except:`), which would punch a hole in the exhausted pool's guardrail — the
+        // opposite and, for an accountability app, worse failure. Deliberate; do not flip
+        // without an OS API for per-category exemptions. (Mirrored in ExtensionBlockingSupport.)
         store.shield.applicationCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptApplications) : .specific(categories)
         store.shield.webDomains = webDomains.isEmpty ? nil : webDomains
         store.shield.webDomainCategories = categories.isEmpty ? nil : forcedCategories.isEmpty ? .specific(categories, except: exemptWebDomains) : .specific(categories)
