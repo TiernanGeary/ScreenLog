@@ -184,7 +184,8 @@ begin
   from public.group_members m
   join public.groups g on g.id=m.group_id
   join public.group_config c on c.group_id=g.id
-  where m.user_id = auth.uid() and m.left_at is null;
+  where m.user_id = auth.uid() and m.left_at is null
+  order by g.id;
 end; $$;
 
 create or replace function public.get_group(p_group_id uuid)
@@ -232,7 +233,9 @@ returns void language plpgsql security definer set search_path = public, pg_temp
 begin
   if not exists (select 1 from public.groups where id=p_group_id and owner_id=auth.uid())
     then raise exception 'only the owner can reinstate members'; end if;
-  update public.group_members set removed_by = null
+  -- Clear left_at as well, otherwise every active-membership gate (which keys on
+  -- left_at is null) still excludes the "reinstated" member, making this a no-op.
+  update public.group_members set removed_by = null, left_at = null
     where group_id=p_group_id and user_id=p_user_id;
 end; $$;
 
