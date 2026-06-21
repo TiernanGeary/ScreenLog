@@ -750,7 +750,11 @@ struct GroupShareInviteView: View {
     let onAccept: () -> Void
     let onCancel: () -> Void
 
-    private var isValidInvite: Bool {
+    // True only when the best-effort peek returned real group details. Joinability
+    // does NOT depend on this: redeem works off the invite code and validates it
+    // server-side, so a transient peek failure must not hide Join (mirrors the
+    // friend-invite flow, where Accept is shown unconditionally).
+    private var hasInviteDetails: Bool {
         !invite.groupID.isEmpty
     }
 
@@ -770,7 +774,7 @@ struct GroupShareInviteView: View {
                         .font(.title2.weight(.bold))
                         .multilineTextAlignment(.center)
 
-                    Text(isValidInvite ? "\(invite.ownerDisplayName) invited you to join a \(modeText(invite.mode)) group." : "This group invite is no longer valid.")
+                    Text(hasInviteDetails ? "\(invite.ownerDisplayName) invited you to join a \(modeText(invite.mode)) group." : "Tap Join to accept this group invite.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -778,27 +782,23 @@ struct GroupShareInviteView: View {
 
                 Spacer(minLength: 18)
 
-                if isValidInvite {
-                    Button(action: onAccept) {
-                        HStack(spacing: 10) {
-                            if isAccepting {
-                                ProgressView()
-                                    .tint(.white)
-                            }
-
-                            Text(isAccepting ? "Joining" : "Join")
+                // Always offer Join (the toolbar "Not Now" dismisses). redeem
+                // validates the code server-side, so even a placeholder invite from
+                // a failed peek stays joinable instead of trapping a valid code.
+                Button(action: onAccept) {
+                    HStack(spacing: 10) {
+                        if isAccepting {
+                            ProgressView()
+                                .tint(.white)
                         }
-                        .frame(maxWidth: .infinity)
+
+                        Text(isAccepting ? "Joining" : "Join")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(isAccepting)
-                } else {
-                    Button("Close", action: onCancel)
-                        .frame(maxWidth: .infinity)
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
+                    .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isAccepting)
             }
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
