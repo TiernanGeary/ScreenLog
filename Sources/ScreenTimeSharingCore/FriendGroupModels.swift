@@ -27,8 +27,11 @@ public enum GroupAppNames {
         for raw in names {
             let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !t.isEmpty else { continue }
-            let key = t.lowercased()
-            if seen.insert(key).inserted { out.append(String(t.prefix(60))) }
+            // Key off the truncated value so two names sharing the first 60 chars
+            // collapse to one entry instead of emitting an apparent duplicate.
+            let truncated = String(t.prefix(60))
+            let key = truncated.lowercased()
+            if seen.insert(key).inserted { out.append(truncated) }
         }
         return out
     }

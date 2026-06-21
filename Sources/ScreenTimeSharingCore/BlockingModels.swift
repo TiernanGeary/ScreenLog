@@ -957,9 +957,15 @@ public struct BlockingShieldIndex: Codable, Equatable, Sendable {
         let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state, now: now)
             .subtracting(forcedOverrideGroupIDs)
         let enabledGroupIDs = Set(BlockingStateResolver.enabledGroups(in: state).map(\.id))
+        // Mirror BlockingEnforcementService.currentActiveGroupIDs ordering exactly:
+        // union the forced overrides BEFORE intersecting enabledGroupIDs, so a
+        // forced override for a locally-disabled group never leaks into the
+        // persisted activeGroupIDs. (suppressedGroupIDs already excludes forced.)
         self.activeGroupIDs = Array(
-            activeGroupIDs.subtracting(suppressedGroupIDs).intersection(enabledGroupIDs)
+            activeGroupIDs
                 .union(forcedOverrideGroupIDs)
+                .intersection(enabledGroupIDs)
+                .subtracting(suppressedGroupIDs)
         ).sorted()
         self.groups = state.groups.map { group in
             BlockingShieldIndexGroup(
