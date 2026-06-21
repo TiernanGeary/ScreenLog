@@ -304,6 +304,8 @@ struct GroupDetailView: View {
     @State private var isConfirmingDelete = false
     @State private var isConfirmingLeave = false
     @State private var isShowingBlockSetup = false
+    @State private var isShowingAskGroupTime = false
+    @State private var didSendGroupTimeRequest = false
     @State private var memberToRemove: GroupMemberInfo?
 
     var body: some View {
@@ -379,6 +381,11 @@ struct GroupDetailView: View {
         } message: {
             Text(memberToRemove.map { "Remove \($0.displayName) from this group?" } ?? "Remove this member from the group?")
         }
+        .alert("Request sent", isPresented: $didSendGroupTimeRequest) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your group can approve it from the requests feed.")
+        }
         .sheet(isPresented: $isShowingBlockSetup) {
             if let detail {
                 GroupBlockSetupSheet(
@@ -393,6 +400,19 @@ struct GroupDetailView: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $isShowingAskGroupTime) {
+            AskGroupTimeSheet(
+                socialGroupID: groupID,
+                onDone: {
+                    isShowingAskGroupTime = false
+                    didSendGroupTimeRequest = true
+                    AppHaptics.success()
+                    Task {
+                        await reload()
+                    }
+                }
+            )
         }
     }
 
@@ -482,6 +502,17 @@ struct GroupDetailView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.bordered)
+                            .controlSize(.large)
+
+                            Button {
+                                AppHaptics.buttonTap()
+                                isShowingAskGroupTime = true
+                            } label: {
+                                Text("Ask group for more time")
+                                    .fontWeight(.semibold)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
                             .controlSize(.large)
                         } else {
                             Text("Choose the apps on this device that match your group's agreed block list.")
@@ -793,6 +824,87 @@ private struct GroupInfoLine: View {
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+private struct AskGroupTimeSheet: View {
+    let socialGroupID: String
+    var onDone: () -> Void
+
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var minutes = 15
+    @State private var note = ""
+    @State private var isSending = false
+
+    var body: some View {
+        NavigationStack {
+            AppScreenScroll {
+                AppSection("Request") {
+                    AppCard {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Ask your group for more time")
+                                .font(.title2.weight(.bold))
+
+                            Stepper("\(minutes) min", value: $minutes, in: 5...120, step: 5)
+
+                            TextField("Why? (optional)", text: $note)
+                                .textInputAutocapitalization(.sentences)
+
+                            Button {
+                                AppHaptics.buttonTap()
+                                Task {
+                                    await sendRequest()
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if isSending {
+                                        ProgressView()
+                                            .tint(.white)
+                                    }
+
+                                    Text(isSending ? "Sending" : "Send request")
+                                }
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .disabled(isSending)
+                        }
+                        .appCardRow()
+                    }
+                }
+            }
+            .navigationTitle("More Time")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .disabled(isSending)
+                }
+            }
+        }
+    }
+
+    private func sendRequest() async {
+        guard !isSending else {
+            return
+        }
+
+        isSending = true
+        if await model.requestGroupTime(
+            socialGroupID: socialGroupID,
+            seconds: TimeInterval(minutes * 60),
+            message: note,
+            photoJPEGData: nil
+        ) {
+            onDone()
+        }
+        isSending = false
     }
 }
 
