@@ -29,6 +29,11 @@ export default {
         const code = (raw || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 16);
         return html(inviteLandingHTML(code));
       }
+      if (url.pathname.startsWith("/group-invite/")) {
+        const raw = url.pathname.slice("/group-invite/".length).split("/")[0];
+        const code = (raw || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 16);
+        return html(inviteLandingHTML(code, { scheme: "deny://group-invite/", heading: "You've been invited to a Deny group" }));
+      }
       return json({ error: "not found" }, 404);
     }
 
@@ -203,14 +208,16 @@ function html(body, status = 200) {
 // Public App Store product page for Deny.
 const APP_STORE_URL = "https://apps.apple.com/app/id6773738211";
 
-// Invite landing page: tries to open the app via the deny:// scheme (which adds
-// the inviter as a friend) and falls back to the App Store if it isn't installed.
-function inviteLandingHTML(code) {
-  const appLink = `deny://invite/${code}`;
+// Invite landing page: tries to open the app via the deny:// scheme and falls
+// back to the App Store if it isn't installed.
+function inviteLandingHTML(code, opts = { scheme: "deny://invite/", heading: "You've been invited to Deny" }) {
+  const appLink = `${opts.scheme}${code}`;
+  const isDefaultFriendInvite = opts.scheme === "deny://invite/" && opts.heading === "You've been invited to Deny";
+  const pageTitle = isDefaultFriendInvite ? "Deny — Friend Invite" : opts.heading;
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Deny — Friend Invite</title><style>${PAGE_STYLE}
+<title>${pageTitle}</title><style>${PAGE_STYLE}
   .wrap { text-align: center; padding-top: 60px; }
   .btn { display: inline-block; margin: 8px; padding: 14px 22px; border-radius: 14px;
          font-weight: 600; text-decoration: none; }
@@ -220,7 +227,7 @@ function inviteLandingHTML(code) {
 </style></head>
 <body>
 <div class="wrap">
-  <h1>You've been invited to Deny</h1>
+  <h1>${opts.heading}</h1>
   <p>Opening the app to connect you…<br>Don't have it yet? Grab it free below.</p>
   <p>
     <a class="btn primary" href="${appLink}">Open in Deny</a>
@@ -240,7 +247,7 @@ function inviteLandingHTML(code) {
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) { clearTimeout(t); }
     });
-    window.location.replace("deny://invite/" + code);
+    window.location.replace(${JSON.stringify(opts.scheme)} + code);
   })();
 </script>
 </body></html>`;
