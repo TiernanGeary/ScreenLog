@@ -22,6 +22,9 @@ struct RootView: View {
                 }
             }
 
+            // Hidden: drives per-group pool usage measurement while foreground.
+            GroupPoolUsageReporters()
+
             if showsLaunchSplash {
                 LaunchSplashView()
                     .opacity(launchSplashOpacity)

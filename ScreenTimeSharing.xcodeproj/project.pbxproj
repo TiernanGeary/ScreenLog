@@ -33,6 +33,7 @@
 		B10000000000000000000039 /* GroupBlockPasswordStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000031 /* GroupBlockPasswordStore.swift */; };
 		B10000000000000000000017 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000014 /* AppDelegate.swift */; };
 		B10000000000000000000018 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000015 /* RootView.swift */; };
+		B10000000000000000000040 /* GroupPoolUsageReporters.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000032 /* GroupPoolUsageReporters.swift */; };
 		B10000000000000000000019 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000016 /* OnboardingView.swift */; };
 		B10000000000000000000020 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000017 /* DashboardView.swift */; };
 		B10000000000000000000021 /* FriendsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000018 /* FriendsView.swift */; };
@@ -162,6 +163,7 @@
 		E00000000000000000000030 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		D00000000000000000000014 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		D00000000000000000000015 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		D00000000000000000000032 /* GroupPoolUsageReporters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupPoolUsageReporters.swift; sourceTree = "<group>"; };
 		D00000000000000000000016 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		D00000000000000000000017 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		D00000000000000000000018 /* FriendsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendsView.swift; sourceTree = "<group>"; };
@@ -320,6 +322,7 @@
 			isa = PBXGroup;
 			children = (
 				D00000000000000000000015 /* RootView.swift */,
+				D00000000000000000000032 /* GroupPoolUsageReporters.swift */,
 				D00000000000000000000016 /* OnboardingView.swift */,
 				D00000000000000000000017 /* DashboardView.swift */,
 				D00000000000000000000018 /* FriendsView.swift */,
@@ -602,6 +605,7 @@
 				B10000000000000000000028 /* BlockingEnforcementService.swift in Sources */,
 				B10000000000000000000031 /* ScreenTimeReportContext.swift in Sources */,
 				B10000000000000000000018 /* RootView.swift in Sources */,
+				B10000000000000000000040 /* GroupPoolUsageReporters.swift in Sources */,
 				B10000000000000000000019 /* OnboardingView.swift in Sources */,
 				B10000000000000000000020 /* DashboardView.swift in Sources */,
 				B10000000000000000000021 /* FriendsView.swift in Sources */,

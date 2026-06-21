@@ -204,6 +204,7 @@ final class AppModel: ObservableObject {
     private let friendRequestPhotoStore: FriendRequestPhotoStore
     private let pushServerClient = PushServerClient()
     private var apnsDeviceToken: String?
+    private let appGroupDefaults: UserDefaults?
     private let usageHistoryDefaults: UserDefaults?
     private let onboardingKey = "HasCompletedOnboarding.v1"
     private static let denyStartedAtKey = "DenyStartedAt.v1"
@@ -211,6 +212,7 @@ final class AppModel: ObservableObject {
     private var isSyncingFriendRequests = false
     private var pendingConfiguredGroupIDs: Set<String> = []
     private var pendingGroupCollectRequestIDs: Set<String> = []
+    private var poolGroupSlots: [String: Int] = [:]
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
@@ -242,6 +244,7 @@ final class AppModel: ObservableObject {
         self.isAuthenticated = KeychainAppleID.load() != nil
         let sharedDefaults = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)
         let loadedProfile = profileStore.load()
+        self.appGroupDefaults = sharedDefaults
         self.usageHistoryDefaults = sharedDefaults
         self.profile = loadedProfile
         let storedDenyStartedAt = UserDefaults.standard.object(forKey: Self.denyStartedAtKey) as? Date
@@ -310,6 +313,21 @@ final class AppModel: ObservableObject {
                 && group.isEnabled
                 && group.friendRequestConfig.isEnabled
         }
+    }
+
+    var poolGroupSlotAssignments: [(slot: Int, groupID: String, selection: FamilyActivitySelection)] {
+        myGroups.compactMap { group -> (slot: Int, groupID: String, selection: FamilyActivitySelection)? in
+            let blockGroupID = "group.\(group.id)"
+            guard let slot = poolGroupSlots[group.id],
+                  let blockGroup = blockingState.groups.first(where: { $0.id == blockGroupID }),
+                  let selection = try? BlockingSelectionCodec.decode(blockGroup.selectionData),
+                  !selection.isEmpty else {
+                return nil
+            }
+
+            return (slot: slot, groupID: group.id, selection: selection)
+        }
+        .sorted { $0.slot < $1.slot }
     }
 
     private var currentFriendIdentityIDs: Set<String> {
@@ -1345,6 +1363,35 @@ final class AppModel: ObservableObject {
         }
         await retryPendingConfiguredGroups()
         await retryPendingGroupCollects()
+        assignPoolGroupSlots()
+    }
+
+    private func assignPoolGroupSlots() {
+        let poolGroups = myGroups.filter { $0.mode == .pool }
+        let assignedGroups = Array(poolGroups.prefix(5))
+
+        poolGroupSlots = Dictionary(
+            uniqueKeysWithValues: assignedGroups.enumerated().map { index, group in
+                (group.id, index)
+            }
+        )
+
+        for slot in 0..<5 {
+            let groupBlockID = assignedGroups.indices.contains(slot)
+                ? "group.\(assignedGroups[slot].id)"
+                : nil
+            ScreenTimeReportStorage.setPoolSlotAssignment(
+                slot,
+                groupBlockID: groupBlockID,
+                defaults: appGroupDefaults
+            )
+        }
+
+        if poolGroups.count > assignedGroups.count {
+            print(
+                "ScreenLog: \(poolGroups.count - assignedGroups.count) pool group(s) exceed the 5-slot usage-report cap and will use whole-device fallback."
+            )
+        }
     }
 
     private func cleanupDroppedGroupBlocks() {
@@ -1651,10 +1698,21 @@ final class AppModel: ObservableObject {
     }
 
     private func selectedAppSecondsForPoolGroup(_ group: FriendGroupSummary) async -> Int {
-        guard let blockGroup = blockingState.groups.first(where: { $0.id == "group.\(group.id)" }),
+        let blockGroupID = "group.\(group.id)"
+        guard let blockGroup = blockingState.groups.first(where: { $0.id == blockGroupID }),
               let groupSelection = try? BlockingSelectionCodec.decode(blockGroup.selectionData),
               !groupSelection.isEmpty else {
             return 0
+        }
+
+        if let slot = poolGroupSlots[group.id] {
+            let dayKey = UsageDateBoundary.localDayKey(date: Date(), calendar: .current)
+            return ScreenTimeReportStorage.groupUsageSlot(
+                slot,
+                groupBlockID: blockGroupID,
+                dayKey: dayKey,
+                defaults: appGroupDefaults
+            )
         }
 
         let groupSnapshot = await screenTimeProvider.loadTodayUsage(selection: groupSelection, profile: profile)
