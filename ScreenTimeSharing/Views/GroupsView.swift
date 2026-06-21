@@ -729,6 +729,13 @@ struct GroupDetailView: View {
     }
 
     private func viewerIsConfigured(in detail: GroupDetail) -> Bool {
+        // A locally-adopted block whose server ack is still pending counts as
+        // configured, so a failed setMemberConfigured doesn't bounce the viewer
+        // back to "Set up your block" while the block is already enforced.
+        if model.isConfigurationPending(groupID: detail.group.id) {
+            return true
+        }
+
         if let currentMember = detail.members.first(where: { $0.userID.caseInsensitiveCompare(model.profile.id) == .orderedSame }) {
             return currentMember.configured
         }

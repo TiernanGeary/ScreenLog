@@ -1281,8 +1281,13 @@ private enum FriendRequestFeedDisplay {
         groups: [BlockGroup],
         friendGroups: [FriendGroupSummary]
     ) -> String {
+        // Group ids decode lowercase from Postgres but FriendGroupSummary.id is
+        // uppercase (UUID.uuidString); compare case-insensitively like the rest of
+        // the codebase, else this falls through to the "Group limit" block name.
         if let socialGroupID = request.socialGroupID,
-           let socialGroupName = friendGroups.first(where: { $0.id == socialGroupID })?.name {
+           let socialGroupName = friendGroups.first(where: {
+               $0.id.caseInsensitiveCompare(socialGroupID) == .orderedSame
+           })?.name {
             return socialGroupName
         }
 

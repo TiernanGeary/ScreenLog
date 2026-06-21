@@ -872,6 +872,13 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    /// True when the local block is adopted but the server `configured` ack is
+    /// still pending (e.g. setMemberConfigured failed offline). The UI treats this
+    /// as configured so it doesn't prompt a second setup while the block is active.
+    func isConfigurationPending(groupID: String) -> Bool {
+        pendingConfiguredGroupIDs.contains { $0.caseInsensitiveCompare(groupID) == .orderedSame }
+    }
+
     @MainActor
     @discardableResult
     func adoptGroupPoolBlock(
@@ -1077,7 +1084,7 @@ final class AppModel: ObservableObject {
         do {
             let requestID = UUID().uuidString.lowercased()
             let photoPath = try await groupRequestPhotoPath(photoJPEGData, requestID: requestID)
-            try await uploadGroupRequestPhoto(photoJPEGData, requestID: requestID, path: photoPath)
+            try await uploadGroupRequestPhoto(photoJPEGData, path: photoPath)
 
             let createdRequestID: String
             do {
@@ -1974,23 +1981,21 @@ final class AppModel: ObservableObject {
         return "\(uid.uuidString.lowercased())/\(requestID.lowercased()).jpg"
     }
 
-    private func uploadGroupRequestPhoto(_ photoData: Data?, requestID: String, path: String?) async throws {
+    private func uploadGroupRequestPhoto(_ photoData: Data?, path: String?) async throws {
         guard let photoData, !photoData.isEmpty, let path else {
             return
         }
 
+        // Upload to storage only. Do NOT pre-save a local copy here: the request id
+        // is lowercased while syncFriendRequests re-downloads and saves the photo
+        // under the canonical uppercase id, so a local pre-save would just orphan a
+        // file under the lowercase id that nothing ever references.
         let client = SupabaseClientProvider.shared
         try await client.storage.from("request-photos").upload(
             path,
             data: photoData,
             options: FileOptions(contentType: "image/jpeg")
         )
-        do {
-            _ = try friendRequestPhotoStore.saveJPEGData(photoData, id: requestID)
-        } catch {
-            await deleteGroupRequestPhoto(requestID: requestID, path: path)
-            throw error
-        }
     }
 
     private func deleteGroupRequestPhoto(requestID: String, path: String?) async {
