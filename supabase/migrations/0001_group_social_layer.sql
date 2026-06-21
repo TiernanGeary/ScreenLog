@@ -49,8 +49,12 @@ alter table public.group_invites enable row level security;
 create or replace function public.is_group_member(p_group_id uuid)
 returns boolean language sql security definer stable set search_path = public, pg_temp as $$
   select exists (
+    -- Active = not left AND not owner-removed. Gating on left_at alone let a row
+    -- left in the (left_at null, removed_by set) state by a redeem/remove race be
+    -- treated as active; removed_by null closes that regardless of timing.
     select 1 from public.group_members m
-    where m.group_id = p_group_id and m.user_id = auth.uid() and m.left_at is null
+    where m.group_id = p_group_id and m.user_id = auth.uid()
+      and m.left_at is null and m.removed_by is null
   );
 $$;
 
@@ -158,13 +162,18 @@ begin
     from public.group_invites i join public.groups g on g.id=i.group_id
     where i.code = upper(p_code) and i.expires_at > now();
   if g_id is null then raise exception 'invalid or expired code'; end if;
+  -- Lock the existing membership row so a concurrent remove_group_member can't
+  -- slip between this check and the upsert below and get its removal clobbered.
   select m.removed_by into existing_removed_by
     from public.group_members m
-    where m.group_id = g_id and m.user_id = auth.uid();
+    where m.group_id = g_id and m.user_id = auth.uid()
+    for update;
   if existing_removed_by is not null then raise exception 'removed from group'; end if;
   insert into public.group_members(group_id, user_id, role)
     values (g_id, auth.uid(), 'member')
-    on conflict (group_id, user_id) do update set left_at = null, configured_at = null;  -- idempotent / rejoin
+    -- Never resurrect a removed row: only clear left_at when not owner-removed.
+    on conflict (group_id, user_id) do update set left_at = null, configured_at = null
+      where group_members.removed_by is null;  -- idempotent / rejoin
   return query select g_id, g_name;
 end; $$;
 
