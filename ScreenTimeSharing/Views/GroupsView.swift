@@ -1,0 +1,725 @@
+import SwiftUI
+
+struct GroupsView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var isShowingCreateGroup = false
+
+    var body: some View {
+        NavigationStack {
+            AppScreenScroll {
+                AppSection("Groups") {
+                    if model.myGroups.isEmpty {
+                        AppCard {
+                            ContentUnavailableView(
+                                "No Groups Yet",
+                                systemImage: "person.3",
+                                description: Text("Create a group to share a daily limit with friends.")
+                            )
+                            .appCardRow(verticalPadding: 16)
+                        }
+                    } else {
+                        AppCard {
+                            ForEach(Array(model.myGroups.enumerated()), id: \.element.id) { index, group in
+                                NavigationLink {
+                                    GroupDetailView(groupID: group.id)
+                                } label: {
+                                    GroupSummaryRow(group: group)
+                                        .appCardRow(verticalPadding: 10)
+                                }
+                                .buttonStyle(.plain)
+
+                                if index < model.myGroups.count - 1 {
+                                    AppCardDivider()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .refreshable {
+                AppHaptics.selectionChanged()
+                await model.loadMyGroups()
+            }
+            .navigationTitle("Groups")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        AppHaptics.buttonTap()
+                        isShowingCreateGroup = true
+                    } label: {
+                        Label("Create Group", systemImage: "plus")
+                    }
+                    .accessibilityLabel("Create Group")
+                }
+            }
+            .sheet(isPresented: $isShowingCreateGroup) {
+                CreateGroupSheet()
+            }
+            .task {
+                await model.loadMyGroups()
+            }
+        }
+    }
+}
+
+struct CreateGroupSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var mode: GroupMode = .perMember
+    @State private var newAppName = ""
+    @State private var appNames: [String] = []
+    @State private var minutes = 30
+    @State private var approvalsRequired = 1
+    @State private var isCreating = false
+    @State private var created: CreatedGroup?
+
+    private var limitSeconds: Int {
+        minutes * 60
+    }
+
+    private var validationErrors: [String] {
+        GroupConfigValidation.errors(
+            mode: mode,
+            appNames: appNames,
+            limitSeconds: limitSeconds,
+            approvalsRequired: approvalsRequired
+        )
+    }
+
+    private var canCreate: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && validationErrors.isEmpty
+            && !isCreating
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let created {
+                    shareSection(created)
+                } else {
+                    detailsSection
+                    appsSection
+                    limitSection
+                    createSection
+                }
+            }
+            .navigationTitle(created == nil ? "Create Group" : "Group Created")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(created == nil ? "Cancel" : "Done") {
+                        dismiss()
+                    }
+                    .disabled(isCreating)
+                }
+            }
+        }
+    }
+
+    private var detailsSection: some View {
+        Section {
+            TextField("Group name", text: $name)
+                .textInputAutocapitalization(.words)
+
+            Picker("Mode", selection: $mode) {
+                Text("Per-member daily limit").tag(GroupMode.perMember)
+                Text("Shared pool").tag(GroupMode.pool)
+            }
+        } header: {
+            Text("Details")
+        }
+    }
+
+    private var appsSection: some View {
+        Section {
+            HStack(spacing: 10) {
+                TextField("App name", text: $newAppName)
+                    .textInputAutocapitalization(.words)
+                    .submitLabel(.done)
+                    .onSubmit(addAppName)
+
+                Button(action: addAppName) {
+                    Image(systemName: "plus.circle.fill")
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
+                .disabled(newAppName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("Add App")
+            }
+
+            ForEach(appNames, id: \.self) { appName in
+                Text(appName)
+            }
+            .onDelete { offsets in
+                appNames.remove(atOffsets: offsets)
+            }
+        } header: {
+            Text("Apps")
+        } footer: {
+            Text("Add the app names this group will track.")
+        }
+    }
+
+    private var limitSection: some View {
+        Section {
+            Stepper(value: $minutes, in: 1...1_440, step: 5) {
+                Text("\(minutes) \(limitLabel)")
+            }
+
+            Stepper(value: $approvalsRequired, in: 1...10) {
+                Text("\(approvalsRequired) approval\(approvalsRequired == 1 ? "" : "s") required")
+            }
+        } header: {
+            Text("Limit")
+        }
+    }
+
+    private var createSection: some View {
+        Section {
+            if !validationErrors.isEmpty {
+                ForEach(validationErrors, id: \.self) { error in
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Button {
+                Task {
+                    await createGroup()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if isCreating {
+                        ProgressView()
+                            .tint(.white)
+                    }
+
+                    Text(isCreating ? "Creating" : "Create")
+                }
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!canCreate)
+        }
+    }
+
+    private func shareSection(_ created: CreatedGroup) -> some View {
+        let shareText = shareText(for: created)
+
+        return Section {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(GroupInviteCode.formatted(created.code))
+                    .font(.system(.largeTitle, design: .monospaced).weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+
+                ShareLink(item: shareText) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Share Invite")
+                    }
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                Button("Done") {
+                    dismiss()
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Invite code")
+        } footer: {
+            Text("Share this link with friends you want to add to the group.")
+        }
+    }
+
+    private var limitLabel: String {
+        switch mode {
+        case .perMember:
+            return "minutes per person / day"
+        case .pool:
+            return "shared minutes / day"
+        }
+    }
+
+    private func addAppName() {
+        let trimmed = newAppName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+
+        if !appNames.contains(where: { $0.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+            appNames.append(trimmed)
+        }
+        newAppName = ""
+    }
+
+    private func createGroup() async {
+        guard canCreate else {
+            return
+        }
+
+        isCreating = true
+        defer { isCreating = false }
+
+        let createdGroup = await model.createGroup(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            mode: mode,
+            appNames: appNames,
+            limitSeconds: limitSeconds,
+            approvalsRequired: approvalsRequired
+        )
+        if let createdGroup {
+            AppHaptics.success()
+            created = createdGroup
+        }
+    }
+
+    private func shareText(for created: CreatedGroup) -> String {
+        "Join my Deny group: \(AppConfiguration.groupInviteWebLink(created.code).absoluteString)"
+    }
+}
+
+struct GroupDetailView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    let groupID: String
+
+    @State private var detail: GroupDetail?
+    @State private var isLoading = false
+    @State private var isMutating = false
+    @State private var isConfirmingDelete = false
+    @State private var isConfirmingLeave = false
+    @State private var memberToRemove: GroupMemberInfo?
+
+    var body: some View {
+        AppScreenScroll {
+            if isLoading && detail == nil {
+                AppCard {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                        Text("Loading group...")
+                            .foregroundStyle(.secondary)
+                    }
+                    .appCardRow()
+                }
+            } else if let detail {
+                summarySection(detail)
+                membersSection(detail)
+                actionsSection(detail)
+            } else {
+                AppCard {
+                    ContentUnavailableView(
+                        "Group Unavailable",
+                        systemImage: "person.3.sequence",
+                        description: Text("This group could not be loaded.")
+                    )
+                    .appCardRow(verticalPadding: 16)
+                }
+            }
+        }
+        .navigationTitle(detail?.group.name ?? "Group")
+        .refreshable {
+            AppHaptics.selectionChanged()
+            await reload()
+        }
+        .task {
+            await reload()
+        }
+        .alert("Delete group?", isPresented: $isConfirmingDelete) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    await deleteGroup()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the group for every member.")
+        }
+        .alert("Leave group?", isPresented: $isConfirmingLeave) {
+            Button("Leave", role: .destructive) {
+                Task {
+                    await leaveGroup()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You will no longer be part of this group.")
+        }
+        .alert("Remove member?", isPresented: Binding(
+            get: { memberToRemove != nil },
+            set: { if !$0 { memberToRemove = nil } }
+        )) {
+            Button("Remove", role: .destructive) {
+                guard let memberToRemove else {
+                    return
+                }
+                Task {
+                    await removeMember(memberToRemove)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                memberToRemove = nil
+            }
+        } message: {
+            Text(memberToRemove.map { "Remove \($0.displayName) from this group?" } ?? "Remove this member from the group?")
+        }
+    }
+
+    private func summarySection(_ detail: GroupDetail) -> some View {
+        AppSection("Configuration") {
+            AppCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(detail.group.name)
+                            .font(.headline)
+                            .lineLimit(2)
+
+                        Spacer(minLength: 8)
+
+                        GroupModeBadge(mode: detail.group.mode)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        GroupInfoLine(title: "Apps", value: detail.config.appNames.joined(separator: ", "))
+                        GroupInfoLine(title: "Limit", value: limitText(config: detail.config, mode: detail.group.mode))
+                        GroupInfoLine(title: "Approvals", value: "\(detail.config.approvalsRequired)")
+                    }
+                }
+                .appCardRow()
+            }
+        }
+    }
+
+    private func membersSection(_ detail: GroupDetail) -> some View {
+        let summary = GroupMembership.configuredSummary(detail.members)
+
+        return AppSection("Members") {
+            AppCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("\(summary.configured) of \(summary.total) configured")
+                        .font(.subheadline.weight(.semibold))
+
+                    if !summary.pending.isEmpty {
+                        Text("Pending: \(summary.pending.joined(separator: ", "))")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                    }
+                }
+                .appCardRow(verticalPadding: 12)
+
+                AppCardDivider()
+
+                ForEach(Array(detail.members.enumerated()), id: \.element.id) { index, member in
+                    GroupMemberRow(
+                        member: member,
+                        canRemove: detail.group.role == .owner && member.role != .owner,
+                        onRemove: {
+                            AppHaptics.buttonTap()
+                            memberToRemove = member
+                        }
+                    )
+                    .appCardRow(verticalPadding: 10)
+
+                    if index < detail.members.count - 1 {
+                        AppCardDivider()
+                    }
+                }
+            }
+        }
+    }
+
+    private func actionsSection(_ detail: GroupDetail) -> some View {
+        AppSection("Actions") {
+            AppCard {
+                VStack(spacing: 12) {
+                    if detail.group.role == .owner {
+                        Button(role: .destructive) {
+                            AppHaptics.buttonTap()
+                            isConfirmingDelete = true
+                        } label: {
+                            Text("Delete group")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .disabled(isMutating)
+                    } else {
+                        Button(role: .destructive) {
+                            AppHaptics.buttonTap()
+                            isConfirmingLeave = true
+                        } label: {
+                            Text("Leave group")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .disabled(isMutating)
+                    }
+                }
+                .appCardRow()
+            }
+        }
+    }
+
+    private func reload() async {
+        isLoading = true
+        defer { isLoading = false }
+        detail = await model.loadGroupDetail(groupID: groupID)
+    }
+
+    private func removeMember(_ member: GroupMemberInfo) async {
+        isMutating = true
+        defer {
+            isMutating = false
+            memberToRemove = nil
+        }
+
+        await model.removeGroupMember(groupID: groupID, userID: member.userID)
+        await reload()
+    }
+
+    private func leaveGroup() async {
+        isMutating = true
+        defer { isMutating = false }
+
+        await model.leaveGroup(groupID)
+        dismiss()
+    }
+
+    private func deleteGroup() async {
+        isMutating = true
+        defer { isMutating = false }
+
+        await model.deleteGroup(groupID)
+        dismiss()
+    }
+
+    private func limitText(config: GroupBlockConfig, mode: GroupMode) -> String {
+        let seconds: Int?
+        switch mode {
+        case .perMember:
+            seconds = config.perMemberLimitSeconds
+        case .pool:
+            seconds = config.poolSeconds
+        }
+
+        guard let seconds else {
+            return "Not set"
+        }
+
+        return "\(max(1, seconds / 60)) min / day"
+    }
+}
+
+struct GroupShareInviteView: View {
+    let invite: PeekedGroupInvite
+    let isAccepting: Bool
+    let onAccept: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                Spacer(minLength: 18)
+
+                Image(systemName: "person.3.fill")
+                    .font(.system(size: 70, weight: .semibold))
+                    .foregroundStyle(Color.blue)
+                    .frame(width: 116, height: 116)
+                    .background(Color.blue.opacity(0.12), in: Circle())
+
+                VStack(spacing: 8) {
+                    Text(invite.groupName)
+                        .font(.title2.weight(.bold))
+                        .multilineTextAlignment(.center)
+
+                    Text("\(invite.ownerDisplayName) invited you to join a \(modeText(invite.mode)) group.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                Spacer(minLength: 18)
+
+                Button(action: onAccept) {
+                    HStack(spacing: 10) {
+                        if isAccepting {
+                            ProgressView()
+                                .tint(.white)
+                        }
+
+                        Text(isAccepting ? "Joining" : "Join")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isAccepting)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(uiColor: .systemBackground))
+            .navigationTitle("Group Invite")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Not Now", action: onCancel)
+                        .disabled(isAccepting)
+                }
+            }
+        }
+    }
+
+    private func modeText(_ mode: GroupMode) -> String {
+        switch mode {
+        case .perMember:
+            return "daily limit"
+        case .pool:
+            return "shared pool"
+        }
+    }
+}
+
+private struct GroupSummaryRow: View {
+    let group: FriendGroupSummary
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "person.3.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.blue)
+                .frame(width: 34, height: 34)
+                .background(Color.blue.opacity(0.12), in: Circle())
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(group.name)
+                        .font(.headline)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    GroupModeBadge(mode: group.mode)
+                }
+
+                HStack(spacing: 8) {
+                    Label("\(group.memberCount)", systemImage: "person.2")
+                    Text(statusText)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var statusText: String {
+        group.configuredAt == nil ? "Set up pending" : "Configured"
+    }
+}
+
+private struct GroupMemberRow: View {
+    let member: GroupMemberInfo
+    let canRemove: Bool
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: member.configured ? "checkmark.circle.fill" : "clock")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(member.configured ? Color.green : Color.orange)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(member.displayName)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+
+                    if member.role == .owner {
+                        Text("Owner")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(member.configured ? "Configured" : "Set up pending")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            if canRemove {
+                Button(role: .destructive, action: onRemove) {
+                    Text("Remove")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+}
+
+private struct GroupModeBadge: View {
+    let mode: GroupMode
+
+    var body: some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(color.opacity(0.12), in: Capsule())
+            .lineLimit(1)
+    }
+
+    private var title: String {
+        switch mode {
+        case .perMember:
+            return "Daily limit"
+        case .pool:
+            return "Shared pool"
+        }
+    }
+
+    private var color: Color {
+        switch mode {
+        case .perMember:
+            return .blue
+        case .pool:
+            return .purple
+        }
+    }
+}
+
+private struct GroupInfoLine: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(width: 78, alignment: .leading)
+
+            Text(value.isEmpty ? "None" : value)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}

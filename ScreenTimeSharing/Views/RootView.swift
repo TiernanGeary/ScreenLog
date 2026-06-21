@@ -5,6 +5,7 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showsLaunchSplash = true
     @State private var launchSplashOpacity = 1.0
+    @State private var isRedeemingGroupInvite = false
 
     var body: some View {
         ZStack {
@@ -56,6 +57,23 @@ struct RootView: View {
                 }
             )
             .interactiveDismissDisabled(model.isRedeemingInvite)
+        }
+        .sheet(item: $model.pendingIncomingGroupInvite) { invite in
+            GroupShareInviteView(
+                invite: invite,
+                isAccepting: isRedeemingGroupInvite,
+                onAccept: {
+                    Task {
+                        isRedeemingGroupInvite = true
+                        defer { isRedeemingGroupInvite = false }
+                        await model.redeemPendingGroupInvite()
+                    }
+                },
+                onCancel: {
+                    model.dismissIncomingGroupInvite()
+                }
+            )
+            .interactiveDismissDisabled(isRedeemingGroupInvite)
         }
     }
 
@@ -330,6 +348,8 @@ private struct AppTabs: View {
             }
         case .friends:
             FriendsView()
+        case .groups:
+            GroupsView()
         case .settings:
             SettingsView()
         }
@@ -346,6 +366,7 @@ private enum AppTab: String, CaseIterable, Identifiable {
     case stats
     case feed
     case friends
+    case groups
     case settings
 
     var id: String { rawValue }
@@ -360,6 +381,8 @@ private enum AppTab: String, CaseIterable, Identifiable {
             return "Feed"
         case .friends:
             return "Friends"
+        case .groups:
+            return "Groups"
         case .settings:
             return "Profile"
         }
@@ -375,6 +398,8 @@ private enum AppTab: String, CaseIterable, Identifiable {
             return "tray.full"
         case .friends:
             return "person.2"
+        case .groups:
+            return "person.3"
         case .settings:
             return "person.crop.circle"
         }
