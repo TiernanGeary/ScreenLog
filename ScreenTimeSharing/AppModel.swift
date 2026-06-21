@@ -210,6 +210,7 @@ final class AppModel: ObservableObject {
     private static let appearanceKey = "AppAppearanceMode.v1"
     private var isSyncingFriendRequests = false
     private var pendingConfiguredGroupIDs: Set<String> = []
+    private var pendingGroupCollectRequestIDs: Set<String> = []
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
@@ -1211,8 +1212,13 @@ final class AppModel: ObservableObject {
                 await publishFriendRequestUpdateToCloud(collectedRequest)
             }
         } else {
+            let requestID = collectedRequest.id
             Task {
-                try? await snapshotStore.collectGroupTimeRequest(requestID: collectedRequest.id)
+                do {
+                    try await snapshotStore.collectGroupTimeRequest(requestID: requestID)
+                } catch {
+                    pendingGroupCollectRequestIDs.insert(requestID)
+                }
             }
         }
         return true
@@ -1338,6 +1344,7 @@ final class AppModel: ObservableObject {
             message = "Could not refresh groups: \(error.localizedDescription)"
         }
         await retryPendingConfiguredGroups()
+        await retryPendingGroupCollects()
     }
 
     private func cleanupDroppedGroupBlocks() {
@@ -1376,6 +1383,17 @@ final class AppModel: ObservableObject {
             do {
                 try await snapshotStore.setMemberConfigured(groupID: groupID, configured: true)
                 pendingConfiguredGroupIDs.remove(groupID)
+            } catch {
+                // Non-fatal: retried after the next group refresh.
+            }
+        }
+    }
+
+    private func retryPendingGroupCollects() async {
+        for requestID in Array(pendingGroupCollectRequestIDs) {
+            do {
+                try await snapshotStore.collectGroupTimeRequest(requestID: requestID)
+                pendingGroupCollectRequestIDs.remove(requestID)
             } catch {
                 // Non-fatal: retried after the next group refresh.
             }
