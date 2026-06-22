@@ -300,6 +300,12 @@ struct CreateGroupSheet: View {
     }
 }
 
+private struct GroupInviteShare: Identifiable {
+    let code: String
+    let url: URL
+    var id: String { code }
+}
+
 struct GroupDetailView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -317,6 +323,9 @@ struct GroupDetailView: View {
     @State private var poolState: GroupPoolState?
     @State private var isLoadingPoolState = false
     @State private var memberToRemove: GroupMemberInfo?
+    @State private var inviteToShare: GroupInviteShare?
+    @State private var isCreatingInvite = false
+    @State private var inviteError: String?
 
     var body: some View {
         AppScreenScroll {
@@ -424,6 +433,64 @@ struct GroupDetailView: View {
                     }
                 }
             )
+        }
+        .sheet(item: $inviteToShare) { share in
+            NavigationStack {
+                VStack(spacing: 16) {
+                    Text(GroupInviteCode.formatted(share.code))
+                        .font(.system(.largeTitle, design: .monospaced).weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                        .textSelection(.enabled)
+
+                    ShareLink(item: "Join my Deny group: \(share.url.absoluteString)") {
+                        HStack(spacing: 7) {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Share Invite")
+                        }
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+
+                    Text("Share this link with friends you want to add to the group.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(20)
+                .navigationTitle("Invite friends")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { inviteToShare = nil }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+        .alert("Couldn't create invite", isPresented: Binding(
+            get: { inviteError != nil },
+            set: { if !$0 { inviteError = nil } }
+        )) {
+            Button("OK", role: .cancel) { inviteError = nil }
+        } message: {
+            Text(inviteError ?? "Please try again.")
+        }
+    }
+
+    private func createInvite() async {
+        isCreatingInvite = true
+        defer { isCreatingInvite = false }
+        do {
+            let result = try await model.snapshotStore.createGroupInvite(groupID: groupID)
+            AppHaptics.success()
+            inviteToShare = GroupInviteShare(code: result.code, url: result.url)
+        } catch {
+            inviteError = error.localizedDescription
         }
     }
 
@@ -624,6 +691,25 @@ struct GroupDetailView: View {
             AppCard {
                 VStack(spacing: 12) {
                     if detail.group.role == .owner {
+                        Button {
+                            AppHaptics.buttonTap()
+                            Task { await createInvite() }
+                        } label: {
+                            HStack(spacing: 7) {
+                                if isCreatingInvite {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "person.badge.plus")
+                                    Text("Invite friends")
+                                }
+                            }
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(isMutating || isCreatingInvite)
+
                         Button(role: .destructive) {
                             AppHaptics.buttonTap()
                             isConfirmingDelete = true
@@ -824,7 +910,7 @@ struct GroupShareInviteView: View {
     }
 }
 
-private struct GroupSummaryRow: View {
+struct GroupSummaryRow: View {
     let group: FriendGroupSummary
 
     var body: some View {

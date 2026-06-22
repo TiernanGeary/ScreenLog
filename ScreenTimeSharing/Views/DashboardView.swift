@@ -763,28 +763,124 @@ private struct TopAppEmptyTile: View {
     }
 }
 
+private enum NewBlockKind {
+    case solo
+    case friends
+}
+
+/// Half-sheet shown when starting a new block: pick a solo block or a shared
+/// friend group before the relevant configuration flow opens.
+private struct NewBlockChooserSheet: View {
+    let onChoose: (NewBlockKind) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 14) {
+                chooserButton(
+                    title: "Just me",
+                    subtitle: "Block apps on your own schedule or daily time limit.",
+                    systemImage: "person.fill",
+                    kind: .solo
+                )
+                chooserButton(
+                    title: "Block with friends",
+                    subtitle: "Share one limit with a group. Unblocking needs their approval.",
+                    systemImage: "person.3.fill",
+                    kind: .friends
+                )
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .navigationTitle("New Block")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func chooserButton(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        kind: NewBlockKind
+    ) -> some View {
+        Button {
+            AppHaptics.buttonTap()
+            onChoose(kind)
+        } label: {
+            AppCard {
+                HStack(spacing: 14) {
+                    Image(systemName: systemImage)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.tint)
+                        .frame(width: 40)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.leading)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                }
+                .appCardRow(verticalPadding: 16)
+                .contentShape(Rectangle())
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct BlockingOverviewCard: View {
     @EnvironmentObject private var model: AppModel
     @State private var newGroupDraft: BlockGroupDraft?
     @State private var viewedGroup: BlockGroup?
     @State private var unblockConfirmationGroup: BlockGroup?
     @State private var friendRequestGroup: BlockGroup?
+    @State private var isShowingNewBlockChooser = false
+    @State private var isShowingCreateFriendGroup = false
+    @State private var viewedFriendGroup: FriendGroupSummary?
+    @State private var pendingBlockChoice: NewBlockKind?
 
     private var groups: [BlockGroup] {
         model.blockingState.groups
     }
 
+    // Friend-group local blocks (id prefix "group.") are surfaced separately from
+    // model.myGroups, so keep them out of the solo Active/Inactive sections to
+    // avoid showing the same group twice.
+    private var soloGroups: [BlockGroup] {
+        groups.filter { !$0.id.hasPrefix("group.") }
+    }
+
+    private var friendGroups: [FriendGroupSummary] {
+        model.myGroups
+    }
+
     private var activeGroups: [BlockGroup] {
-        groups.filter(\.isEnabled)
+        soloGroups.filter(\.isEnabled)
     }
 
     private var inactiveGroups: [BlockGroup] {
-        groups.filter { !$0.isEnabled }
+        soloGroups.filter { !$0.isEnabled }
     }
 
     var body: some View {
         Group {
-            if groups.isEmpty {
+            if soloGroups.isEmpty && friendGroups.isEmpty {
                 AppCard {
                 startBlockingButton
                 }
@@ -798,11 +894,15 @@ private struct BlockingOverviewCard: View {
                         blockGroupSection("Inactive", groups: inactiveGroups, isMuted: true)
                     }
 
+                    if !friendGroups.isEmpty {
+                        friendGroupSection
+                    }
+
                     AppCard {
                         HStack(spacing: 12) {
                             Button {
                                 AppHaptics.buttonTap()
-                                newGroupDraft = BlockGroupDraft()
+                                isShowingNewBlockChooser = true
                             } label: {
                                 Label("New Group", systemImage: "plus.circle.fill")
                                     .font(.subheadline.weight(.semibold))
@@ -814,6 +914,9 @@ private struct BlockingOverviewCard: View {
                     }
                 }
             }
+        }
+        .task {
+            await model.loadMyGroups()
         }
         .sheet(item: $viewedGroup) { group in
             BlockGroupConfigurationView(groupID: group.id)
@@ -835,12 +938,73 @@ private struct BlockingOverviewCard: View {
                 }
             }
         }
+        .sheet(isPresented: $isShowingNewBlockChooser, onDismiss: {
+            // Present the chosen flow only after the chooser has fully dismissed —
+            // SwiftUI can't bring up a second sheet while the first is still up.
+            switch pendingBlockChoice {
+            case .solo:
+                newGroupDraft = BlockGroupDraft()
+            case .friends:
+                isShowingCreateFriendGroup = true
+            case nil:
+                break
+            }
+            pendingBlockChoice = nil
+        }) {
+            NewBlockChooserSheet { kind in
+                pendingBlockChoice = kind
+                isShowingNewBlockChooser = false
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $isShowingCreateFriendGroup, onDismiss: {
+            Task { await model.loadMyGroups() }
+        }) {
+            CreateGroupSheet()
+        }
+        .sheet(item: $viewedFriendGroup) { summary in
+            NavigationStack {
+                GroupDetailView(groupID: summary.id)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Close") { viewedFriendGroup = nil }
+                        }
+                    }
+            }
+        }
+    }
+
+    private var friendGroupSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("WITH FRIENDS")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 18)
+
+            AppCard {
+                ForEach(Array(friendGroups.enumerated()), id: \.element.id) { index, group in
+                    if index > 0 {
+                        AppCardDivider()
+                    }
+
+                    Button {
+                        AppHaptics.buttonTap()
+                        viewedFriendGroup = group
+                    } label: {
+                        GroupSummaryRow(group: group)
+                            .appCardRow(verticalPadding: 12)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private var startBlockingButton: some View {
         Button {
             AppHaptics.buttonTap()
-            newGroupDraft = BlockGroupDraft()
+            isShowingNewBlockChooser = true
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: "plus.circle.fill")
