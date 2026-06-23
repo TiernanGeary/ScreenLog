@@ -6,6 +6,7 @@
 // Endpoints (all expect header `x-deny-secret: <APP_SHARED_SECRET>`):
 //   POST /register  { profileID, token, environment? }  -> stores token
 //   POST /notify    { toProfileID, title, body, requestID? } -> sends alert push
+//   POST /group-pool-exhausted { toProfileID/profileIDs, groupID } -> sends silent push
 //
 // Secrets (via `wrangler secret put`):
 //   APNS_AUTH_KEY      contents of the AuthKey_XXXX.p8 (PEM)
@@ -29,6 +30,11 @@ export default {
         const code = (raw || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 16);
         return html(inviteLandingHTML(code));
       }
+      if (url.pathname.startsWith("/group-invite/")) {
+        const raw = url.pathname.slice("/group-invite/".length).split("/")[0];
+        const code = (raw || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 16);
+        return html(inviteLandingHTML(code, { scheme: "deny://group-invite/", heading: "You've been invited to a Deny group" }));
+      }
       return json({ error: "not found" }, 404);
     }
 
@@ -46,6 +52,9 @@ export default {
       }
       if (url.pathname === "/notify") {
         return await handleNotify(request, env);
+      }
+      if (url.pathname === "/group-pool-exhausted") {
+        return await handleGroupPoolExhausted(request, env);
       }
       return json({ error: "not found" }, 404);
     } catch (err) {
@@ -80,17 +89,6 @@ async function handleNotify(request, env) {
     return json({ error: "toProfileID required" }, 400);
   }
 
-  const raw = await env.TOKENS.get(`profile:${toProfileID}`);
-  if (!raw) {
-    return json({ ok: false, reason: "no token for recipient" });
-  }
-  const record = JSON.parse(raw);
-
-  const jwt = await makeAPNsJWT(env);
-  const host = (record.environment === "sandbox" || env.APNS_ENVIRONMENT === "sandbox")
-    ? "https://api.sandbox.push.apple.com"
-    : "https://api.push.apple.com";
-
   const payload = {
     aps: {
       alert: { title, body: message },
@@ -108,27 +106,87 @@ async function handleNotify(request, env) {
     payload.friendRequestID = String(body.requestID);
   }
 
+  const result = await sendAPNsToProfile(env, toProfileID, payload, {
+    "apns-push-type": "alert",
+    "apns-priority": "10",
+  });
+  if (result.ok) {
+    return json({ ok: true });
+  }
+  if (result.reason === "no token for recipient") {
+    return json(result);
+  }
+  return json(result, 502);
+}
+
+async function handleGroupPoolExhausted(request, env) {
+  const body = await request.json();
+  const groupID = String(body.groupID || "").trim();
+  const profileIDs = Array.isArray(body.profileIDs) ? body.profileIDs : body.toProfileID ? [body.toProfileID] : [];
+  if (profileIDs.length < 1 || profileIDs.length > 32) {
+    return json({ error: "toProfileID or profileIDs required" }, 400);
+  }
+  const recipients = [...new Set(profileIDs.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 32);
+
+  if (!groupID) {
+    return json({ error: "groupID required" }, 400);
+  }
+  if (recipients.length === 0) {
+    return json({ error: "toProfileID or profileIDs required" }, 400);
+  }
+
+  const payload = {
+    aps: {
+      "content-available": 1,
+    },
+    poolExhaustedGroupID: groupID,
+  };
+
+  const results = [];
+  for (const profileID of recipients) {
+    const result = await sendAPNsToProfile(env, profileID, payload, {
+      "apns-push-type": "background",
+      "apns-priority": "5",
+    });
+    results.push({ profileID, ...result });
+  }
+
+  const hasAPNsFailure = results.some((result) => !result.ok && result.reason !== "no token for recipient");
+  return json({ ok: results.every((result) => result.ok), results }, hasAPNsFailure ? 502 : 200);
+}
+
+async function sendAPNsToProfile(env, profileID, payload, apnsHeaders) {
+  const raw = await env.TOKENS.get(`profile:${profileID}`);
+  if (!raw) {
+    return { ok: false, reason: "no token for recipient" };
+  }
+  const record = JSON.parse(raw);
+
+  const jwt = await makeAPNsJWT(env);
+  const host = (record.environment === "sandbox" || env.APNS_ENVIRONMENT === "sandbox")
+    ? "https://api.sandbox.push.apple.com"
+    : "https://api.push.apple.com";
+
   const res = await fetch(`${host}/3/device/${record.token}`, {
     method: "POST",
     headers: {
       authorization: `bearer ${jwt}`,
       "apns-topic": env.APNS_BUNDLE_ID,
-      "apns-push-type": "alert",
-      "apns-priority": "10",
+      ...apnsHeaders,
     },
     body: JSON.stringify(payload),
   });
 
   if (res.status === 200) {
-    return json({ ok: true });
+    return { ok: true };
   }
 
   // 410 = token no longer valid; drop it so we stop trying.
   if (res.status === 410 || res.status === 400) {
-    await env.TOKENS.delete(`profile:${toProfileID}`);
+    await env.TOKENS.delete(`profile:${profileID}`);
   }
   const text = await res.text();
-  return json({ ok: false, status: res.status, apns: text }, 502);
+  return { ok: false, status: res.status, apns: text };
 }
 
 // --- APNs token-based auth (ES256 JWT signed with the .p8 key) ---
@@ -203,14 +261,16 @@ function html(body, status = 200) {
 // Public App Store product page for Deny.
 const APP_STORE_URL = "https://apps.apple.com/app/id6773738211";
 
-// Invite landing page: tries to open the app via the deny:// scheme (which adds
-// the inviter as a friend) and falls back to the App Store if it isn't installed.
-function inviteLandingHTML(code) {
-  const appLink = `deny://invite/${code}`;
+// Invite landing page: tries to open the app via the deny:// scheme and falls
+// back to the App Store if it isn't installed.
+function inviteLandingHTML(code, opts = { scheme: "deny://invite/", heading: "You've been invited to Deny" }) {
+  const appLink = `${opts.scheme}${code}`;
+  const isDefaultFriendInvite = opts.scheme === "deny://invite/" && opts.heading === "You've been invited to Deny";
+  const pageTitle = isDefaultFriendInvite ? "Deny — Friend Invite" : opts.heading;
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Deny — Friend Invite</title><style>${PAGE_STYLE}
+<title>${pageTitle}</title><style>${PAGE_STYLE}
   .wrap { text-align: center; padding-top: 60px; }
   .btn { display: inline-block; margin: 8px; padding: 14px 22px; border-radius: 14px;
          font-weight: 600; text-decoration: none; }
@@ -220,7 +280,7 @@ function inviteLandingHTML(code) {
 </style></head>
 <body>
 <div class="wrap">
-  <h1>You've been invited to Deny</h1>
+  <h1>${opts.heading}</h1>
   <p>Opening the app to connect you…<br>Don't have it yet? Grab it free below.</p>
   <p>
     <a class="btn primary" href="${appLink}">Open in Deny</a>
@@ -240,7 +300,7 @@ function inviteLandingHTML(code) {
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) { clearTimeout(t); }
     });
-    window.location.replace("deny://invite/" + code);
+    window.location.replace(${JSON.stringify(opts.scheme)} + code);
   })();
 </script>
 </body></html>`;

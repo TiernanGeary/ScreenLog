@@ -42,6 +42,10 @@ enum AppConfiguration {
         URL(string: "\(pushServerBaseURL)/invite/\(code)") ?? appStoreURL
     }
 
+    static func groupInviteWebLink(_ code: String) -> URL {
+        URL(string: "\(pushServerBaseURL)/group-invite/\(code)")!
+    }
+
     static var isPushServerConfigured: Bool {
         !pushServerBaseURL.contains("REPLACE_WITH") && !pushServerSharedSecret.contains("REPLACE_WITH")
     }

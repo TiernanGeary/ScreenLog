@@ -27,6 +27,13 @@ struct ScreenTimeSharingApp: App {
                     }
                 }
                 .onOpenURL { url in
+                    if let code = GroupInviteDeepLink.code(from: url) {
+                        Task {
+                            await model.presentIncomingGroupInvite(code: code)
+                        }
+                        return
+                    }
+
                     guard let code = InviteDeepLink.code(from: url) else {
                         return
                     }

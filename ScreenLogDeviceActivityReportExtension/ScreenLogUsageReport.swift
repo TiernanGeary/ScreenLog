@@ -11,6 +11,11 @@ extension DeviceActivityReport.Context {
     static let screenLogStatsDay = Self("ScreenLogStatsDay")
     static let screenLogStatsWeek = Self("ScreenLogStatsWeek")
     static let screenLogStatsMonth = Self("ScreenLogStatsMonth")
+    static let screenLogGroupUsage0 = Self("ScreenLogGroupUsage0")
+    static let screenLogGroupUsage1 = Self("ScreenLogGroupUsage1")
+    static let screenLogGroupUsage2 = Self("ScreenLogGroupUsage2")
+    static let screenLogGroupUsage3 = Self("ScreenLogGroupUsage3")
+    static let screenLogGroupUsage4 = Self("ScreenLogGroupUsage4")
 }
 
 struct ScreenLogTodaySummaryReport: DeviceActivityReportScene {
@@ -77,6 +82,96 @@ struct ScreenLogUsageReport: DeviceActivityReportScene {
         representing data: DeviceActivityResults<DeviceActivityData>
     ) async -> ScreenTimeLiveReportConfiguration {
         await ScreenLogUsageReportBuilder.configuration(representing: data)
+    }
+}
+
+struct GroupUsageHiddenReportView: View {
+    var body: some View {
+        Color.clear
+    }
+}
+
+struct ScreenLogGroupUsageReport0: DeviceActivityReportScene {
+    let context: DeviceActivityReport.Context = .screenLogGroupUsage0
+    let content: (ScreenTimeLiveReportConfiguration) -> GroupUsageHiddenReportView
+
+    func makeConfiguration(
+        representing data: DeviceActivityResults<DeviceActivityData>
+    ) async -> ScreenTimeLiveReportConfiguration {
+        let config = await ScreenLogUsageReportBuilder.configuration(representing: data, persistsSnapshot: false)
+        ScreenLogGroupUsageReportWriter.persist(slot: 0, seconds: Int(config.totalDuration))
+        return config
+    }
+}
+
+struct ScreenLogGroupUsageReport1: DeviceActivityReportScene {
+    let context: DeviceActivityReport.Context = .screenLogGroupUsage1
+    let content: (ScreenTimeLiveReportConfiguration) -> GroupUsageHiddenReportView
+
+    func makeConfiguration(
+        representing data: DeviceActivityResults<DeviceActivityData>
+    ) async -> ScreenTimeLiveReportConfiguration {
+        let config = await ScreenLogUsageReportBuilder.configuration(representing: data, persistsSnapshot: false)
+        ScreenLogGroupUsageReportWriter.persist(slot: 1, seconds: Int(config.totalDuration))
+        return config
+    }
+}
+
+struct ScreenLogGroupUsageReport2: DeviceActivityReportScene {
+    let context: DeviceActivityReport.Context = .screenLogGroupUsage2
+    let content: (ScreenTimeLiveReportConfiguration) -> GroupUsageHiddenReportView
+
+    func makeConfiguration(
+        representing data: DeviceActivityResults<DeviceActivityData>
+    ) async -> ScreenTimeLiveReportConfiguration {
+        let config = await ScreenLogUsageReportBuilder.configuration(representing: data, persistsSnapshot: false)
+        ScreenLogGroupUsageReportWriter.persist(slot: 2, seconds: Int(config.totalDuration))
+        return config
+    }
+}
+
+struct ScreenLogGroupUsageReport3: DeviceActivityReportScene {
+    let context: DeviceActivityReport.Context = .screenLogGroupUsage3
+    let content: (ScreenTimeLiveReportConfiguration) -> GroupUsageHiddenReportView
+
+    func makeConfiguration(
+        representing data: DeviceActivityResults<DeviceActivityData>
+    ) async -> ScreenTimeLiveReportConfiguration {
+        let config = await ScreenLogUsageReportBuilder.configuration(representing: data, persistsSnapshot: false)
+        ScreenLogGroupUsageReportWriter.persist(slot: 3, seconds: Int(config.totalDuration))
+        return config
+    }
+}
+
+struct ScreenLogGroupUsageReport4: DeviceActivityReportScene {
+    let context: DeviceActivityReport.Context = .screenLogGroupUsage4
+    let content: (ScreenTimeLiveReportConfiguration) -> GroupUsageHiddenReportView
+
+    func makeConfiguration(
+        representing data: DeviceActivityResults<DeviceActivityData>
+    ) async -> ScreenTimeLiveReportConfiguration {
+        let config = await ScreenLogUsageReportBuilder.configuration(representing: data, persistsSnapshot: false)
+        ScreenLogGroupUsageReportWriter.persist(slot: 4, seconds: Int(config.totalDuration))
+        return config
+    }
+}
+
+private enum ScreenLogGroupUsageReportWriter {
+    static func persist(slot: Int, seconds: Int) {
+        let defaults = UserDefaults(suiteName: ScreenTimeReportStorage.appGroupSuiteName)
+        guard let assignment = ScreenTimeReportStorage.poolSlotAssignment(slot, defaults: defaults) else {
+            return
+        }
+
+        var ownerCalendar = Calendar(identifier: .gregorian)
+        ownerCalendar.timeZone = TimeZone(identifier: assignment.ownerTimeZone) ?? .gmt
+        ScreenTimeReportStorage.setGroupUsageSlot(
+            slot,
+            groupBlockID: assignment.groupBlockID,
+            dayKey: UsageDateBoundary.localDayKey(date: Date(), calendar: ownerCalendar),
+            seconds: seconds,
+            defaults: defaults
+        )
     }
 }
 

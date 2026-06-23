@@ -5,6 +5,7 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showsLaunchSplash = true
     @State private var launchSplashOpacity = 1.0
+    @State private var isRedeemingGroupInvite = false
 
     var body: some View {
         ZStack {
@@ -21,6 +22,9 @@ struct RootView: View {
                 }
             }
 
+            // Hidden: drives per-group pool usage measurement while foreground.
+            GroupPoolUsageReporters()
+
             if showsLaunchSplash {
                 LaunchSplashView()
                     .opacity(launchSplashOpacity)
@@ -30,32 +34,78 @@ struct RootView: View {
         .task {
             await fadeOutLaunchSplash()
         }
-        .sheet(
-            item: Binding<BlockGroup?>(
-                get: { model.pendingShieldFriendRequestGroup },
-                set: { newValue in
-                    if newValue == nil {
-                        model.clearPendingShieldFriendRequest()
+        .sheet(item: activeSheetBinding) { sheet in
+            switch sheet {
+            case .groupInvite(let invite):
+                GroupShareInviteView(
+                    invite: invite,
+                    isAccepting: isRedeemingGroupInvite,
+                    onAccept: {
+                        Task {
+                            isRedeemingGroupInvite = true
+                            defer { isRedeemingGroupInvite = false }
+                            await model.redeemPendingGroupInvite()
+                        }
+                    },
+                    onCancel: {
+                        model.dismissIncomingGroupInvite()
                     }
-                }
-            )
-        ) { group in
-            FriendApprovalRequestView(group: group)
+                )
+                .interactiveDismissDisabled(isRedeemingGroupInvite)
+            case .friendInvite(let invite):
+                FriendShareInviteView(
+                    invite: invite,
+                    isAccepting: model.isRedeemingInvite,
+                    onAccept: {
+                        Task {
+                            await model.redeemPendingInvite()
+                        }
+                    },
+                    onCancel: {
+                        model.dismissIncomingInvite()
+                    }
+                )
+                .interactiveDismissDisabled(model.isRedeemingInvite)
+            case .shieldRequest(let group):
+                FriendApprovalRequestView(group: group)
+            }
         }
-        .sheet(item: $model.pendingIncomingInvite) { invite in
-            FriendShareInviteView(
-                invite: invite,
-                isAccepting: model.isRedeemingInvite,
-                onAccept: {
-                    Task {
-                        await model.redeemPendingInvite()
-                    }
-                },
-                onCancel: {
-                    model.dismissIncomingInvite()
+    }
+
+    private var activeSheetBinding: Binding<RootSheet?> {
+        Binding(
+            get: { activeSheet },
+            set: { newValue in
+                if newValue == nil {
+                    dismissActiveSheet()
                 }
-            )
-            .interactiveDismissDisabled(model.isRedeemingInvite)
+            }
+        )
+    }
+
+    private var activeSheet: RootSheet? {
+        if let invite = model.pendingIncomingGroupInvite {
+            return .groupInvite(invite)
+        }
+
+        if let invite = model.pendingIncomingInvite {
+            return .friendInvite(invite)
+        }
+
+        if let group = model.pendingShieldFriendRequestGroup {
+            return .shieldRequest(group)
+        }
+
+        return nil
+    }
+
+    private func dismissActiveSheet() {
+        if model.pendingIncomingGroupInvite != nil {
+            model.dismissIncomingGroupInvite()
+        } else if model.pendingIncomingInvite != nil {
+            model.dismissIncomingInvite()
+        } else if model.pendingShieldFriendRequestGroup != nil {
+            model.clearPendingShieldFriendRequest()
         }
     }
 
@@ -79,6 +129,23 @@ struct RootView: View {
         }
 
         showsLaunchSplash = false
+    }
+}
+
+private enum RootSheet: Identifiable {
+    case groupInvite(PeekedGroupInvite)
+    case friendInvite(IncomingInvite)
+    case shieldRequest(BlockGroup)
+
+    var id: String {
+        switch self {
+        case .groupInvite(let invite):
+            return "group-invite.\(invite.code)"
+        case .friendInvite(let invite):
+            return "friend-invite.\(invite.code)"
+        case .shieldRequest(let group):
+            return "shield.\(group.id)"
+        }
     }
 }
 

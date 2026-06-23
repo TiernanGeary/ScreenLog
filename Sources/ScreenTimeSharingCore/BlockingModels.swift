@@ -592,6 +592,7 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
     public var expiresAt: Date?
     public var approvedExpiresAt: Date?
     public var photoReference: BlockFriendRequestPhotoReference?
+    public var socialGroupID: String?
     /// Display names of the requester's most-used apps in the blocked group,
     /// so approvers see what they're unlocking. Names only — app tokens never
     /// leave the requester's device.
@@ -613,6 +614,7 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
         expiresAt: Date? = nil,
         approvedExpiresAt: Date? = nil,
         photoReference: BlockFriendRequestPhotoReference? = nil,
+        socialGroupID: String? = nil,
         groupAppNames: [String]? = nil
     ) {
         self.id = id
@@ -630,6 +632,7 @@ public struct BlockFriendRequest: Codable, Equatable, Identifiable, Sendable {
         self.expiresAt = expiresAt
         self.approvedExpiresAt = approvedExpiresAt
         self.photoReference = photoReference
+        self.socialGroupID = socialGroupID
         self.groupAppNames = groupAppNames
     }
 
@@ -772,12 +775,47 @@ public struct BlockUnblockSession: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct PoolExhaustionOverride: Codable, Equatable, Sendable {
+    public var groupID: String
+    public var exhaustedAt: Date
+    public var resetsAt: Date
+    /// Whether THIS device has already broadcast the member notification for this
+    /// exhaustion episode. Persisted with the override so a cold launch (in-memory
+    /// state lost) doesn't re-spam every member while the pool stays exhausted.
+    public var hasBroadcast: Bool
+
+    public init(groupID: String, exhaustedAt: Date, resetsAt: Date, hasBroadcast: Bool = false) {
+        self.groupID = groupID
+        self.exhaustedAt = exhaustedAt
+        self.resetsAt = resetsAt
+        self.hasBroadcast = hasBroadcast
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case groupID, exhaustedAt, resetsAt, hasBroadcast
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        groupID = try c.decode(String.self, forKey: .groupID)
+        exhaustedAt = try c.decode(Date.self, forKey: .exhaustedAt)
+        resetsAt = try c.decode(Date.self, forKey: .resetsAt)
+        // Back-compat: overrides persisted before this field default to false.
+        hasBroadcast = try c.decodeIfPresent(Bool.self, forKey: .hasBroadcast) ?? false
+    }
+
+    public func isActive(now: Date = Date()) -> Bool {
+        exhaustedAt <= now && now < resetsAt
+    }
+}
+
 public struct BlockingState: Codable, Equatable, Sendable {
     public var groups: [BlockGroup]
     public var rules: [BlockRule]
     public var requests: [BlockRequest]
     public var friendRequests: [BlockFriendRequest]
     public var unblockSessions: [BlockUnblockSession]
+    public var poolExhaustionOverrides: [PoolExhaustionOverride]
     public var lastUpdated: Date
 
     private enum CodingKeys: String, CodingKey {
@@ -786,6 +824,7 @@ public struct BlockingState: Codable, Equatable, Sendable {
         case requests
         case friendRequests
         case unblockSessions
+        case poolExhaustionOverrides
         case lastUpdated
     }
 
@@ -795,6 +834,7 @@ public struct BlockingState: Codable, Equatable, Sendable {
         requests: [BlockRequest] = [],
         friendRequests: [BlockFriendRequest] = [],
         unblockSessions: [BlockUnblockSession] = [],
+        poolExhaustionOverrides: [PoolExhaustionOverride] = [],
         lastUpdated: Date = Date()
     ) {
         self.groups = groups
@@ -802,6 +842,7 @@ public struct BlockingState: Codable, Equatable, Sendable {
         self.requests = requests
         self.friendRequests = friendRequests
         self.unblockSessions = unblockSessions
+        self.poolExhaustionOverrides = poolExhaustionOverrides
         self.lastUpdated = lastUpdated
     }
 
@@ -812,6 +853,10 @@ public struct BlockingState: Codable, Equatable, Sendable {
         requests = try container.decodeIfPresent([BlockRequest].self, forKey: .requests) ?? []
         friendRequests = try container.decodeIfPresent([BlockFriendRequest].self, forKey: .friendRequests) ?? []
         unblockSessions = try container.decodeIfPresent([BlockUnblockSession].self, forKey: .unblockSessions) ?? []
+        poolExhaustionOverrides = try container.decodeIfPresent(
+            [PoolExhaustionOverride].self,
+            forKey: .poolExhaustionOverrides
+        ) ?? []
         lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated) ?? Date()
     }
 
@@ -822,6 +867,7 @@ public struct BlockingState: Codable, Equatable, Sendable {
         try container.encode(requests, forKey: .requests)
         try container.encode(friendRequests, forKey: .friendRequests)
         try container.encode(unblockSessions, forKey: .unblockSessions)
+        try container.encode(poolExhaustionOverrides, forKey: .poolExhaustionOverrides)
         try container.encode(lastUpdated, forKey: .lastUpdated)
     }
 }
@@ -920,9 +966,25 @@ public struct BlockingShieldIndex: Codable, Equatable, Sendable {
     }
 
     public init(state: BlockingState, activeGroupIDs: Set<String>, now: Date = Date()) {
+        let groupIDs = Set(state.groups.map(\.id))
+        let forcedOverrideGroupIDs = Set(
+            state.poolExhaustionOverrides
+                .filter { $0.isActive(now: now) && groupIDs.contains($0.groupID) }
+                .map(\.groupID)
+        )
         let suppressedGroupIDs = BlockingStateResolver.suppressedGroupIDs(in: state, now: now)
+            .subtracting(forcedOverrideGroupIDs)
         let enabledGroupIDs = Set(BlockingStateResolver.enabledGroups(in: state).map(\.id))
-        self.activeGroupIDs = Array(activeGroupIDs.subtracting(suppressedGroupIDs).intersection(enabledGroupIDs)).sorted()
+        // Mirror BlockingEnforcementService.currentActiveGroupIDs ordering exactly:
+        // union the forced overrides BEFORE intersecting enabledGroupIDs, so a
+        // forced override for a locally-disabled group never leaks into the
+        // persisted activeGroupIDs. (suppressedGroupIDs already excludes forced.)
+        self.activeGroupIDs = Array(
+            activeGroupIDs
+                .union(forcedOverrideGroupIDs)
+                .intersection(enabledGroupIDs)
+                .subtracting(suppressedGroupIDs)
+        ).sorted()
         self.groups = state.groups.map { group in
             BlockingShieldIndexGroup(
                 id: group.id,

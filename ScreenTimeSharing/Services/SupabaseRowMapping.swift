@@ -152,6 +152,7 @@ struct TimeRequestRow: Codable {
     var resolvedAt: Date?
     var approvedExpiresAt: Date?
     var collectedAt: Date?
+    var socialGroupId: String?
     var groupAppNames: [String]?
 
     enum CodingKeys: String, CodingKey {
@@ -170,6 +171,7 @@ struct TimeRequestRow: Codable {
         case resolvedAt = "resolved_at"
         case approvedExpiresAt = "approved_expires_at"
         case collectedAt = "collected_at"
+        case socialGroupId = "social_group_id"
         case groupAppNames = "group_app_names"
     }
 
@@ -201,6 +203,7 @@ struct TimeRequestRow: Codable {
         self.resolvedAt = nil
         self.approvedExpiresAt = nil
         self.collectedAt = nil
+        self.socialGroupId = request.socialGroupID
         self.groupAppNames = request.groupAppNames.map { Array($0.prefix(5)) }
     }
 
@@ -221,6 +224,7 @@ struct TimeRequestRow: Codable {
             expiresAt: expiresAt,
             approvedExpiresAt: approvedExpiresAt,
             photoReference: photoReference,
+            socialGroupID: socialGroupId,
             groupAppNames: groupAppNames
         )
     }
@@ -340,6 +344,244 @@ struct RedeemedInvite: Equatable, Sendable {
     let inviterDisplayName: String
 }
 
+struct CreatedGroupRow: Decodable {
+    var groupId: UUID
+    var code: String
+
+    enum CodingKeys: String, CodingKey {
+        case groupId = "group_id"
+        case code
+    }
+}
+
+struct CreatedGroupInviteRow: Decodable {
+    var code: String
+    var expiresAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case code
+        case expiresAt = "expires_at"
+    }
+}
+
+struct PeekedGroupInviteRow: Decodable {
+    var groupId: UUID
+    var groupName: String
+    var ownerDisplayName: String
+    var mode: GroupMode
+
+    enum CodingKeys: String, CodingKey {
+        case groupId = "group_id"
+        case groupName = "group_name"
+        case ownerDisplayName = "owner_display_name"
+        case mode
+    }
+}
+
+struct RedeemedGroupInviteRow: Decodable {
+    var groupId: UUID
+    var groupName: String
+
+    enum CodingKeys: String, CodingKey {
+        case groupId = "group_id"
+        case groupName = "group_name"
+    }
+}
+
+struct FriendGroupSummaryRow: Decodable {
+    var id: UUID
+    var name: String
+    var mode: GroupMode
+    var ownerId: UUID
+    var ownerTimeZone: String
+    var role: GroupRole
+    var configuredAt: Date?
+    var memberCount: Int
+    var appNames: [String]
+    var perMemberLimitSeconds: Int?
+    var poolSeconds: Int?
+    var approvalsRequired: Int
+    var updatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case mode
+        case ownerId = "owner_id"
+        case ownerTimeZone = "owner_time_zone"
+        case role
+        case configuredAt = "configured_at"
+        case memberCount = "member_count"
+        case appNames = "app_names"
+        case perMemberLimitSeconds = "per_member_limit_seconds"
+        case poolSeconds = "pool_seconds"
+        case approvalsRequired = "approvals_required"
+        case updatedAt = "updated_at"
+    }
+
+    func toSummary() -> FriendGroupSummary {
+        FriendGroupSummary(
+            id: id.uuidString,
+            name: name,
+            mode: mode,
+            ownerID: ownerId.uuidString,
+            ownerTimeZone: ownerTimeZone,
+            role: role,
+            configuredAt: configuredAt,
+            memberCount: memberCount,
+            config: GroupBlockConfig(
+                appNames: appNames,
+                perMemberLimitSeconds: perMemberLimitSeconds,
+                poolSeconds: poolSeconds,
+                approvalsRequired: approvalsRequired
+            )
+        )
+    }
+}
+
+struct GroupDetailGroupRow: Decodable {
+    var id: UUID
+    var ownerId: UUID
+    var name: String
+    var mode: GroupMode
+    var ownerTimeZone: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case ownerId = "owner_id"
+        case name
+        case mode
+        case ownerTimeZone = "owner_time_zone"
+    }
+}
+
+struct GroupDetailConfigRow: Decodable {
+    var appNames: [String]
+    var perMemberLimitSeconds: Int?
+    var poolSeconds: Int?
+    var approvalsRequired: Int
+
+    enum CodingKeys: String, CodingKey {
+        case appNames = "app_names"
+        case perMemberLimitSeconds = "per_member_limit_seconds"
+        case poolSeconds = "pool_seconds"
+        case approvalsRequired = "approvals_required"
+    }
+
+    func toConfig() -> GroupBlockConfig {
+        GroupBlockConfig(
+            appNames: appNames,
+            perMemberLimitSeconds: perMemberLimitSeconds,
+            poolSeconds: poolSeconds,
+            approvalsRequired: approvalsRequired
+        )
+    }
+}
+
+struct GroupDetailMemberRow: Decodable {
+    var userId: UUID
+    var displayName: String
+    var avatarColorHex: String
+    var role: GroupRole
+    var joinedAt: Date
+    var configuredAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case displayName = "display_name"
+        case avatarColorHex = "avatar_color_hex"
+        case role
+        case joinedAt = "joined_at"
+        case configuredAt = "configured_at"
+    }
+
+    func toMemberInfo() -> GroupMemberInfo {
+        GroupMemberInfo(
+            userID: userId.uuidString,
+            displayName: displayName.isEmpty ? "Member" : displayName,
+            role: role,
+            configured: configuredAt != nil
+        )
+    }
+}
+
+struct GroupDetailRow: Decodable {
+    var group: GroupDetailGroupRow
+    var config: GroupDetailConfigRow
+    var members: [GroupDetailMemberRow]
+
+    func toDetail(currentUserID: UUID) -> GroupDetail {
+        let config = config.toConfig()
+        let currentUserKey = currentUserID.uuidString.lowercased()
+        let currentMember = members.first { $0.userId.uuidString.lowercased() == currentUserKey }
+        let role = currentMember?.role ?? (group.ownerId == currentUserID ? .owner : .member)
+
+        return GroupDetail(
+            group: FriendGroupSummary(
+                id: group.id.uuidString,
+                name: group.name,
+                mode: group.mode,
+                ownerID: group.ownerId.uuidString,
+                ownerTimeZone: group.ownerTimeZone,
+                role: role,
+                configuredAt: currentMember?.configuredAt,
+                memberCount: members.count,
+                config: config
+            ),
+            config: config,
+            members: members.map { $0.toMemberInfo() }
+        )
+    }
+}
+
+/// A shareable group invite minted by the current user.
+struct CreatedGroup: Equatable, Sendable {
+    let groupID: String
+    let code: String
+}
+
+/// A group invite received from someone else, shown in the accept sheet.
+struct PeekedGroupInvite: Equatable, Identifiable, Sendable {
+    let code: String
+    let groupID: String
+    let groupName: String
+    let ownerDisplayName: String
+    let mode: GroupMode
+
+    var id: String { code }
+}
+
+/// Result of redeeming a group invite: the joined group.
+struct RedeemedGroupInvite: Equatable, Sendable {
+    let groupID: String
+    let groupName: String
+}
+
+struct FriendGroupSummary: Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let mode: GroupMode
+    let ownerID: String
+    let ownerTimeZone: String
+    let role: GroupRole
+    let configuredAt: Date?
+    let memberCount: Int
+    let config: GroupBlockConfig
+}
+
+struct GroupDetail: Equatable, Sendable {
+    let group: FriendGroupSummary
+    let config: GroupBlockConfig
+    let members: [GroupMemberInfo]
+}
+
+struct GroupPoolState: Equatable, Sendable {
+    let poolSeconds: Int
+    let usedSeconds: Int
+    let remainingSeconds: Int
+    let exhausted: Bool
+}
+
 enum InviteDeepLink {
     /// Extracts an invite code from `deny://invite/<code>` (and tolerates a
     /// future `https://<host>/invite/<code>` universal link).
@@ -366,5 +608,18 @@ enum InviteDeepLink {
             return nil
         }
         return raw
+    }
+}
+
+public enum GroupInviteDeepLink {
+    public static func code(from url: URL) -> String? {
+        let parts = url.pathComponents.dropFirst()
+        if url.scheme?.lowercased() == "deny", url.host()?.lowercased() == "group-invite" { return normalize(parts.first) }
+        if parts.first?.lowercased() == "group-invite" { return normalize(parts.dropFirst().first) }
+        return nil
+    }
+    private static func normalize(_ raw: String?) -> String? {
+        let s = raw?.replacingOccurrences(of: "-", with: "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return (s?.isEmpty == false) ? s : nil
     }
 }

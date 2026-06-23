@@ -1,5 +1,6 @@
 import FamilyControls
 import Foundation
+import Supabase
 import SwiftUI
 @preconcurrency import UserNotifications
 #if canImport(UIKit)
@@ -64,6 +65,15 @@ struct FriendRequestPhotoStore {
 
     func hasPhoto(id: String) -> Bool {
         fileManager.fileExists(atPath: url(for: id).path)
+    }
+
+    func deleteJPEGData(id: String) throws {
+        let photoURL = url(for: id)
+        guard fileManager.fileExists(atPath: photoURL.path) else {
+            return
+        }
+
+        try fileManager.removeItem(at: photoURL)
     }
 
     private func url(for id: String) -> URL {
@@ -168,6 +178,7 @@ final class AppModel: ObservableObject {
     @Published var usageHistory: [DailyUsageSnapshot] = []
     @Published var hourlyUsageByDayID: [String: [TimeInterval]] = [:]
     @Published var friendSummaries: [FriendUsageSummary] = []
+    @Published var myGroups: [FriendGroupSummary] = []
     @Published var leaderboardEntries: [LeaderboardEntry] = []
     @Published var leaderboardWindow: LeaderboardWindow = .today
     @Published var cloudAvailability: BackendAvailability = .checking
@@ -182,6 +193,7 @@ final class AppModel: ObservableObject {
     @Published var pendingShieldFriendRequestGroupID: String?
     @Published var focusedFriendRequestLogID: String?
     @Published var pendingIncomingInvite: IncomingInvite?
+    @Published var pendingIncomingGroupInvite: PeekedGroupInvite?
     @Published var isRedeemingInvite = false
     @Published var isDeletingAccount = false
     @Published var isAuthenticated: Bool
@@ -201,11 +213,25 @@ final class AppModel: ObservableObject {
     private let friendRequestPhotoStore: FriendRequestPhotoStore
     private let pushServerClient = PushServerClient()
     private var apnsDeviceToken: String?
+    private let appGroupDefaults: UserDefaults?
     private let usageHistoryDefaults: UserDefaults?
     private let onboardingKey = "HasCompletedOnboarding.v1"
     private static let denyStartedAtKey = "DenyStartedAt.v1"
     private static let appearanceKey = "AppAppearanceMode.v1"
+    private static let pendingConfiguredGroupIDsKey = "PendingConfiguredGroupIDs.v1"
+    private static let pendingGroupCollectRequestIDsKey = "PendingGroupCollectRequestIDs.v1"
     private var isSyncingFriendRequests = false
+    private var pendingConfiguredGroupIDs: Set<String> = [] {
+        didSet {
+            persistPendingConfiguredGroupIDs()
+        }
+    }
+    private var pendingGroupCollectRequestIDs: Set<String> = [] {
+        didSet {
+            persistPendingGroupCollectRequestIDs()
+        }
+    }
+    private var poolGroupSlots: [String: Int] = [:]
     #if DEBUG
     private let demoFriendsKey = "UsesDemoFriends.v1"
     #endif
@@ -237,7 +263,10 @@ final class AppModel: ObservableObject {
         self.isAuthenticated = KeychainAppleID.load() != nil
         let sharedDefaults = UserDefaults(suiteName: AppConfiguration.appGroupIdentifier)
         let loadedProfile = profileStore.load()
+        self.appGroupDefaults = sharedDefaults
         self.usageHistoryDefaults = sharedDefaults
+        self.pendingConfiguredGroupIDs = Self.loadPendingConfiguredGroupIDs(defaults: sharedDefaults)
+        self.pendingGroupCollectRequestIDs = Self.loadPendingGroupCollectRequestIDs(defaults: sharedDefaults)
         self.profile = loadedProfile
         let storedDenyStartedAt = UserDefaults.standard.object(forKey: Self.denyStartedAtKey) as? Date
         let denyStartedAt = storedDenyStartedAt ?? Date()
@@ -307,6 +336,21 @@ final class AppModel: ObservableObject {
         }
     }
 
+    var poolGroupSlotAssignments: [(slot: Int, groupID: String, selection: FamilyActivitySelection, ownerTimeZone: String)] {
+        myGroups.compactMap { group -> (slot: Int, groupID: String, selection: FamilyActivitySelection, ownerTimeZone: String)? in
+            let blockGroupID = "group.\(group.id)"
+            guard let slot = poolGroupSlots[group.id],
+                  let blockGroup = blockingState.groups.first(where: { $0.id == blockGroupID }),
+                  let selection = try? BlockingSelectionCodec.decode(blockGroup.selectionData),
+                  !selection.isEmpty else {
+                return nil
+            }
+
+            return (slot: slot, groupID: group.id, selection: selection, ownerTimeZone: group.ownerTimeZone)
+        }
+        .sorted { $0.slot < $1.slot }
+    }
+
     private var currentFriendIdentityIDs: Set<String> {
         [profile.id, "profile-\(profile.id)"]
     }
@@ -319,6 +363,7 @@ final class AppModel: ObservableObject {
         await subscriptionService.loadProducts()
         cloudAvailability = await snapshotStore.cloudAvailability()
         await publishProfileUpdateToCloud()
+        await loadMyGroups()
         await publishSnapshotIfNeeded()
         await reloadFriends()
         await syncFriendRequests()
@@ -688,7 +733,11 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func upsertBlockGroup(_ group: BlockGroup, password: String?) -> Bool {
+    func upsertBlockGroup(
+        _ group: BlockGroup,
+        password: String?,
+        forceForGroupBlock: Bool = false
+    ) -> Bool {
         guard group.mode.isValid else {
             message = "Pick a valid blocking schedule or time limit."
             return false
@@ -712,9 +761,11 @@ final class AppModel: ObservableObject {
 
         if let index = blockingState.groups.firstIndex(where: { $0.id == group.id }) {
             let existing = blockingState.groups[index]
-            guard canEditGroup(existing, password: password) else {
-                message = "Enter this group password before editing it."
-                return false
+            if !(forceForGroupBlock && existing.id.hasPrefix("group.")) {
+                guard canEditGroup(existing, password: password) else {
+                    message = "Enter this group password before editing it."
+                    return false
+                }
             }
 
             copy.createdAt = existing.createdAt
@@ -755,10 +806,16 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func deleteBlockGroup(_ group: BlockGroup, password: String? = nil) -> Bool {
-        guard canVerifyGroupPassword(group, password: password) else {
-            message = "Enter this group password before deleting it."
-            return false
+    func deleteBlockGroup(
+        _ group: BlockGroup,
+        password: String? = nil,
+        forceForGroupBlock: Bool = false
+    ) -> Bool {
+        if !(forceForGroupBlock && group.id.hasPrefix("group.")) {
+            guard canVerifyGroupPassword(group, password: password) else {
+                message = "Enter this group password before deleting it."
+                return false
+            }
         }
 
         blockingState.groups.removeAll { $0.id == group.id }
@@ -766,9 +823,99 @@ final class AppModel: ObservableObject {
         blockingState.requests.removeAll { $0.groupID == group.id }
         blockingState.friendRequests.removeAll { $0.groupID == group.id }
         blockingState.unblockSessions.removeAll { $0.groupID == group.id }
+        blockingState.poolExhaustionOverrides.removeAll { $0.groupID == group.id }
         groupUnlockExpirations[group.id] = nil
         saveBlockingStateWithStatus("Block group deleted.")
         return true
+    }
+
+    @MainActor
+    @discardableResult
+    func adoptGroupBlock(
+        groupID: String,
+        limitSeconds: Int,
+        selection: FamilyActivitySelection
+    ) async -> Bool {
+        // Refuse a missing/<=0 limit (e.g. a misconfigured group whose pool or
+        // per-member seconds came back nil) instead of silently clamping up to the
+        // 5-minute minimum and enforcing a limit the owner never set.
+        guard limitSeconds > 0 else {
+            message = "This group's limit isn't set yet — ask the owner to reconfigure it."
+            return false
+        }
+
+        if !hasScreenTimeAuthorization {
+            await requestScreenTimeAuthorization()
+            guard hasScreenTimeAuthorization else {
+                return false
+            }
+        }
+
+        guard let data = try? BlockingSelectionCodec.encode(selection) else {
+            message = "Could not save your app selection."
+            return false
+        }
+
+        let password = GroupBlock.generatePassword()
+        let group = GroupBlock.makeBlockGroup(
+            id: "group.\(groupID)",
+            name: "Group limit",
+            selectionData: data,
+            limitSeconds: BlockingTimeLimitRange.snappedSeconds(TimeInterval(limitSeconds))
+        )
+        guard upsertBlockGroup(group, password: password, forceForGroupBlock: true) else {
+            return false
+        }
+
+        guard GroupBlockPasswordStore.save(password, groupID: groupID) else {
+            _ = deleteBlockGroup(group, forceForGroupBlock: true)
+            message = "Could not save your group block password."
+            return false
+        }
+        do {
+            try await snapshotStore.setMemberConfigured(groupID: groupID, configured: true)
+        } catch {
+            pendingConfiguredGroupIDs.insert(groupID)
+        }
+        return true
+    }
+
+    /// True when the local block is adopted but the server `configured` ack is
+    /// still pending (e.g. setMemberConfigured failed offline). The UI treats this
+    /// as configured so it doesn't prompt a second setup while the block is active.
+    func isConfigurationPending(groupID: String) -> Bool {
+        pendingConfiguredGroupIDs.contains { $0.caseInsensitiveCompare(groupID) == .orderedSame }
+    }
+
+    @MainActor
+    @discardableResult
+    func adoptGroupPoolBlock(
+        groupID: String,
+        poolSeconds: Int,
+        selection: FamilyActivitySelection
+    ) async -> Bool {
+        await adoptGroupBlock(
+            groupID: groupID,
+            limitSeconds: poolSeconds,
+            selection: selection
+        )
+    }
+
+    func removeGroupBlock(groupID: String) {
+        let blockGroupID = "group.\(groupID)"
+        let hadOverride = blockingState.poolExhaustionOverrides.contains { $0.groupID == blockGroupID }
+        if let group = blockingState.groups.first(where: { $0.id == blockGroupID }) {
+            _ = deleteBlockGroup(group, forceForGroupBlock: true)
+        }
+        blockingState.poolExhaustionOverrides.removeAll { $0.groupID == blockGroupID }
+        GroupBlockPasswordStore.delete(groupID: groupID)
+        if hadOverride {
+            do {
+                try persistBlockingState()
+            } catch {
+                message = "Could not save blocking settings: \(error.localizedDescription)"
+            }
+        }
     }
 
     @discardableResult
@@ -928,6 +1075,64 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
+    @MainActor
+    func requestGroupTime(
+        socialGroupID: String,
+        seconds: TimeInterval,
+        message requestMessage: String,
+        photoJPEGData: Data?
+    ) async -> Bool {
+        let availability = await snapshotStore.cloudAvailability()
+        cloudAvailability = availability
+        guard availability.allowsCloudWrites else {
+            message = "\(availability.label). Group request was not sent."
+            return false
+        }
+
+        do {
+            let requestID = UUID().uuidString.lowercased()
+            let photoPath = try await groupRequestPhotoPath(photoJPEGData, requestID: requestID)
+            try await uploadGroupRequestPhoto(photoJPEGData, path: photoPath)
+
+            let createdRequestID: String
+            do {
+                createdRequestID = try await snapshotStore.sendGroupTimeRequest(
+                    requestID: requestID,
+                    socialGroupID: socialGroupID,
+                    blockGroupID: "group.\(socialGroupID)",
+                    seconds: Int(seconds),
+                    message: requestMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+                    photoPath: photoPath
+                )
+            } catch {
+                await deleteGroupRequestPhoto(requestID: requestID, path: photoPath)
+                throw error
+            }
+
+            await syncFriendRequests()
+
+            let recipientIDs = await groupRequestRecipientIDs(
+                requestID: createdRequestID,
+                socialGroupID: socialGroupID
+            )
+            let senderName = profile.displayName == "Me" ? "A group member" : profile.displayName
+            let durationLabel = BlockingDisplayFormatter.durationLabel(TimeInterval(Int(seconds)))
+            let groupName = friendGroupName(socialGroupID: socialGroupID)
+            sendPushNotification(
+                toProfileIDs: recipientIDs,
+                title: "New group time request",
+                body: "\(senderName) is asking for \(durationLabel) in \(groupName). Tap to review.",
+                requestID: createdRequestID
+            )
+            message = "Group request sent."
+            return true
+        } catch {
+            message = "Could not send group request: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    @discardableResult
     func approveFriendRequest(id: String) -> Bool {
         expireStaleFriendRequests()
         guard let index = blockingState.friendRequests.firstIndex(where: { $0.id == id }) else {
@@ -939,6 +1144,20 @@ final class AppModel: ObservableObject {
         guard request.isReceived(byAny: currentFriendIdentityIDs), request.status == .pending else {
             message = "Only pending received requests can be approved."
             return false
+        }
+
+        if request.socialGroupID != nil {
+            Task {
+                let didRespond = await respondGroupFriendRequest(
+                    requestID: id,
+                    approve: true,
+                    approvedByFriendID: profile.id
+                )
+                if didRespond {
+                    friendRequestNotificationService.clearNotification(for: id)
+                }
+            }
+            return true
         }
 
         let now = Date()
@@ -977,6 +1196,20 @@ final class AppModel: ObservableObject {
         guard request.isReceived(byAny: currentFriendIdentityIDs), request.status == .pending else {
             message = "Only pending received requests can be denied."
             return false
+        }
+
+        if request.socialGroupID != nil {
+            Task {
+                let didRespond = await respondGroupFriendRequest(
+                    requestID: id,
+                    approve: false,
+                    approvedByFriendID: nil
+                )
+                if didRespond {
+                    friendRequestNotificationService.clearNotification(for: id)
+                }
+            }
+            return true
         }
 
         let resolvedRequest = request.resolving(as: .denied, at: Date())
@@ -1043,8 +1276,19 @@ final class AppModel: ObservableObject {
         saveBlockingStateWithStatus("Collected \(BlockingDisplayFormatter.durationLabel(duration)) of approved time.")
         refreshLocalAccountabilityStats()
         writeWidgetCacheSnapshot()
-        Task {
-            await publishFriendRequestUpdateToCloud(collectedRequest)
+        if collectedRequest.socialGroupID == nil {
+            Task {
+                await publishFriendRequestUpdateToCloud(collectedRequest)
+            }
+        } else {
+            let requestID = collectedRequest.id
+            Task {
+                do {
+                    try await snapshotStore.collectGroupTimeRequest(requestID: requestID)
+                } catch {
+                    pendingGroupCollectRequestIDs.insert(requestID)
+                }
+            }
         }
         return true
     }
@@ -1065,12 +1309,22 @@ final class AppModel: ObservableObject {
     }
 
     func openFriendRequestLog(requestID: String) {
+        let resolvedRequestID = canonicalFriendRequestID(matching: requestID)
         friendRequestNotificationService.clearNotification(for: requestID)
-        focusedFriendRequestLogID = requestID
+        if resolvedRequestID != requestID {
+            friendRequestNotificationService.clearNotification(for: resolvedRequestID)
+        }
+        focusedFriendRequestLogID = resolvedRequestID
     }
 
     func clearFocusedFriendRequestLog() {
         focusedFriendRequestLogID = nil
+    }
+
+    private func canonicalFriendRequestID(matching requestID: String) -> String {
+        blockingState.friendRequests.first {
+            $0.id.caseInsensitiveCompare(requestID) == .orderedSame
+        }?.id ?? requestID
     }
 
     func requestScreenTimeAuthorization() async {
@@ -1161,6 +1415,200 @@ final class AppModel: ObservableObject {
         return invite
     }
 
+    func loadMyGroups() async {
+        do {
+            myGroups = try await snapshotStore.getMyGroups()
+            cleanupDroppedGroupBlocks()
+        } catch {
+            message = "Could not refresh groups: \(error.localizedDescription)"
+        }
+        await retryPendingConfiguredGroups()
+        await retryPendingGroupCollects()
+        assignPoolGroupSlots()
+    }
+
+    private func assignPoolGroupSlots() {
+        // Sort by id so each pool group keeps a stable slot across calls regardless
+        // of get_my_groups() row order; the report extension tags usage by slot, so
+        // a slot that shifts under a group would transiently read 0 usage for it.
+        let poolGroups = myGroups.filter { $0.mode == .pool }.sorted { $0.id < $1.id }
+        let assignedGroups = Array(poolGroups.prefix(5))
+
+        poolGroupSlots = Dictionary(
+            uniqueKeysWithValues: assignedGroups.enumerated().map { index, group in
+                (group.id, index)
+            }
+        )
+
+        for slot in 0..<5 {
+            let assigned = assignedGroups.indices.contains(slot) ? assignedGroups[slot] : nil
+            ScreenTimeReportStorage.setPoolSlotAssignment(
+                slot,
+                groupBlockID: assigned.map { "group.\($0.id)" },
+                ownerTimeZone: assigned?.ownerTimeZone,
+                defaults: appGroupDefaults
+            )
+        }
+
+        if poolGroups.count > assignedGroups.count {
+            print(
+                "ScreenLog: \(poolGroups.count - assignedGroups.count) pool group(s) exceed the 5-slot usage-report cap and will use the pool-sized backstop block."
+            )
+        }
+    }
+
+    /// True when the previous getMyGroups() load came back empty while local group
+    /// blocks still existed — used to require two consecutive empties before tearing
+    /// down (see cleanupDroppedGroupBlocks).
+    private var sawEmptyMyGroupsLastLoad = false
+
+    private func cleanupDroppedGroupBlocks() {
+        guard isAuthenticated else {
+            return
+        }
+
+        // OSCILLATION HOTSPOT (deliberate): distinguish "removed from every group"
+        // (tear down) from a transient empty get_my_groups() (a stale/anon session
+        // returns no rows WITHOUT throwing, since the RPC only raises on a null
+        // auth.uid()). A blanket `!myGroups.isEmpty` guard would leak a permanent
+        // block when a member really is removed from all groups, so instead require
+        // the empty result to repeat: a genuine removal persists across loads, a
+        // transient blip does not. A non-empty load re-arms.
+        let hasLocalGroupBlocks = blockingState.groups.contains { $0.id.hasPrefix("group.") }
+            || blockingState.poolExhaustionOverrides.contains { $0.groupID.hasPrefix("group.") }
+        if myGroups.isEmpty && hasLocalGroupBlocks {
+            if !sawEmptyMyGroupsLastLoad {
+                sawEmptyMyGroupsLastLoad = true
+                return
+            }
+        } else {
+            sawEmptyMyGroupsLastLoad = false
+        }
+
+        let liveIDs = Set(myGroups.map(\.id))
+        let droppedGroupIDs = blockingState.groups.compactMap { group -> String? in
+            guard group.id.hasPrefix("group.") else {
+                return nil
+            }
+            let socialGroupID = String(group.id.dropFirst(6))
+            return liveIDs.contains(socialGroupID) ? nil : socialGroupID
+        }
+
+        for groupID in droppedGroupIDs {
+            removeGroupBlock(groupID: groupID)
+        }
+
+        let originalCount = blockingState.poolExhaustionOverrides.count
+        blockingState.poolExhaustionOverrides.removeAll { override in
+            override.groupID.hasPrefix("group.")
+                && !liveIDs.contains(String(override.groupID.dropFirst(6)))
+        }
+        guard blockingState.poolExhaustionOverrides.count != originalCount else {
+            return
+        }
+
+        do {
+            try persistBlockingState()
+        } catch {
+            message = "Could not save blocking settings: \(error.localizedDescription)"
+        }
+    }
+
+    private func retryPendingConfiguredGroups() async {
+        let liveIDs = Set(myGroups.map(\.id))
+        for groupID in Array(pendingConfiguredGroupIDs) where liveIDs.contains(groupID) {
+            do {
+                try await snapshotStore.setMemberConfigured(groupID: groupID, configured: true)
+                pendingConfiguredGroupIDs.remove(groupID)
+            } catch {
+                // Non-fatal: retried after the next group refresh.
+            }
+        }
+    }
+
+    private func retryPendingGroupCollects() async {
+        for requestID in Array(pendingGroupCollectRequestIDs) {
+            do {
+                try await snapshotStore.collectGroupTimeRequest(requestID: requestID)
+                pendingGroupCollectRequestIDs.remove(requestID)
+            } catch {
+                // Non-fatal: retried after the next group refresh.
+            }
+        }
+    }
+
+    private static func loadPendingConfiguredGroupIDs(defaults: UserDefaults?) -> Set<String> {
+        guard let data = defaults?.data(forKey: pendingConfiguredGroupIDsKey),
+              let groupIDs = try? JSONDecoder().decode(Set<String>.self, from: data) else {
+            return []
+        }
+
+        return groupIDs
+    }
+
+    private func persistPendingConfiguredGroupIDs() {
+        do {
+            let data = try JSONEncoder().encode(pendingConfiguredGroupIDs)
+            usageHistoryDefaults?.set(data, forKey: Self.pendingConfiguredGroupIDsKey)
+        } catch {
+            message = "Could not save pending configured group retries: \(error.localizedDescription)"
+        }
+    }
+
+    private static func loadPendingGroupCollectRequestIDs(defaults: UserDefaults?) -> Set<String> {
+        guard let data = defaults?.data(forKey: pendingGroupCollectRequestIDsKey),
+              let requestIDs = try? JSONDecoder().decode(Set<String>.self, from: data) else {
+            return []
+        }
+
+        return requestIDs
+    }
+
+    private func persistPendingGroupCollectRequestIDs() {
+        do {
+            let data = try JSONEncoder().encode(pendingGroupCollectRequestIDs)
+            usageHistoryDefaults?.set(data, forKey: Self.pendingGroupCollectRequestIDsKey)
+        } catch {
+            message = "Could not save pending group collect retries: \(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    func createGroup(
+        name: String,
+        mode: GroupMode,
+        appNames: [String],
+        limitSeconds: Int,
+        approvalsRequired: Int
+    ) async -> CreatedGroup? {
+        let errs = GroupConfigValidation.errors(
+            mode: mode,
+            appNames: appNames,
+            limitSeconds: limitSeconds,
+            approvalsRequired: approvalsRequired
+        )
+        guard errs.isEmpty else {
+            message = errs.joined(separator: " ")
+            return nil
+        }
+
+        do {
+            let g = try await snapshotStore.createGroup(
+                name: name,
+                mode: mode,
+                appNames: GroupAppNames.normalize(appNames),
+                limitSeconds: limitSeconds,
+                approvalsRequired: approvalsRequired,
+                timeZone: TimeZone.current.identifier
+            )
+            await loadMyGroups()
+            return g
+        } catch {
+            message = "Could not create group: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     /// Friends can only read this user's snapshots while the profile is marked
     /// sharing (enforced server-side). Connecting with a friend or uploading
     /// usage is the consent that turns it on.
@@ -1173,6 +1621,44 @@ final class AppModel: ObservableObject {
         profile.updatedAt = Date()
         profileStore.save(profile)
         await publishProfileUpdateToCloud()
+    }
+
+    func presentIncomingGroupInvite(code: String) async {
+        if let invite = try? await snapshotStore.peekGroupInvite(code: code) {
+            pendingIncomingGroupInvite = invite
+        } else {
+            pendingIncomingGroupInvite = PeekedGroupInvite(
+                code: code,
+                groupID: "",
+                groupName: "Group",
+                ownerDisplayName: "Friend",
+                mode: .perMember
+            )
+        }
+    }
+
+    @discardableResult
+    func redeemPendingGroupInvite() async -> Bool {
+        guard let invite = pendingIncomingGroupInvite else {
+            return false
+        }
+
+        do {
+            let redeemed = try await snapshotStore.redeemGroupInvite(code: invite.code)
+            message = "You joined \(redeemed.groupName)."
+            await loadMyGroups()
+            if pendingIncomingGroupInvite?.code == invite.code {
+                pendingIncomingGroupInvite = nil
+            }
+            return true
+        } catch {
+            message = "Could not join group: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func dismissIncomingGroupInvite() {
+        pendingIncomingGroupInvite = nil
     }
 
     /// Shows the accept sheet for an invite code arriving via deep link,
@@ -1234,6 +1720,39 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func leaveGroup(_ groupID: String) async {
+        do {
+            try await snapshotStore.leaveGroup(groupID: groupID)
+            removeGroupBlock(groupID: groupID)
+            await loadMyGroups()
+        } catch {
+            message = "Could not leave group: \(error.localizedDescription)"
+        }
+    }
+
+    func removeGroupMember(groupID: String, userID: String) async {
+        do {
+            try await snapshotStore.removeGroupMember(groupID: groupID, userID: userID)
+            await loadMyGroups()
+        } catch {
+            message = "Could not remove group member: \(error.localizedDescription)"
+        }
+    }
+
+    func deleteGroup(_ groupID: String) async {
+        do {
+            try await snapshotStore.deleteGroup(groupID: groupID)
+            removeGroupBlock(groupID: groupID)
+            await loadMyGroups()
+        } catch {
+            message = "Could not delete group: \(error.localizedDescription)"
+        }
+    }
+
+    func loadGroupDetail(groupID: String) async -> GroupDetail? {
+        try? await snapshotStore.getGroup(groupID: groupID)
+    }
+
     func reloadFriends() async {
         do {
             let friends = try await snapshotStore.fetchFriendSummaries(for: profile)
@@ -1254,8 +1773,10 @@ final class AppModel: ObservableObject {
     /// the latest friends + requests so the existing notification logic posts the
     /// approve/deny/new-request alerts even when the app wasn't open.
     func handleRemoteChange() async {
+        await loadMyGroups()
         await reloadFriends()
         await syncFriendRequests()
+        await syncGroupPools()
     }
 
     private var lastSnapshotPublishAt: Date?
@@ -1272,6 +1793,26 @@ final class AppModel: ObservableObject {
             return
         }
 
+        guard await snapshotStore.cloudAvailability().allowsCloudWrites else {
+            return
+        }
+        lastSnapshotPublishAt = now
+
+        // Report pool usage regardless of whether the personal snapshot is
+        // uploadable: pool seconds come from the per-group report slot, not from the
+        // personal snapshot, so gating this on snapshot.capability.allowsUpload (a
+        // Screen Time capability that the pool does not need) would silently stop
+        // every pool from ever exhausting on devices that can't upload a snapshot.
+        for group in myGroups where group.mode == .pool {
+            let selectedAppSeconds = await selectedAppSecondsForPoolGroup(group)
+            if let state = try? await snapshotStore.reportGroupUsage(
+                groupID: group.id,
+                selectedAppSeconds: selectedAppSeconds
+            ) {
+                applyPoolState(group, state, allowBroadcast: true)
+            }
+        }
+
         var snapshot = localSnapshot
         #if DEBUG && targetEnvironment(simulator)
         if snapshot?.capability.allowsUpload != true {
@@ -1281,16 +1822,176 @@ final class AppModel: ObservableObject {
         guard let snapshot, snapshot.capability.allowsUpload else {
             return
         }
-        guard await snapshotStore.cloudAvailability().allowsCloudWrites else {
+
+        do {
+            try await snapshotStore.publish(profile: profile, snapshot: snapshot)
+        } catch {
+            // Non-fatal: retried on the next poll cycle.
+        }
+    }
+
+    private func selectedAppSecondsForPoolGroup(_ group: FriendGroupSummary) async -> Int {
+        let blockGroupID = "group.\(group.id)"
+        guard let blockGroup = blockingState.groups.first(where: { $0.id == blockGroupID }),
+              let groupSelection = try? BlockingSelectionCodec.decode(blockGroup.selectionData),
+              !groupSelection.isEmpty else {
+            return 0
+        }
+
+        if let slot = poolGroupSlots[group.id] {
+            var ownerCalendar = Calendar(identifier: .gregorian)
+            ownerCalendar.timeZone = TimeZone(identifier: group.ownerTimeZone) ?? .gmt
+            let dayKey = UsageDateBoundary.localDayKey(date: Date(), calendar: ownerCalendar)
+            return ScreenTimeReportStorage.groupUsageSlot(
+                slot,
+                groupBlockID: blockGroupID,
+                dayKey: dayKey,
+                defaults: appGroupDefaults
+            )
+        }
+
+        // More than five pool groups are not precisely measured; overflow groups rely on the backstop block.
+        return 0
+    }
+
+    func syncGroupPools() async {
+        for group in myGroups where group.mode == .pool {
+            if let state = try? await snapshotStore.getGroupPoolState(groupID: group.id) {
+                applyPoolState(group, state, allowBroadcast: false)
+            }
+        }
+    }
+
+    private func applyPoolState(_ group: FriendGroupSummary, _ state: GroupPoolState, allowBroadcast: Bool) {
+        let blockGroupID = "group.\(group.id)"
+        let now = Date()
+        var didChange = false
+        var shouldNotifyPoolExhausted = false
+
+        let expiredCount = blockingState.poolExhaustionOverrides.count
+        blockingState.poolExhaustionOverrides.removeAll {
+            $0.groupID == blockGroupID && now >= $0.resetsAt
+        }
+        didChange = blockingState.poolExhaustionOverrides.count != expiredCount
+        let existing = blockingState.poolExhaustionOverrides.first { $0.groupID == blockGroupID }
+
+        if state.exhausted {
+            let resetsAt = nextOwnerTimeZoneMidnight(
+                after: now,
+                timeZoneIdentifier: group.ownerTimeZone
+            )
+
+            if let index = blockingState.poolExhaustionOverrides.firstIndex(where: { $0.groupID == blockGroupID }) {
+                if blockingState.poolExhaustionOverrides[index].resetsAt != resetsAt {
+                    // A different resetsAt means a new episode (day rolled): re-arm
+                    // the broadcast so the new exhaustion notifies again.
+                    blockingState.poolExhaustionOverrides[index].resetsAt = resetsAt
+                    blockingState.poolExhaustionOverrides[index].hasBroadcast = false
+                    didChange = true
+                }
+            } else {
+                let override = PoolExhaustionOverride(
+                    groupID: blockGroupID,
+                    exhaustedAt: now,
+                    resetsAt: resetsAt
+                )
+                blockingState.poolExhaustionOverrides.append(override)
+                didChange = true
+            }
+            // Notify other members once per episode from the broadcast (reporting)
+            // path. hasBroadcast is persisted on the override, so a read-only sync
+            // installing it first doesn't suppress this, and a cold launch (with the
+            // override already broadcast) doesn't re-spam.
+            if allowBroadcast,
+               let index = blockingState.poolExhaustionOverrides.firstIndex(where: { $0.groupID == blockGroupID }),
+               !blockingState.poolExhaustionOverrides[index].hasBroadcast {
+                blockingState.poolExhaustionOverrides[index].hasBroadcast = true
+                shouldNotifyPoolExhausted = true
+                didChange = true
+            }
+        } else {
+            if let existing, now.timeIntervalSince(existing.exhaustedAt) < 30 {
+                if didChange {
+                    do {
+                        try persistBlockingState()
+                    } catch {
+                        message = "Could not save blocking settings: \(error.localizedDescription)"
+                    }
+                }
+                return
+            }
+            let originalCount = blockingState.poolExhaustionOverrides.count
+            blockingState.poolExhaustionOverrides.removeAll { $0.groupID == blockGroupID }
+            didChange = didChange || blockingState.poolExhaustionOverrides.count != originalCount
+        }
+
+        // Broadcast independently of didChange: a read-only sync may have installed
+        // an identical override first (didChange == false on this broadcast call),
+        // but shouldNotifyPoolExhausted is only set on the broadcast path for an
+        // un-announced episode, so the member notification must still fire here.
+        if allowBroadcast && shouldNotifyPoolExhausted {
+            notifyGroupMembersPoolExhausted(groupID: group.id)
+        }
+
+        guard didChange else {
             return
         }
 
         do {
-            try await snapshotStore.publish(profile: profile, snapshot: snapshot)
-            lastSnapshotPublishAt = now
+            try persistBlockingState()
         } catch {
-            // Non-fatal: retried on the next poll cycle.
+            message = "Could not save blocking settings: \(error.localizedDescription)"
         }
+    }
+
+    private func notifyGroupMembersPoolExhausted(groupID: String) {
+        let currentUserID = profile.id
+        Task { @MainActor [weak self] in
+            guard let self, let detail = await self.loadGroupDetail(groupID: groupID) else {
+                return
+            }
+            let recipients = Set(
+                detail.members
+                    .map(\.userID)
+                    .filter { !$0.isEmpty && $0.caseInsensitiveCompare(currentUserID) != .orderedSame }
+            )
+            for recipient in recipients {
+                await self.pushServerClient.notifyPoolExhausted(toProfileID: recipient, groupID: groupID)
+            }
+        }
+    }
+
+    private func nextOwnerTimeZoneMidnight(after now: Date, timeZoneIdentifier: String) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? .gmt
+        let dayKey = GroupPool.dayKey(now: now, timeZoneIdentifier: timeZoneIdentifier)
+        let parts = dayKey.split(separator: "-").compactMap { Int($0) }
+
+        guard parts.count == 3 else {
+            return calendar.nextDate(
+                after: now,
+                matching: DateComponents(hour: 0, minute: 0, second: 0),
+                matchingPolicy: .nextTime
+            ) ?? now.addingTimeInterval(24 * 60 * 60)
+        }
+
+        var components = DateComponents()
+        components.calendar = calendar
+        components.timeZone = calendar.timeZone
+        components.year = parts[0]
+        components.month = parts[1]
+        components.day = parts[2]
+
+        guard let todayStart = calendar.date(from: components),
+              let nextStart = calendar.date(byAdding: .day, value: 1, to: todayStart) else {
+            return calendar.nextDate(
+                after: now,
+                matching: DateComponents(hour: 0, minute: 0, second: 0),
+                matchingPolicy: .nextTime
+            ) ?? now.addingTimeInterval(24 * 60 * 60)
+        }
+
+        return nextStart
     }
 
     /// Stores the APNs device token and registers it with the push server against
@@ -1320,6 +2021,148 @@ final class AppModel: ObservableObject {
                     requestID: requestID
                 )
             }
+        }
+    }
+
+    private func groupRequestPhotoPath(_ photoData: Data?, requestID: String) async throws -> String? {
+        guard let photoData, !photoData.isEmpty else {
+            return nil
+        }
+
+        let client = SupabaseClientProvider.shared
+        let session = try await client.auth.session
+        let uid = session.user.id
+        return "\(uid.uuidString.lowercased())/\(requestID.lowercased()).jpg"
+    }
+
+    private func uploadGroupRequestPhoto(_ photoData: Data?, path: String?) async throws {
+        guard let photoData, !photoData.isEmpty, let path else {
+            return
+        }
+
+        // Upload to storage only. Do NOT pre-save a local copy here: the request id
+        // is lowercased while syncFriendRequests re-downloads and saves the photo
+        // under the canonical uppercase id, so a local pre-save would just orphan a
+        // file under the lowercase id that nothing ever references.
+        let client = SupabaseClientProvider.shared
+        try await client.storage.from("request-photos").upload(
+            path,
+            data: photoData,
+            options: FileOptions(contentType: "image/jpeg")
+        )
+    }
+
+    private func deleteGroupRequestPhoto(requestID: String, path: String?) async {
+        if let path {
+            let client = SupabaseClientProvider.shared
+            _ = try? await client.storage.from("request-photos").remove(paths: [path])
+        }
+        try? friendRequestPhotoStore.deleteJPEGData(id: requestID)
+    }
+
+    private func groupRequestRecipientIDs(requestID: String, socialGroupID: String) async -> [String] {
+        if let request = blockingState.friendRequests.first(where: {
+            $0.id.caseInsensitiveCompare(requestID) == .orderedSame
+        }) {
+            return request.selectedFriendIDs
+        }
+
+        guard let detail = try? await snapshotStore.getGroup(groupID: socialGroupID) else {
+            return []
+        }
+
+        return detail.members.map(\.userID)
+    }
+
+    private func friendGroupName(socialGroupID: String) -> String {
+        myGroups.first { $0.id == socialGroupID }?.name ?? "your group"
+    }
+
+    private func respondGroupFriendRequest(
+        requestID: String,
+        approve: Bool,
+        approvedByFriendID: String?
+    ) async -> Bool {
+        let availability = await snapshotStore.cloudAvailability()
+        cloudAvailability = availability
+        guard availability.allowsCloudWrites else {
+            message = "\(availability.label). Request was not updated."
+            return false
+        }
+
+        do {
+            let response = try await snapshotStore.respondGroupTimeRequest(
+                requestID: requestID,
+                approve: approve
+            )
+            let statusRaw = response.status
+            let existingRequest = blockingState.friendRequests.first {
+                $0.id.caseInsensitiveCompare(requestID) == .orderedSame
+            }
+            let requesterID = existingRequest?.requesterID
+            updateLocalGroupFriendRequest(
+                requestID: requestID,
+                statusRaw: statusRaw,
+                approve: approve,
+                approvedByFriendID: approvedByFriendID
+            )
+            // Push the requester only on the server-confirmed pending->approved
+            // transition, so a late re-approve (whose local status may be stale)
+            // can't re-send a duplicate "tap to collect".
+            if response.transitioned {
+                let approverName = profile.displayName == "Me" ? "Your friend" : profile.displayName
+                sendPushNotification(
+                    toProfileIDs: [requesterID].compactMap { $0 },
+                    title: "Request approved",
+                    body: "\(approverName) approved your time request. Tap to collect.",
+                    requestID: requestID
+                )
+            }
+            await syncFriendRequests()
+            return true
+        } catch {
+            message = "Could not update group request: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func updateLocalGroupFriendRequest(
+        requestID: String,
+        statusRaw: String,
+        approve: Bool,
+        approvedByFriendID: String?
+    ) {
+        guard let status = BlockRequestStatus(rawValue: statusRaw),
+              let index = blockingState.friendRequests.firstIndex(where: {
+                  $0.id.caseInsensitiveCompare(requestID) == .orderedSame
+              }) else {
+            return
+        }
+
+        var request = blockingState.friendRequests[index]
+        request.status = status
+        if status == .approved {
+            request.approvedByFriendID = approvedByFriendID ?? request.approvedByFriendID
+        } else if status == .denied {
+            request.approvedByFriendID = nil
+        }
+        blockingState.friendRequests[index] = request
+        saveBlockingStateWithStatus(groupResponseStatusMessage(status: status, approve: approve))
+        refreshLocalAccountabilityStats()
+        syncFriendRequestNotifications()
+        writeWidgetCacheSnapshot()
+    }
+
+    private func groupResponseStatusMessage(status: BlockRequestStatus, approve: Bool) -> String {
+        switch status {
+        case .approved:
+            return "Request approved."
+        case .denied:
+            return "Request denied."
+        case .pending:
+            return approve ? "Approval recorded." : "Request updated."
+        case .expired, .collected:
+            return "Request updated."
         }
     }
 
@@ -1588,6 +2431,11 @@ final class AppModel: ObservableObject {
     /// reset that counter.
     func reapplyBlockingOnForeground() {
         syncBlockingEnforcement()
+        Task {
+            await loadMyGroups()
+            await retryPendingGroupCollects()
+            await syncGroupPools()
+        }
     }
 
     private func loadUsageHistory() {

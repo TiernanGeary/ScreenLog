@@ -9,6 +9,12 @@ public enum ScreenTimeReportStorage {
     public static let lastErrorKey = "ScreenTimeReport.LastError.v1"
     public static let lastSummaryKey = "ScreenTimeReport.LastSummary.v1"
 
+    public struct GroupUsageSlotValue: Codable {
+        public let groupBlockID: String
+        public let dayKey: String
+        public let seconds: Int
+    }
+
     public static func saveProfileID(_ profileID: String, defaults: UserDefaults?) {
         defaults?.set(profileID, forKey: profileIDKey)
         defaults?.synchronize()
@@ -53,6 +59,41 @@ public enum ScreenTimeReportStorage {
         defaults?.removeObject(forKey: lastErrorKey)
     }
 
+    public static func setGroupUsageSlot(
+        _ slot: Int,
+        groupBlockID: String,
+        dayKey: String,
+        seconds: Int,
+        defaults: UserDefaults?
+    ) {
+        let value = GroupUsageSlotValue(
+            groupBlockID: groupBlockID,
+            dayKey: dayKey,
+            seconds: seconds
+        )
+        guard let data = try? JSONEncoder().encode(value) else {
+            return
+        }
+
+        defaults?.set(data, forKey: groupUsageSlotKey(slot))
+    }
+
+    public static func groupUsageSlot(
+        _ slot: Int,
+        groupBlockID: String,
+        dayKey: String,
+        defaults: UserDefaults?
+    ) -> Int {
+        guard let data = defaults?.data(forKey: groupUsageSlotKey(slot)),
+              let value = try? JSONDecoder().decode(GroupUsageSlotValue.self, from: data),
+              value.groupBlockID == groupBlockID,
+              value.dayKey == dayKey else {
+            return 0
+        }
+
+        return value.seconds
+    }
+
     public static func upsert(
         snapshot: DailyUsageSnapshot,
         hourlyDurations: [TimeInterval]?,
@@ -91,5 +132,40 @@ public enum ScreenTimeReportStorage {
             }
             .sorted { $0.lastUpdated > $1.lastUpdated }
             .first
+    }
+
+    private static func groupUsageSlotKey(_ slot: Int) -> String {
+        "ScreenLogGroupUsage.slot.\(slot).v1"
+    }
+
+    // The app owns the slot -> group-block assignment and writes it here so the
+    // report extension scene (which only sees filtered results, not which group
+    // it is rendering) can tag the seconds it writes with the right group block.
+    public static func setPoolSlotAssignment(_ slot: Int, groupBlockID: String?, ownerTimeZone: String?, defaults: UserDefaults?) {
+        let key = poolSlotAssignmentKey(slot)
+        let tzKey = poolSlotAssignmentTimeZoneKey(slot)
+        if let groupBlockID {
+            defaults?.set(groupBlockID, forKey: key)
+            defaults?.set(ownerTimeZone ?? "UTC", forKey: tzKey)
+        } else {
+            defaults?.removeObject(forKey: key)
+            defaults?.removeObject(forKey: tzKey)
+        }
+    }
+
+    public static func poolSlotAssignment(_ slot: Int, defaults: UserDefaults?) -> (groupBlockID: String, ownerTimeZone: String)? {
+        guard let groupBlockID = defaults?.string(forKey: poolSlotAssignmentKey(slot)) else {
+            return nil
+        }
+        let ownerTimeZone = defaults?.string(forKey: poolSlotAssignmentTimeZoneKey(slot)) ?? "UTC"
+        return (groupBlockID, ownerTimeZone)
+    }
+
+    private static func poolSlotAssignmentKey(_ slot: Int) -> String {
+        "ScreenLogGroupUsage.assignment.\(slot).v1"
+    }
+
+    private static func poolSlotAssignmentTimeZoneKey(_ slot: Int) -> String {
+        "ScreenLogGroupUsage.assignmentTZ.\(slot).v1"
     }
 }

@@ -188,7 +188,7 @@ struct RequestFeedView: View {
                     )
                 },
                 groupName: { request in
-                    groupName(for: request.groupID)
+                    groupName(for: request)
                 },
                 expiresIn: { request in
                     FriendRequestFeedDisplay.remainingTimeLabel(until: request.pendingExpiresAt)
@@ -356,8 +356,16 @@ struct RequestFeedView: View {
         isCollectableLog(request) ? (request.resolvedAt ?? request.createdAt) : request.createdAt
     }
 
+    private func groupName(for request: BlockFriendRequest) -> String {
+        FriendRequestFeedDisplay.groupName(
+            for: request,
+            groups: model.blockingState.groups,
+            friendGroups: model.myGroups
+        )
+    }
+
     private func groupName(for groupID: String) -> String {
-        model.blockingState.groups.first { $0.id == groupID }?.name ?? "Unknown group"
+        FriendRequestFeedDisplay.groupName(for: groupID, groups: model.blockingState.groups)
     }
 
     private func syncSelectedPhotoRequest(preferredID: String? = nil) {
@@ -1024,7 +1032,11 @@ private struct FriendRequestDetailView: View {
                 AppSection("Request") {
                     AppCard {
                         requestSummaryRow(
-                            appName: FriendRequestFeedDisplay.groupName(for: request.groupID, groups: model.blockingState.groups),
+                            appName: FriendRequestFeedDisplay.groupName(
+                                for: request,
+                                groups: model.blockingState.groups,
+                                friendGroups: model.myGroups
+                            ),
                             duration: BlockingDisplayFormatter.durationLabel(request.requestedSeconds)
                         )
 
@@ -1262,6 +1274,24 @@ private enum FriendRequestFeedDisplay {
 
     static func groupName(for groupID: String, groups: [BlockGroup]) -> String {
         groups.first { $0.id == groupID }?.name ?? "Unknown group"
+    }
+
+    static func groupName(
+        for request: BlockFriendRequest,
+        groups: [BlockGroup],
+        friendGroups: [FriendGroupSummary]
+    ) -> String {
+        // Group ids decode lowercase from Postgres but FriendGroupSummary.id is
+        // uppercase (UUID.uuidString); compare case-insensitively like the rest of
+        // the codebase, else this falls through to the "Group limit" block name.
+        if let socialGroupID = request.socialGroupID,
+           let socialGroupName = friendGroups.first(where: {
+               $0.id.caseInsensitiveCompare(socialGroupID) == .orderedSame
+           })?.name {
+            return socialGroupName
+        }
+
+        return groupName(for: request.groupID, groups: groups)
     }
 
     static func statusLabel(for request: BlockFriendRequest) -> String {
@@ -1598,7 +1628,7 @@ struct BlockingSettingsView: View {
         _ request: BlockFriendRequest,
         direction: FriendRequestDirection
     ) -> String {
-        let group = groupName(for: request.groupID)
+        let group = groupName(for: request)
         let party: String
         switch direction {
         case .sent:
@@ -1833,8 +1863,16 @@ struct BlockingSettingsView: View {
         return selection.applicationTokens.count + selection.categoryTokens.count + selection.webDomainTokens.count
     }
 
+    private func groupName(for request: BlockFriendRequest) -> String {
+        FriendRequestFeedDisplay.groupName(
+            for: request,
+            groups: model.blockingState.groups,
+            friendGroups: model.myGroups
+        )
+    }
+
     private func groupName(for groupID: String) -> String {
-        model.blockingState.groups.first { $0.id == groupID }?.name ?? "Unknown group"
+        FriendRequestFeedDisplay.groupName(for: groupID, groups: model.blockingState.groups)
     }
 }
 

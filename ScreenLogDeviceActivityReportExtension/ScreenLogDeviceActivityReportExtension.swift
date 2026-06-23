@@ -20,5 +20,20 @@ struct ScreenLogDeviceActivityReportExtension: DeviceActivityReportExtension {
         ScreenLogUsageReport { configuration in
             ScreenLogUsageReportView(configuration: configuration)
         }
+        ScreenLogGroupUsageReport0 { _ in
+            GroupUsageHiddenReportView()
+        }
+        ScreenLogGroupUsageReport1 { _ in
+            GroupUsageHiddenReportView()
+        }
+        ScreenLogGroupUsageReport2 { _ in
+            GroupUsageHiddenReportView()
+        }
+        ScreenLogGroupUsageReport3 { _ in
+            GroupUsageHiddenReportView()
+        }
+        ScreenLogGroupUsageReport4 { _ in
+            GroupUsageHiddenReportView()
+        }
     }
 }
