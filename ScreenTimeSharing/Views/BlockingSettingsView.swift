@@ -11,9 +11,6 @@ struct RequestFeedView: View {
     var showsDoneButton = true
     @State private var selectedPhotoRequestID = ""
     @State private var isPhotoSwipeActive = false
-    @State private var isChoosingRequestGroup = false
-    @State private var requestGroup: BlockGroup?
-    @State private var isShowingNoRequestGroupAlert = false
 
     private var pendingReceivedRequests: [BlockFriendRequest] {
         model.blockingState.friendRequests
@@ -23,16 +20,6 @@ struct RequestFeedView: View {
 
     private var currentFriendIdentityIDs: Set<String> {
         [model.profile.id, "profile-\(model.profile.id)"]
-    }
-
-    private var eligibleRequestGroups: [BlockGroup] {
-        model.blockingState.groups
-            .filter { group in
-                group.isEnabled
-                    && group.mode.isValid
-                    && group.friendRequestConfig.isEnabled
-            }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var friendRequestLogs: [BlockFriendRequest] {
@@ -102,15 +89,6 @@ struct RequestFeedView: View {
             syncSelectedPhotoRequest(preferredID: highlightedFriendRequestID)
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    startInAppFriendRequest()
-                } label: {
-                    Image(systemName: "hands.sparkles.fill")
-                }
-                .accessibilityLabel("Create friend request")
-            }
-
             if showsDoneButton {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
@@ -119,29 +97,6 @@ struct RequestFeedView: View {
                     }
                 }
             }
-        }
-        .confirmationDialog(
-            "Choose App Group",
-            isPresented: $isChoosingRequestGroup,
-            titleVisibility: .visible
-        ) {
-            ForEach(eligibleRequestGroups) { group in
-                Button(group.name) {
-                    AppHaptics.buttonTap()
-                    requestGroup = group
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Pick which blocked app group this request is for.")
-        }
-        .sheet(item: $requestGroup) { group in
-            FriendApprovalRequestView(group: group)
-        }
-        .alert("No Friend Request Group", isPresented: $isShowingNoRequestGroupAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Turn on friend requests for an active block group before creating an in-app request.")
         }
     }
 
@@ -372,19 +327,6 @@ struct RequestFeedView: View {
         }
 
         selectedPhotoRequestID = ids.first ?? ""
-    }
-
-    private func startInAppFriendRequest() {
-        AppHaptics.buttonTap()
-
-        switch eligibleRequestGroups.count {
-        case 0:
-            isShowingNoRequestGroupAlert = true
-        case 1:
-            requestGroup = eligibleRequestGroups[0]
-        default:
-            isChoosingRequestGroup = true
-        }
     }
 
     private func resolvePhotoBookRequest(_ request: BlockFriendRequest, approve: Bool) {
